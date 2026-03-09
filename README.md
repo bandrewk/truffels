@@ -1,101 +1,61 @@
 # Project Truffels
 
-Project Truffels is a **Bitcoin-first infrastructure appliance** for Raspberry Pi 5.
+Project Truffels is a Bitcoin-first infrastructure appliance for Raspberry Pi 5.
 
-It is designed to run a curated set of services on a single host with **strict Docker-based lifecycle management**, strong stability rules, hardened defaults, and a clean web interface.
+The goal is not to build a random crypto homelab dashboard. The goal is to build a stable, local-first, Docker-managed appliance with a clean web UI, hardened defaults, and an ePaper status surface.
 
-## Why this exists
+## Goals
 
-Most homelab stacks rot in exactly the same way:
-
-- random host-installed services
-- plaintext secrets in config files
-- manual builds no one can reproduce
-- floating versions called “latest” and then blamed when things break
-- no rollback story
-- no migration story
-
-Truffels exists to not do that.
-
-## V1 goals
-
-- Raspberry Pi 5 + NVMe baseline
-- Bitcoin-first service catalog
-- strict Docker management for product services
-- secure local-first operation
-- responsive web UI with default dark mode
-- desktop-first design with proper tablet and smartphone support
-- configurable 4.2 inch ePaper status display
-
-## Initial service catalog
-
-- Bitcoin Core
-- electrs
-- mempool
-- ckpool
-
-V1 is **not** a general-purpose altcoin launcher.
+- strict Docker-based lifecycle management for managed services
+- high system stability on Raspberry Pi 5 with NVMe storage
+- curated service catalog instead of arbitrary compose junk
+- modern responsive web UI, desktop-first but usable on smartphones
+- support for Bitcoin Core, electrs, mempool, and ckpool as managed service templates
+- ePaper status rendering with configurable layouts and update schedules
 
 ## Hardware baseline
 
 - Raspberry Pi 5 8 GB
-- active cooling
-- official 27 W USB-C power supply
-- Geekworm X1001 PCIe to M.2 shield
-- Samsung 990 Pro 2 TB NVMe with heatsink
-- WeAct 4.2 inch ePaper module
+- official 27 W USB-C PSU
+- Samsung 990 PRO 2 TB with heatsink
+- Geekworm X1001 PCIe to M.2 NVMe shield (https://wiki.geekworm.com/X1001)
+- WeAct 4.2 inch ePaper module (https://github.com/WeActStudio/WeActStudio.EpaperModule)
 
 ## Stability rules
 
-- stable beats fast
-- pinned tested versions beat floating `latest`
-- PCIe Gen 2 beats unstable Gen 3 bragging rights
-- backup before wipe
-- preserve the existing fully synced blockchain data
-- the host stays minimal
+- PCIe Gen 2 is the supported stable baseline for V1
+- the X1001 may require additional 5V/GND power for SSD stability
+- NVMe is the primary system and data medium
+- microSD is treated as recovery/install media, not the long-term product runtime target
+- no blind `latest` tag usage in production
 
-## Web UI stance
+## Current state
 
-The web UI is:
+The host has been rebuilt successfully and now boots from NVMe.
 
-- dark-mode-first
-- modern and simple
-- responsive
-- desktop-first
-- usable on smartphone
+Verified good state includes:
 
-It is **not** a free-for-all Docker playground.
+- hostname `truffels`
+- root filesystem on NVMe
+- no thermal or undervoltage flags at baseline check time
+- no obvious NVMe timeout/reset spam in the inspected log window
 
-## Current project state
+Current blocker before Docker setup:
 
-The proof of concept demonstrated that the target hardware can run Bitcoin Core and related services.
-
-It also demonstrated exactly why the final product must not be a pile of manual host-installed snowflake services.
-
-The current next step is migration to a clean baseline while preserving the existing blockchain data.
+- memory cgroups are disabled because `cgroup_disable=memory` is present in `/boot/firmware/cmdline.txt`
+- this must be fixed before Docker installation
 
 ## Documentation
 
-- `Project_Truffels_Spec.md` — full product specification
-- `MIGRATION.md` — migration guide from the current proof of concept
+- `Project_Truffels_Spec.md` contains the architectural specification
+- `MIGRATION.md` contains the migration and restore guidance
 
-## Planned architecture
+## Project position
 
-- minimal Raspberry Pi OS Lite host
-- Docker Engine as the only product service runtime
-- curated service templates
-- local web control plane
-- ePaper renderer driven by system and service telemetry
-- rollback-aware configuration and updates
+Truffels should become:
 
-## Non-goals for V1
+> a stable, local-first, Bitcoin infrastructure appliance for Raspberry Pi, with strong operational safety, curated service management, and a purposeful status display.
 
-- arbitrary compose uploads from the UI
-- uncontrolled third-party container execution
-- Kubernetes or other heavy orchestration
-- public internet exposure by default
-- fake enterprise scope
+It should not become:
 
-## License
-
-TBD
+> a fragile snowflake server full of manual host hacks that only its creator understands.
