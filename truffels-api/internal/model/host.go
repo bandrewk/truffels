@@ -6,6 +6,7 @@ type HostMetrics struct {
 	MemUsedMB     int64       `json:"mem_used_mb"`
 	MemPercent    float64     `json:"mem_percent"`
 	Temperature   float64     `json:"temperature_c"`
+	FanRPM        int         `json:"fan_rpm"`
 	Disks         []DiskUsage `json:"disks"`
 	UptimeSeconds float64     `json:"uptime_seconds"`
 }
