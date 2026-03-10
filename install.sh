@@ -192,6 +192,14 @@ rpcallowip=10.0.0.0/8
 zmqpubhashblock=tcp://0.0.0.0:28332
 zmqpubrawblock=tcp://0.0.0.0:28334
 zmqpubrawtx=tcp://0.0.0.0:28333
+
+# --- Mempool.space Frankfurt peers (better tx relay) ---
+addnode=103.99.171.201:8333
+addnode=103.99.171.202:8333
+addnode=103.99.171.203:8333
+addnode=103.99.171.204:8333
+addnode=103.99.171.205:8333
+addnode=103.99.171.206:8333
 BTCCONF
 
     # Source the credentials we just generated
