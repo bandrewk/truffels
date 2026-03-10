@@ -799,9 +799,39 @@ chown 1000:1000 "$DATA_DIR/truffels"
 
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-/home/truffel/Project-Truffels/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-/home/truffel/Project-Truffels/truffels-web}"
+TRUFFELS_AGENT_SRC="${TRUFFELS_AGENT_SRC:-/home/truffel/Project-Truffels/truffels-agent}"
 
 tee "$COMPOSE_DIR/truffels/docker-compose.yml" >/dev/null <<TRUFFELSDC
 services:
+  agent:
+    build:
+      context: $TRUFFELS_AGENT_SRC
+      dockerfile: $TRUFFELS_AGENT_SRC/Dockerfile
+    image: truffels/agent:v0.1.0
+    container_name: truffels-agent
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      bitcoin-backend:
+      truffels-edge:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/truffels/compose:/srv/truffels/compose:ro
+    environment:
+      TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_AGENT_LISTEN: ":9090"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   api:
     build:
       context: $TRUFFELS_API_SRC
@@ -811,11 +841,12 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
       truffels-edge:
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - /srv/truffels:/srv/truffels
       - /srv/truffels/data/truffels:/data
       - /proc:/host/proc:ro
@@ -829,6 +860,10 @@ services:
       TRUFFELS_DATA_ROOT: "/srv/truffels/data"
       TRUFFELS_HOST_PROC: "/host/proc"
       TRUFFELS_HOST_SYS: "/host/sys"
+      TRUFFELS_AGENT_URL: "http://truffels-agent:9090"
+    depends_on:
+      agent:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -875,6 +910,9 @@ networks:
   truffels-edge:
     external: true
 TRUFFELSDC
+
+log "Building truffels-agent image..."
+cd "$COMPOSE_DIR/truffels" && docker compose build agent --quiet
 
 log "Building truffels-api image..."
 cd "$COMPOSE_DIR/truffels" && docker compose build api --quiet
