@@ -31,24 +31,29 @@ The goal is not to build a random crypto homelab dashboard. The goal is to build
 
 ## Current state
 
-The host has been rebuilt successfully and now boots from NVMe.
+Fully operational Bitcoin infrastructure running 13 Docker containers on Raspberry Pi 5:
 
-Verified good state includes:
+- **Bitcoin Core 29.0** — full node at chain tip (txindex=1, no pruning)
+- **electrs v0.10.10** — Electrum server
+- **ckpool v1.0.0** — solo mining pool (stratum on port 3333)
+- **mempool.space v3.2.0** — block explorer (frontend + backend + MariaDB)
+- **ckstats** — mining stats dashboard (Next.js + PostgreSQL + cron)
+- **Caddy 2.9** — reverse proxy (HTTP on port 80)
+- **truffels-agent** — privileged Docker mediator (Docker socket access)
+- **truffels-api** — Go control plane backend (REST API, alerts, metrics)
+- **truffels-web** — React admin UI (dark-mode, Tailwind)
 
-- hostname `truffels`
-- root filesystem on NVMe
-- no thermal or undervoltage flags at baseline check time
-- no obvious NVMe timeout/reset spam in the inspected log window
+Security: admin auth (bcrypt + HMAC sessions), nftables firewall, Docker capability hardening, secrets isolation.
 
-Current blocker before Docker setup:
+CI: GitHub Actions with 156+ tests across Go and TypeScript.
 
-- memory cgroups are disabled because `cgroup_disable=memory` is present in `/boot/firmware/cmdline.txt`
-- this must be fixed before Docker installation
+Next milestone: Phase 9 — ePaper display subsystem.
 
 ## Documentation
 
-- `Project_Truffels_Spec.md` contains the architectural specification
-- `MIGRATION.md` contains the migration and restore guidance
+- `Project_Truffels_Spec.md` — architectural specification
+- `INSTALLATION.md` — operational install runbook with exact commands
+- `MIGRATION.md` — migration guide from the PoC system
 
 ## Project position
 

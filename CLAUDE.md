@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Project Truffels is a Bitcoin-first infrastructure appliance for Raspberry Pi 5 (8 GB) with NVMe storage. It provides strict Docker-based lifecycle management for Bitcoin services (Bitcoin Core, electrs, mempool, ckpool) with a web UI and ePaper status display.
 
-**Current state:** Managed service layer, reverse proxy, and control plane (API + web UI) deployed. 12 Docker containers running. Next milestone: Phase 8 (truffels-agent) or Phase 10 (hardening).
+**Current state:** Managed service layer, reverse proxy, control plane (API + web UI), and privileged agent deployed. 13 Docker containers running. CI pipeline with 156+ tests. Next milestone: Phase 9 (ePaper display).
 
 ## Key Documents
 
@@ -78,7 +78,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Cgroups:** v2 with memory controller active
 - **Directory layout:** `/srv/truffels/` created per spec
 - **Networks:** `bitcoin-backend` (172.20.0.0/24), `truffels-edge` (172.21.0.0/24)
-- **Running containers (12):**
+- **Running containers (13):**
   - `truffels-bitcoind` — Bitcoin Core 29.0 (btcpayserver/bitcoin)
   - `truffels-electrs` — Electrum Rust Server v0.10.10 (getumbrel/electrs)
   - `truffels-ckpool` — ckpool v1.0.0 (custom build)
@@ -89,13 +89,15 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
   - `truffels-ckstats-cron` — ckstats seed/update/cleanup cron
   - `truffels-ckstats-db` — PostgreSQL 16 Alpine
   - `truffels-proxy` — Caddy 2.9 Alpine reverse proxy
+  - `truffels-agent` — Go privileged Docker mediator v0.1.0
   - `truffels-api` — Go control plane API v0.1.0
   - `truffels-web` — React/TS/Vite control plane UI v0.1.0 (nginx)
 - **LAN ports:** 22 (SSH), 80 (Caddy), 3333 (stratum), 8333 (P2P)
 - **Swap:** 4GB NVMe swapfile at `/srv/truffels/swapfile` + 2GB zram (6GB total)
 - **Firewall:** nftables INPUT drop policy (truffels-firewall.service), allow SSH/80/3333/8333/loopback/docker bridges
 - **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
-- **Docker hardening:** All containers have cap_drop: ALL (except API for Docker socket), security_opt: no-new-privileges where possible
+- **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
-- **Installation progress:** INSTALLATION.md completed through step 17 (hardening)
-- **Next milestone:** Phase 8 — truffels-agent (privileged mediator) or Phase 9 — ePaper display
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 156+ tests total (~85% logic coverage)
+- **Installation progress:** INSTALLATION.md completed through step 18 (agent)
+- **Next milestone:** Phase 9 — ePaper display (ping user first)
