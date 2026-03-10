@@ -52,7 +52,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: truffels-web/pnpm-lock.yaml
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm build
