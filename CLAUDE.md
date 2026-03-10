@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Project Truffels is a Bitcoin-first infrastructure appliance for Raspberry Pi 5 (8 GB) with NVMe storage. It provides strict Docker-based lifecycle management for Bitcoin services (Bitcoin Core, electrs, mempool, ckpool) with a web UI and ePaper status display.
 
-**Current state:** Managed service layer and reverse proxy fully deployed. 10 Docker containers running (bitcoind, electrs, ckpool, mempool, ckstats, Caddy). Next milestone: control plane (truffels-api, truffels-web, truffels-agent).
+**Current state:** Managed service layer, reverse proxy, and control plane API deployed. 11 Docker containers running. Next milestone: truffels-web (React UI).
 
 ## Key Documents
 
@@ -78,7 +78,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Cgroups:** v2 with memory controller active
 - **Directory layout:** `/srv/truffels/` created per spec
 - **Networks:** `bitcoin-backend` (172.20.0.0/24), `truffels-edge` (172.21.0.0/24)
-- **Running containers (10):**
+- **Running containers (11):**
   - `truffels-bitcoind` — Bitcoin Core 29.0 (btcpayserver/bitcoin)
   - `truffels-electrs` — Electrum Rust Server v0.10.10 (getumbrel/electrs)
   - `truffels-ckpool` — ckpool v1.0.0 (custom build)
@@ -89,6 +89,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
   - `truffels-ckstats-cron` — ckstats seed/update/cleanup cron
   - `truffels-ckstats-db` — PostgreSQL 16 Alpine
   - `truffels-proxy` — Caddy 2.9 Alpine reverse proxy
+  - `truffels-api` — Go control plane API v0.1.0
 - **LAN ports:** 22 (SSH), 80 (Caddy), 3333 (stratum), 8333 (P2P)
 - **Installation progress:** INSTALLATION.md completed through step 13 (reverse proxy)
-- **Next milestone:** Phase 6 — truffels-api (Go control plane backend)
+- **Next milestone:** Phase 7 — truffels-web (React/TS/Vite control plane UI)
