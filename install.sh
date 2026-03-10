@@ -533,7 +533,7 @@ services:
         limits:
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
+      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000/ckstats\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -555,11 +555,18 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        CLEANUP_COUNTER=0
         while true; do
           echo "[$(date)] Running seed..."
           pnpm seed 2>&1
           echo "[$(date)] Running update-users..."
           pnpm update-users 2>&1
+          CLEANUP_COUNTER=$$((CLEANUP_COUNTER + 1))
+          if [ "$$CLEANUP_COUNTER" -ge 120 ]; then
+            echo "[$(date)] Running cleanup..."
+            pnpm cleanup 2>&1
+            CLEANUP_COUNTER=0
+          fi
           sleep 60
         done
     deploy:
@@ -602,7 +609,6 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 
 :80 {
 	handle /ckstats* {
-		uri strip_prefix /ckstats
 		reverse_proxy truffels-ckstats:3000
 	}
 
