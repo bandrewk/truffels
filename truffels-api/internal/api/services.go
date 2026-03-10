@@ -84,7 +84,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		if err := s.compose.Up(tmpl.ComposeDir); err != nil {
+		if err := s.compose.Up(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -100,13 +100,13 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := s.compose.Down(tmpl.ComposeDir); err != nil {
+		if err := s.compose.Down(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 	case "restart":
-		if err := s.compose.Restart(tmpl.ComposeDir); err != nil {
+		if err := s.compose.Restart(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -122,8 +122,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tmpl, ok := s.registry.Get(id)
-	if !ok {
+	if _, ok := s.registry.Get(id); !ok {
 		writeError(w, http.StatusNotFound, "service not found")
 		return
 	}
@@ -135,7 +134,7 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logs, err := s.compose.Logs(tmpl.ComposeDir, tail)
+	logs, err := s.compose.Logs(id, tail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -227,7 +226,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Optionally restart
 	if req.Restart {
-		if err := s.compose.Restart(tmpl.ComposeDir); err != nil {
+		if err := s.compose.Restart(id); err != nil {
 			writeJSON(w, http.StatusOK, map[string]string{
 				"status":        "config_saved",
 				"restart_error": err.Error(),

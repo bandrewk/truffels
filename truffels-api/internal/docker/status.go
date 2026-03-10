@@ -2,71 +2,81 @@ package docker
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
-	"os/exec"
+	"net/http"
 	"time"
 	"truffels-api/internal/model"
 )
 
-type inspectResult struct {
-	State struct {
-		Status     string `json:"Status"`
-		StartedAt  string `json:"StartedAt"`
-		Health     *struct {
-			Status string `json:"Status"`
-		} `json:"Health"`
-	} `json:"State"`
-	RestartCount int `json:"RestartCount"`
-	Config       struct {
-		Image string `json:"Image"`
-	} `json:"Config"`
+var agentClient *AgentInspector
+
+type AgentInspector struct {
+	agentURL   string
+	httpClient *http.Client
+}
+
+func NewAgentInspector(agentURL string) *AgentInspector {
+	ai := &AgentInspector{
+		agentURL: agentURL,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+	agentClient = ai
+	return ai
+}
+
+type inspectRequest struct {
+	Containers []string `json:"containers"`
 }
 
 // InspectContainer returns the state of a single container by name.
 func InspectContainer(name string) (model.ContainerState, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .}}", name)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return model.ContainerState{
-			Name:   name,
-			Status: "not_found",
-			Health: "unknown",
-		}, nil
-	}
-
-	var ir inspectResult
-	if err := json.Unmarshal(out.Bytes(), &ir); err != nil {
-		slog.Error("parse inspect", "container", name, "err", err)
+	if agentClient == nil {
 		return model.ContainerState{Name: name, Status: "unknown", Health: "unknown"}, nil
 	}
 
-	cs := model.ContainerState{
-		Name:         name,
-		Status:       ir.State.Status,
-		RestartCount: ir.RestartCount,
-		StartedAt:    ir.State.StartedAt,
-		Image:        ir.Config.Image,
+	states := agentClient.Inspect([]string{name})
+	if len(states) > 0 {
+		return states[0], nil
 	}
-	if ir.State.Health != nil {
-		cs.Health = ir.State.Health.Status
-	} else {
-		cs.Health = "" // no healthcheck configured
-	}
-	return cs, nil
+	return model.ContainerState{Name: name, Status: "unknown", Health: "unknown"}, nil
 }
 
 // InspectContainers returns the state of multiple containers.
 func InspectContainers(names []string) []model.ContainerState {
-	states := make([]model.ContainerState, 0, len(names))
-	for _, name := range names {
-		cs, _ := InspectContainer(name)
-		states = append(states, cs)
+	if agentClient == nil {
+		states := make([]model.ContainerState, len(names))
+		for i, name := range names {
+			states[i] = model.ContainerState{Name: name, Status: "unknown", Health: "unknown"}
+		}
+		return states
+	}
+	return agentClient.Inspect(names)
+}
+
+func (ai *AgentInspector) Inspect(names []string) []model.ContainerState {
+	body, _ := json.Marshal(inspectRequest{Containers: names})
+	resp, err := ai.httpClient.Post(ai.agentURL+"/v1/inspect", "application/json", bytes.NewReader(body))
+	if err != nil {
+		slog.Error("agent inspect", "err", err)
+		states := make([]model.ContainerState, len(names))
+		for i, name := range names {
+			states[i] = model.ContainerState{Name: name, Status: "unknown", Health: "unknown"}
+		}
+		return states
+	}
+	defer resp.Body.Close()
+
+	var states []model.ContainerState
+	if err := json.NewDecoder(resp.Body).Decode(&states); err != nil {
+		slog.Error("agent inspect decode", "err", err)
+		fallback := make([]model.ContainerState, len(names))
+		for i, name := range names {
+			fallback[i] = model.ContainerState{Name: name, Status: "unknown", Health: "unknown"}
+		}
+		return fallback
 	}
 	return states
 }

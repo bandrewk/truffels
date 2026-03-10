@@ -1,0 +1,294 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// Allowlisted service IDs and their compose directory names.
+var allowedServices = map[string]string{
+	"bitcoind":     "bitcoin",
+	"electrs":      "electrs",
+	"ckpool":       "ckpool",
+	"mempool":      "mempool",
+	"ckstats":      "ckstats",
+	"proxy":        "proxy",
+	"truffels-agent": "truffels",
+	"truffels-api":   "truffels",
+	"truffels-web":   "truffels",
+}
+
+// Allowlisted container names for inspection.
+var allowedContainers = map[string]bool{
+	"truffels-bitcoind":          true,
+	"truffels-electrs":           true,
+	"truffels-ckpool":            true,
+	"truffels-mempool-backend":   true,
+	"truffels-mempool-frontend":  true,
+	"truffels-mempool-db":        true,
+	"truffels-ckstats":           true,
+	"truffels-ckstats-cron":      true,
+	"truffels-ckstats-db":        true,
+	"truffels-proxy":             true,
+	"truffels-agent":             true,
+	"truffels-api":               true,
+	"truffels-web":               true,
+}
+
+var composeRoot string
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	composeRoot = envOr("TRUFFELS_COMPOSE_ROOT", "/srv/truffels/compose")
+	listen := envOr("TRUFFELS_AGENT_LISTEN", ":9090")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
+	mux.HandleFunc("POST /v1/compose/down", handleComposeDown)
+	mux.HandleFunc("POST /v1/compose/restart", handleComposeRestart)
+	mux.HandleFunc("POST /v1/compose/logs", handleComposeLogs)
+	mux.HandleFunc("POST /v1/inspect", handleInspect)
+	mux.HandleFunc("GET /v1/health", handleHealth)
+
+	srv := &http.Server{Addr: listen, Handler: mux}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		<-sigCh
+		slog.Info("shutting down")
+		srv.Close()
+	}()
+
+	slog.Info("starting truffels-agent", "listen", listen)
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("server error", "err", err)
+		os.Exit(1)
+	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// --- Request/Response types ---
+
+type serviceRequest struct {
+	ServiceID string `json:"service_id"`
+}
+
+type logsRequest struct {
+	ServiceID string `json:"service_id"`
+	Tail      int    `json:"tail"`
+}
+
+type inspectRequest struct {
+	Containers []string `json:"containers"`
+}
+
+type containerState struct {
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Health       string `json:"health"`
+	RestartCount int    `json:"restart_count"`
+	StartedAt    string `json:"started_at"`
+	Image        string `json:"image"`
+}
+
+type inspectResult struct {
+	State struct {
+		Status    string `json:"Status"`
+		StartedAt string `json:"StartedAt"`
+		Health    *struct {
+			Status string `json:"Status"`
+		} `json:"Health"`
+	} `json:"State"`
+	RestartCount int `json:"RestartCount"`
+	Config       struct {
+		Image string `json:"Image"`
+	} `json:"Config"`
+}
+
+// --- Handlers ---
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleComposeUp(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+	dir := composeDir(req.ServiceID)
+	if err := runCompose(dir, "up", "-d", "--remove-orphans"); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleComposeDown(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+	dir := composeDir(req.ServiceID)
+	if err := runCompose(dir, "down"); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleComposeRestart(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+	dir := composeDir(req.ServiceID)
+	if err := runCompose(dir, "restart"); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
+	var req logsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return
+	}
+	if req.Tail <= 0 || req.Tail > 1000 {
+		req.Tail = 200
+	}
+
+	dir := composeDir(req.ServiceID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "compose", "-f",
+		dir+"/docker-compose.yml", "logs", "--tail",
+		strconv.Itoa(req.Tail), "--no-color")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": out.String()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"logs": out.String()})
+}
+
+func handleInspect(w http.ResponseWriter, r *http.Request) {
+	var req inspectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	states := make([]containerState, 0, len(req.Containers))
+	for _, name := range req.Containers {
+		if !allowedContainers[name] {
+			slog.Warn("inspect denied", "container", name)
+			states = append(states, containerState{Name: name, Status: "denied", Health: "unknown"})
+			continue
+		}
+		states = append(states, inspectContainer(name))
+	}
+
+	writeJSON(w, 200, states)
+}
+
+func inspectContainer(name string) containerState {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .}}", name)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return containerState{Name: name, Status: "not_found", Health: "unknown"}
+	}
+
+	var ir inspectResult
+	if err := json.Unmarshal(out.Bytes(), &ir); err != nil {
+		slog.Error("parse inspect", "container", name, "err", err)
+		return containerState{Name: name, Status: "unknown", Health: "unknown"}
+	}
+
+	cs := containerState{
+		Name:         name,
+		Status:       ir.State.Status,
+		RestartCount: ir.RestartCount,
+		StartedAt:    ir.State.StartedAt,
+		Image:        ir.Config.Image,
+	}
+	if ir.State.Health != nil {
+		cs.Health = ir.State.Health.Status
+	}
+	return cs
+}
+
+// --- Helpers ---
+
+func composeDir(serviceID string) string {
+	dirName := allowedServices[serviceID]
+	return composeRoot + "/" + dirName
+}
+
+func decodeAndValidate(w http.ResponseWriter, r *http.Request, req *serviceRequest) bool {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return false
+	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return false
+	}
+	slog.Info("agent action", "action", strings.TrimPrefix(r.URL.Path, "/v1/compose/"), "service", req.ServiceID)
+	return true
+}
+
+func runCompose(composeDir string, args ...string) error {
+	fullArgs := append([]string{"compose", "-f", composeDir + "/docker-compose.yml"}, args...)
+	slog.Info("docker compose", "dir", composeDir, "args", strings.Join(args, " "))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, stderr.String())
+	}
+	return nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}

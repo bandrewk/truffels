@@ -13,6 +13,18 @@ var Proxy = model.ServiceTemplate{
 	ReadOnly:       true,
 }
 
+var TruffelsAgent = model.ServiceTemplate{
+	ID:             "truffels-agent",
+	DisplayName:    "Truffels Agent",
+	Description:    "Privileged Docker mediator",
+	ComposeDir:     "truffels",
+	ContainerNames: []string{"truffels-agent"},
+	Dependencies:   nil,
+	MemoryLimit:    "128M",
+	Port:           "9090 (internal)",
+	ReadOnly:       true,
+}
+
 var TruffelsAPI = model.ServiceTemplate{
 	ID:             "truffels-api",
 	DisplayName:    "Truffels API",
