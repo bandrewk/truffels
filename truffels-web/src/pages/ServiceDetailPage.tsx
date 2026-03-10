@@ -5,6 +5,20 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 
+function formatUptime(startedAt: string): string {
+  if (!startedAt) return '-'
+  const start = new Date(startedAt).getTime()
+  if (isNaN(start)) return '-'
+  const secs = Math.floor((Date.now() - start) / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ${mins % 60}m`
+  const days = Math.floor(hours / 24)
+  return `${days}d ${hours % 24}h`
+}
+
 function ActionButton({ label, variant, onClick, disabled }: {
   label: string; variant: 'start' | 'stop' | 'restart'; onClick: () => void; disabled: boolean
 }) {
@@ -105,6 +119,7 @@ function OverviewTab({ svc }: { svc: ServiceInstance }) {
                 <th className="pb-2 pr-4">Name</th>
                 <th className="pb-2 pr-4">Status</th>
                 <th className="pb-2 pr-4">Health</th>
+                <th className="pb-2 pr-4">Uptime</th>
                 <th className="pb-2 pr-4">Restarts</th>
                 <th className="pb-2">Image</th>
               </tr>
@@ -115,6 +130,7 @@ function OverviewTab({ svc }: { svc: ServiceInstance }) {
                   <td className="py-2 pr-4 font-mono text-gray-300">{c.name}</td>
                   <td className="py-2 pr-4"><StatusBadge status={c.status} /></td>
                   <td className="py-2 pr-4">{c.health ? <StatusBadge status={c.health} /> : <span className="text-gray-500">-</span>}</td>
+                  <td className="py-2 pr-4 text-gray-400">{formatUptime(c.started_at)}</td>
                   <td className="py-2 pr-4 text-gray-400">{c.restart_count}</td>
                   <td className="py-2 text-gray-500 text-xs font-mono truncate max-w-xs">{c.image.split('@')[0]}</td>
                 </tr>
