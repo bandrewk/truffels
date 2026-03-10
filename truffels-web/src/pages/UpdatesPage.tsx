@@ -34,7 +34,7 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
   if (source.type === 'dockerhub') {
     const images = source.images || []
     return (
-      <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
         {images.map((img, i) => (
           <a
             key={img}
@@ -44,8 +44,8 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
             className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
             title={img}
           >
-            {i === 0 && <DockerIcon />}
             <span>{img}</span>
+            {i === images.length - 1 && <DockerIcon />}
           </a>
         ))}
       </div>
@@ -76,11 +76,11 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors mt-1.5"
+      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
       title={label}
     >
-      {icon}
       <span>{label}</span>
+      {icon}
     </a>
   )
 }
@@ -197,8 +197,6 @@ export default function UpdatesPage() {
                 {c.error && (
                   <p className="text-xs text-red-400 mt-1">{c.error}</p>
                 )}
-                <SourceLinks source={sources[c.service_id]} />
-                <p className="text-xs text-gray-600 mt-1">Checked {formatTime(c.checked_at)}</p>
               </div>
               <div className="flex-shrink-0">
                 {c.has_update && !c.error && !updating[c.service_id] && (
@@ -211,6 +209,10 @@ export default function UpdatesPage() {
                   </button>
                 )}
               </div>
+            </div>
+            <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+              <p className="text-xs text-gray-600">Checked {formatTime(c.checked_at)}</p>
+              <SourceLinks source={sources[c.service_id]} />
             </div>
           </Card>
         ))}
