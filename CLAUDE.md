@@ -98,6 +98,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
+- **Updates:** Automatic version checking (Docker Hub / GitHub / Bitbucket), one-click apply with automatic rollback, 24h background check cycle
 - **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 156+ tests total (~85% logic coverage)
-- **Installation progress:** INSTALLATION.md completed through step 18 (agent)
+- **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
