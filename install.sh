@@ -179,12 +179,13 @@ RPC
     # Bitcoin config
     tee "$CONFIG_DIR/bitcoin/bitcoin.conf" >/dev/null <<BTCCONF
 # Bitcoin Core configuration — Project Truffels
+server=1
 txindex=1
 prune=0
 listen=1
 maxconnections=128
 par=4
-dbcache=2048
+dbcache=1024
 $RPCAUTH_LINE
 rpcbind=0.0.0.0
 rpcallowip=172.16.0.0/12
