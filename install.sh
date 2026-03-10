@@ -253,6 +253,14 @@ else
     MEMPOOL_DB_PASS=$(grep MYSQL_PASSWORD "$SECRETS_DIR/mempool-db.env" | cut -d= -f2)
 fi
 
+# mempool backend credentials (RPC + DB creds for the backend service)
+tee "$SECRETS_DIR/mempool-backend.env" >/dev/null <<MBENV
+CORE_RPC_USERNAME=$RPC_USER
+CORE_RPC_PASSWORD=$RPC_PASSWORD
+DATABASE_USERNAME=mempool
+DATABASE_PASSWORD=$MEMPOOL_DB_PASS
+MBENV
+
 # ckstats DB credentials
 if [[ ! -f "$SECRETS_DIR/ckstats-db.env" ]]; then
     CKSTATS_DB_PASS=$(generate_password)
@@ -278,7 +286,10 @@ DB_SSL_REJECT_UNAUTHORIZED=false
 CSENV
 
 # Lock down secrets
+chmod 700 "$SECRETS_DIR"
+chown root:root "$SECRETS_DIR"
 chmod 600 "$SECRETS_DIR"/*.env
+chown root:root "$SECRETS_DIR"/*.env
 chmod 640 "$CONFIG_DIR"/bitcoin/bitcoin.conf "$CONFIG_DIR"/electrs/electrs.toml \
           "$CONFIG_DIR"/ckpool/ckpool.conf "$CONFIG_DIR"/ckstats/.env
 
@@ -293,6 +304,10 @@ services:
     container_name: truffels-bitcoind
     restart: unless-stopped
     user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     ports:
@@ -324,6 +339,10 @@ services:
     image: getumbrel/electrs:v0.10.10@sha256:c991fd3d8b19614fa7309525e8ccb6c0a87464f8bf6bd4dff1479b493f7308f2
     container_name: truffels-electrs
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     volumes:
@@ -379,6 +398,10 @@ services:
     image: truffels/ckpool:v1.0.0
     container_name: truffels-ckpool
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     ports:
@@ -410,8 +433,14 @@ services:
     image: $MEMPOOL_BACKEND_IMAGE
     container_name: truffels-mempool-backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
+    env_file:
+      - /srv/truffels/secrets/mempool-backend.env
     environment:
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
@@ -419,14 +448,10 @@ services:
       ELECTRUM_TLS_ENABLED: "false"
       CORE_RPC_HOST: "truffels-bitcoind"
       CORE_RPC_PORT: "8332"
-      CORE_RPC_USERNAME: "$RPC_USER"
-      CORE_RPC_PASSWORD: "$RPC_PASSWORD"
       DATABASE_ENABLED: "true"
       DATABASE_HOST: "truffels-mempool-db"
       DATABASE_PORT: "3306"
       DATABASE_DATABASE: "mempool"
-      DATABASE_USERNAME: "mempool"
-      DATABASE_PASSWORD: "$MEMPOOL_DB_PASS"
       STATISTICS_ENABLED: "true"
     depends_on:
       mempool-db:
@@ -440,6 +465,10 @@ services:
     image: $MEMPOOL_FRONTEND_IMAGE
     container_name: truffels-mempool-frontend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     environment:
@@ -456,6 +485,14 @@ services:
     image: $MARIADB_IMAGE
     container_name: truffels-mempool-db
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     networks:
       bitcoin-backend:
     env_file:
@@ -519,6 +556,10 @@ services:
     image: truffels/ckstats:latest
     container_name: truffels-ckstats
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     env_file:
@@ -543,6 +584,10 @@ services:
     image: truffels/ckstats:latest
     container_name: truffels-ckstats-cron
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       bitcoin-backend:
     env_file:
@@ -578,6 +623,14 @@ services:
     image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
     container_name: truffels-ckstats-db
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     networks:
       bitcoin-backend:
     env_file:
@@ -620,12 +673,11 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 		reverse_proxy truffels-api:8080
 	}
 
-	handle /api/* {
-		reverse_proxy truffels-mempool-backend:8999
-	}
-
+	# All other traffic (API, websocket, frontend) goes through mempool frontend.
+	# The mempool frontend nginx rewrites /api/ → /api/v1/ before proxying to backend.
+	# Do NOT route /api/* directly to mempool-backend — Esplora-style paths will 404.
 	handle /ws {
-		reverse_proxy truffels-mempool-backend:8999
+		reverse_proxy truffels-mempool-frontend:8080
 	}
 
 	handle {
@@ -636,6 +688,7 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 		X-Content-Type-Options nosniff
 		X-Frame-Options SAMEORIGIN
 		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
 }
@@ -647,6 +700,15 @@ services:
     image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
     container_name: truffels-proxy
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
     networks:
       truffels-edge:
       bitcoin-backend:
@@ -739,6 +801,8 @@ services:
     image: truffels/api:v0.1.0
     container_name: truffels-api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       bitcoin-backend:
       truffels-edge:
@@ -775,6 +839,15 @@ services:
     image: truffels/web:v0.1.0
     container_name: truffels-web
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
     networks:
       truffels-edge:
     deploy:
@@ -820,7 +893,70 @@ else
     swapon "$TRUFFELS_BASE/swapfile" 2>/dev/null || true
 fi
 
-# --- Step 10: Verify ----------------------------------------------------------
+# --- Step 10: Host firewall (nftables) ----------------------------------------
+log "Configuring host firewall..."
+mkdir -p "$CONFIG_DIR/nftables"
+tee "$CONFIG_DIR/nftables/truffels.conf" >/dev/null <<'NFTCONF'
+#!/usr/sbin/nft -f
+# Project Truffels — Host firewall rules
+# Only filters INPUT to host services. Docker manages its own FORWARD chains.
+
+table inet truffels_firewall {
+  chain input {
+    type filter hook input priority 0; policy drop;
+
+    # Loopback — always allow
+    iif lo accept
+
+    # Established/related — allow return traffic
+    ct state established,related accept
+
+    # SSH
+    tcp dport 22 accept
+
+    # Caddy reverse proxy (HTTP)
+    tcp dport 80 accept
+
+    # Bitcoin P2P
+    tcp dport 8333 accept
+
+    # ckpool stratum (LAN miners)
+    tcp dport 3333 accept
+
+    # ICMP ping
+    ip protocol icmp accept
+    ip6 nexthdr icmpv6 accept
+
+    # Docker bridge traffic (container → host)
+    iifname "br-*" accept
+    iifname "docker0" accept
+  }
+}
+NFTCONF
+
+nft -f "$CONFIG_DIR/nftables/truffels.conf"
+
+tee /etc/systemd/system/truffels-firewall.service >/dev/null <<'FWSVC'
+[Unit]
+Description=Truffels host firewall (nftables)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /srv/truffels/config/nftables/truffels.conf
+ExecStop=/usr/sbin/nft delete table inet truffels_firewall
+
+[Install]
+WantedBy=multi-user.target
+FWSVC
+
+systemctl daemon-reload
+systemctl enable truffels-firewall.service
+log "Host firewall active — INPUT drop policy, allow SSH/80/3333/8333"
+
+# --- Step 11: Verify ----------------------------------------------------------
 log "Waiting for services to stabilize..."
 sleep 15
 
