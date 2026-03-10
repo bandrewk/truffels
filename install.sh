@@ -822,6 +822,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/truffels/compose:/srv/truffels/compose:ro
+      - /srv/truffels/secrets:/srv/truffels/secrets:ro
     environment:
       TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
       TRUFFELS_AGENT_LISTEN: ":9090"
