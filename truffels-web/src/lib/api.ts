@@ -170,10 +170,19 @@ export interface UpdateLog {
   rollback_version?: string
 }
 
+export interface UpdateSource {
+  type: 'dockerhub' | 'github' | 'bitbucket'
+  images?: string[]
+  repo?: string
+  branch?: string
+  needs_build: boolean
+}
+
 export interface UpdateStatus {
   pending_count: number
   checks: UpdateCheck[]
   updating: Record<string, boolean>
+  sources: Record<string, UpdateSource>
 }
 
 export const api = {

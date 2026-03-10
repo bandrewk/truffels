@@ -1,8 +1,73 @@
 import { useCallback, useState } from 'react'
-import { api, UpdateCheck, UpdateLog } from '@/lib/api'
+import { api, UpdateCheck, UpdateLog, UpdateSource } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
+
+function DockerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+      <path d="M13.98 11.08h2.12a.19.19 0 0 0 .19-.19V9.01a.19.19 0 0 0-.19-.19h-2.12a.19.19 0 0 0-.19.19v1.88c0 .1.09.19.19.19m-2.95-5.43h2.12a.19.19 0 0 0 .19-.19V3.57a.19.19 0 0 0-.19-.19h-2.12a.19.19 0 0 0-.19.19v1.89c0 .1.09.19.19.19m0 2.71h2.12a.19.19 0 0 0 .19-.19V6.29a.19.19 0 0 0-.19-.19h-2.12a.19.19 0 0 0-.19.19v1.88c0 .1.09.19.19.19m-2.93 0h2.12a.19.19 0 0 0 .19-.19V6.29a.19.19 0 0 0-.19-.19H8.1a.19.19 0 0 0-.19.19v1.88c0 .1.08.19.19.19m-2.96 0h2.12a.19.19 0 0 0 .19-.19V6.29a.19.19 0 0 0-.19-.19H5.14a.19.19 0 0 0-.19.19v1.88c0 .1.09.19.19.19m5.89 2.72h2.12a.19.19 0 0 0 .19-.19V9.01a.19.19 0 0 0-.19-.19h-2.12a.19.19 0 0 0-.19.19v1.88c0 .1.09.19.19.19m-2.93 0h2.12a.19.19 0 0 0 .19-.19V9.01a.19.19 0 0 0-.19-.19H8.1a.19.19 0 0 0-.19.19v1.88c0 .1.08.19.19.19m-2.96 0h2.12a.19.19 0 0 0 .19-.19V9.01a.19.19 0 0 0-.19-.19H5.14a.19.19 0 0 0-.19.19v1.88c0 .1.09.19.19.19m-2.92 0h2.12a.19.19 0 0 0 .19-.19V9.01a.19.19 0 0 0-.19-.19H2.22a.19.19 0 0 0-.19.19v1.88c0 .1.08.19.19.19M24 11.76a4.3 4.3 0 0 0-2.16-1.46c.02-.2.01-.4-.01-.6-.26-1.7-1.68-2.88-2.95-2.88-.4 0-.76.1-1.07.31l-.1.07c-.1.07-.2.16-.28.25a5 5 0 0 0-.52.73c-.22-.08-.46-.14-.7-.17a2 2 0 0 0-.27-.02H13.6V3.57A.19.19 0 0 0 13.41 3.38h-2.12a.19.19 0 0 0-.19.19V5.46H2.22a.19.19 0 0 0-.19.19v1.88c-.01.1.08.19.19.19h.6v3.08c0 .1.08.19.19.19h.56c.1 0 .19-.09.19-.19V8.82h13.15c.3.03.57.13.8.28l-.03.08a4.7 4.7 0 0 0-.18 1.37c0 1.05.37 2.04 1.04 2.78.68.77 1.62 1.2 2.62 1.2h.05c.56 0 1.12-.17 1.57-.44.49-.31.87-.71 1.12-1.15a2.7 2.7 0 0 0 .34-.87c.04-.2.05-.38.04-.56a1.9 1.9 0 0 0-.28-.75"/>
+    </svg>
+  )
+}
+
+function GitHubIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+      <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+    </svg>
+  )
+}
+
+function BitbucketIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+      <path d="M2.65 3C2.29 3 2 3.29 2 3.65c0 .04 0 .08.01.13l2.74 16.6c.1.54.57.93 1.12.93h12.41c.41 0 .77-.29.83-.7L21.99 3.78c.04-.36-.22-.68-.57-.72-.04 0-.08-.01-.12-.01H2.65zM14.1 14.95H9.94L8.78 9.05h6.3l-1 5.9z"/>
+    </svg>
+  )
+}
+
+function SourceLink({ source }: { source?: UpdateSource }) {
+  if (!source) return null
+
+  let url: string
+  let icon: React.ReactNode
+  let label: string
+
+  switch (source.type) {
+    case 'dockerhub':
+      url = `https://hub.docker.com/r/${source.images?.[0] || ''}`
+      icon = <DockerIcon />
+      label = source.images?.[0] || 'Docker Hub'
+      break
+    case 'github':
+      url = `https://github.com/${source.repo || ''}`
+      icon = <GitHubIcon />
+      label = source.repo || 'GitHub'
+      break
+    case 'bitbucket':
+      url = `https://bitbucket.org/${source.repo || ''}`
+      icon = <BitbucketIcon />
+      label = source.repo || 'Bitbucket'
+      break
+    default:
+      return null
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+      title={label}
+    >
+      {icon}
+      <span className="hidden sm:inline">{label}</span>
+    </a>
+  )
+}
 
 function formatTime(iso: string): string {
   if (!iso) return ''
@@ -53,6 +118,7 @@ export default function UpdatesPage() {
   const checks = status?.checks || []
   const updating = status?.updating || {}
   const pendingCount = status?.pending_count || 0
+  const sources = status?.sources || {}
 
   return (
     <div className="space-y-6">
@@ -86,6 +152,7 @@ export default function UpdatesPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium text-gray-200">{c.service_id}</span>
+                  <SourceLink source={sources[c.service_id]} />
                   {c.error ? (
                     <span className="text-xs text-red-400">error</span>
                   ) : updating[c.service_id] ? (

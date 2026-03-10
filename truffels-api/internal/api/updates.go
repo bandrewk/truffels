@@ -106,9 +106,13 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updating := make(map[string]bool)
+	sources := make(map[string]*model.UpdateSource)
 	for _, tmpl := range s.registry.All() {
 		if s.updateEngine.IsUpdating(tmpl.ID) {
 			updating[tmpl.ID] = true
+		}
+		if tmpl.UpdateSource != nil {
+			sources[tmpl.ID] = tmpl.UpdateSource
 		}
 	}
 
@@ -116,5 +120,6 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		"pending_count": pendingCount,
 		"checks":        checks,
 		"updating":      updating,
+		"sources":       sources,
 	})
 }
