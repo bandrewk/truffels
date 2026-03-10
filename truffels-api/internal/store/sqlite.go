@@ -39,12 +39,75 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	data, err := migrationsFS.ReadFile("migrations/001_init.sql")
-	if err != nil {
-		return err
+	migrations := []string{"migrations/001_init.sql", "migrations/002_auth.sql"}
+	for _, m := range migrations {
+		data, err := migrationsFS.ReadFile(m)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", m, err)
+		}
+		if _, err := s.db.Exec(string(data)); err != nil {
+			return fmt.Errorf("exec %s: %w", m, err)
+		}
 	}
-	_, err = s.db.Exec(string(data))
+	return nil
+}
+
+// GetSetting retrieves a value from admin_settings.
+func (s *Store) GetSetting(key string) (string, error) {
+	var val string
+	err := s.db.QueryRow(`SELECT value FROM admin_settings WHERE key = ?`, key).Scan(&val)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return val, err
+}
+
+// SetSetting upserts a value in admin_settings.
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO admin_settings (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// LogAudit writes an entry to the audit log.
+func (s *Store) LogAudit(action, target, detail, ip string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO audit_log (action, target, detail, ip) VALUES (?, ?, ?, ?)`,
+		action, target, detail, ip)
+	return err
+}
+
+// GetAuditLog returns recent audit entries.
+func (s *Store) GetAuditLog(limit int) ([]AuditEntry, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, action, target, detail, ip FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		var target, detail, ip sql.NullString
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Action, &target, &detail, &ip); err != nil {
+			continue
+		}
+		e.Target = target.String
+		e.Detail = detail.String
+		e.IP = ip.String
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+type AuditEntry struct {
+	ID        int64  `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Action    string `json:"action"`
+	Target    string `json:"target,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	IP        string `json:"ip,omitempty"`
 }
 
 // EnsureService creates a service record if it doesn't exist.

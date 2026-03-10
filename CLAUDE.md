@@ -93,5 +93,9 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
   - `truffels-web` — React/TS/Vite control plane UI v0.1.0 (nginx)
 - **LAN ports:** 22 (SSH), 80 (Caddy), 3333 (stratum), 8333 (P2P)
 - **Swap:** 4GB NVMe swapfile at `/srv/truffels/swapfile` + 2GB zram (6GB total)
-- **Installation progress:** INSTALLATION.md completed through step 15 (control plane)
-- **Next milestone:** Phase 8 — truffels-agent (privileged mediator) or Phase 10 (hardening)
+- **Firewall:** nftables INPUT drop policy (truffels-firewall.service), allow SSH/80/3333/8333/loopback/docker bridges
+- **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
+- **Docker hardening:** All containers have cap_drop: ALL (except API for Docker socket), security_opt: no-new-privileges where possible
+- **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
+- **Installation progress:** INSTALLATION.md completed through step 17 (hardening)
+- **Next milestone:** Phase 8 — truffels-agent (privileged mediator) or Phase 9 — ePaper display

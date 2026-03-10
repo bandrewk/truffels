@@ -6,7 +6,16 @@ const navItems = [
   { to: '/alerts', label: 'Alerts' },
 ]
 
-export default function Layout() {
+interface Props {
+  onLogout: () => void
+}
+
+export default function Layout({ onLogout }: Props) {
+  async function handleLogout() {
+    await fetch('/api/truffels/auth/logout', { method: 'POST' })
+    onLogout()
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="bg-surface-raised border-b border-border px-6 py-3 flex items-center gap-6">
@@ -32,6 +41,14 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
+        <div className="ml-auto">
+          <button
+            onClick={handleLogout}
+            className="text-sm text-gray-400 hover:text-gray-200 transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
         <Outlet />

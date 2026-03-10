@@ -1,5 +1,5 @@
 # truffels-api — Go control plane backend
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.24-bookworm AS builder
 
 WORKDIR /src
 COPY . .
