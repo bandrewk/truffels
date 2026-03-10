@@ -6,6 +6,7 @@ var Bitcoind = model.ServiceTemplate{
 	ID:             "bitcoind",
 	DisplayName:    "Bitcoin Core",
 	Description:    "Full Bitcoin node with transaction index, RPC, and ZMQ",
+	ComposeDir:     "bitcoin",
 	ContainerNames: []string{"truffels-bitcoind"},
 	Dependencies:   nil,
 	MemoryLimit:    "3500M",

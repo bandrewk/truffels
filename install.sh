@@ -612,6 +612,14 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 		reverse_proxy truffels-ckstats:3000
 	}
 
+	handle /admin* {
+		reverse_proxy truffels-web:8080
+	}
+
+	handle /api/truffels/* {
+		reverse_proxy truffels-api:8080
+	}
+
 	handle /api/* {
 		reverse_proxy truffels-mempool-backend:8999
 	}
@@ -714,6 +722,104 @@ docker compose -f "$COMPOSE_DIR/ckstats/docker-compose.yml" up -d
 log "Starting reverse proxy..."
 cd "$COMPOSE_DIR/proxy" && docker compose up -d
 
+# --- Step 9b: Truffels control plane ------------------------------------------
+log "Writing truffels control plane compose..."
+mkdir -p "$COMPOSE_DIR/truffels" "$DATA_DIR/truffels"
+chown 1000:1000 "$DATA_DIR/truffels"
+
+TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-/home/truffel/Project-Truffels/truffels-api}"
+TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-/home/truffel/Project-Truffels/truffels-web}"
+
+tee "$COMPOSE_DIR/truffels/docker-compose.yml" >/dev/null <<TRUFFELSDC
+services:
+  api:
+    build:
+      context: $TRUFFELS_API_SRC
+      dockerfile: $TRUFFELS_API_SRC/Dockerfile
+    image: truffels/api:v0.1.0
+    container_name: truffels-api
+    restart: unless-stopped
+    networks:
+      bitcoin-backend:
+      truffels-edge:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/truffels:/srv/truffels
+      - /srv/truffels/data/truffels:/data
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    environment:
+      TRUFFELS_LISTEN: ":8080"
+      TRUFFELS_DB_PATH: "/data/truffels.db"
+      TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"
+      TRUFFELS_SECRETS_ROOT: "/srv/truffels/secrets"
+      TRUFFELS_DATA_ROOT: "/srv/truffels/data"
+      TRUFFELS_HOST_PROC: "/host/proc"
+      TRUFFELS_HOST_SYS: "/host/sys"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/truffels/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  web:
+    build:
+      context: $TRUFFELS_WEB_SRC
+      dockerfile: $TRUFFELS_WEB_SRC/Dockerfile
+    image: truffels/web:v0.1.0
+    container_name: truffels-web
+    restart: unless-stopped
+    networks:
+      truffels-edge:
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/admin/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  bitcoin-backend:
+    external: true
+  truffels-edge:
+    external: true
+TRUFFELSDC
+
+log "Building truffels-api image..."
+cd "$COMPOSE_DIR/truffels" && docker compose build api --quiet
+
+log "Building truffels-web image..."
+cd "$COMPOSE_DIR/truffels" && docker compose build web --quiet
+
+log "Starting truffels control plane..."
+cd "$COMPOSE_DIR/truffels" && docker compose up -d
+
+# --- Step 9c: NVMe swap ------------------------------------------------------
+if [[ ! -f "$TRUFFELS_BASE/swapfile" ]]; then
+    log "Creating 4GB NVMe swap file..."
+    fallocate -l 4G "$TRUFFELS_BASE/swapfile"
+    chmod 600 "$TRUFFELS_BASE/swapfile"
+    mkswap "$TRUFFELS_BASE/swapfile"
+    swapon "$TRUFFELS_BASE/swapfile"
+    if ! grep -q "$TRUFFELS_BASE/swapfile" /etc/fstab; then
+        echo "$TRUFFELS_BASE/swapfile none swap sw,pri=10 0 0" >> /etc/fstab
+    fi
+    log "NVMe swap enabled (4GB, priority 10 — overflow after zram)"
+else
+    log "Swap file already exists, skipping."
+    swapon "$TRUFFELS_BASE/swapfile" 2>/dev/null || true
+fi
+
 # --- Step 10: Verify ----------------------------------------------------------
 log "Waiting for services to stabilize..."
 sleep 15
@@ -731,6 +837,8 @@ log "============================================"
 log " Project Truffels installation complete!"
 log "============================================"
 log ""
+log " Admin UI: http://$LAN_IP/admin/"
+log " API:      http://$LAN_IP/api/truffels/health"
 log " Mempool:  http://$LAN_IP/"
 log " ckstats:  http://$LAN_IP/ckstats/"
 log " Stratum:  $LAN_IP:3333"

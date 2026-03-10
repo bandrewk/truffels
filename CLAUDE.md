@@ -92,5 +92,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
   - `truffels-api` — Go control plane API v0.1.0
   - `truffels-web` — React/TS/Vite control plane UI v0.1.0 (nginx)
 - **LAN ports:** 22 (SSH), 80 (Caddy), 3333 (stratum), 8333 (P2P)
-- **Installation progress:** INSTALLATION.md completed through step 13 (reverse proxy)
+- **Swap:** 4GB NVMe swapfile at `/srv/truffels/swapfile` + 2GB zram (6GB total)
+- **Installation progress:** INSTALLATION.md completed through step 15 (control plane)
 - **Next milestone:** Phase 8 — truffels-agent (privileged mediator) or Phase 10 (hardening)
