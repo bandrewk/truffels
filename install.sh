@@ -533,6 +533,9 @@ COPY ckpoolstats/package.json ckpoolstats/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 RUN pnpm add dotenv
 COPY ckpoolstats/ ./
+RUN sed -i "s|fetch('/api/|fetch('/ckstats/api/|g" components/Header.tsx && \
+    sed -i "s|fetch(\`/api/|fetch(\`/ckstats/api/|g" components/UserResetButton.tsx components/PrivacyToggle.tsx && \
+    npx prettier --write components/Header.tsx components/UserResetButton.tsx components/PrivacyToggle.tsx
 RUN pnpm build
 
 FROM node:20-slim
