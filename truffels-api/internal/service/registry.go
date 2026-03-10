@@ -18,6 +18,9 @@ func NewRegistry(composeRoot string) *Registry {
 		templates.Ckpool,
 		templates.Mempool,
 		templates.Ckstats,
+		templates.Proxy,
+		templates.TruffelsAPI,
+		templates.TruffelsWeb,
 	}
 
 	r := &Registry{
@@ -34,7 +37,7 @@ func NewRegistry(composeRoot string) *Registry {
 	}
 
 	// Fixed topological order for the dependency graph
-	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats"}
+	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy", "truffels-api", "truffels-web"}
 
 	return r
 }

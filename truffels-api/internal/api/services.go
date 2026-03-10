@@ -58,6 +58,11 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tmpl.ReadOnly {
+		writeError(w, http.StatusForbidden, "this is an infrastructure service and cannot be managed")
+		return
+	}
+
 	var req actionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")

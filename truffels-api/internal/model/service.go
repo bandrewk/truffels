@@ -21,6 +21,7 @@ type ServiceTemplate struct {
 	MemoryLimit    string   `json:"memory_limit"`
 	ConfigPath     string   `json:"-"`
 	Port           string   `json:"port,omitempty"`
+	ReadOnly       bool     `json:"read_only,omitempty"`
 }
 
 type ContainerState struct {

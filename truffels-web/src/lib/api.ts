@@ -49,6 +49,7 @@ export interface ServiceTemplate {
   dependencies: string[] | null
   memory_limit: string
   port?: string
+  read_only?: boolean
 }
 
 export interface ServiceInstance {
