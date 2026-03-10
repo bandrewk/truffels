@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"truffels-api/internal/auth"
+	"truffels-api/internal/bitcoin"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
@@ -21,15 +22,17 @@ type Server struct {
 	compose   *docker.ComposeClient
 	collector *metrics.Collector
 	auth      *auth.Auth
+	btcRPC    *bitcoin.Client
 }
 
-func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth) *Server {
+func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client) *Server {
 	return &Server{
 		registry:  reg,
 		store:     st,
 		compose:   comp,
 		collector: coll,
 		auth:      a,
+		btcRPC:    btc,
 	}
 }
 
@@ -62,6 +65,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/backup/download", s.handleBackupDownload)
 
 			r.Get("/services", s.handleListServices)
+			r.Get("/services/bitcoind/stats", s.handleBitcoindStats)
 			r.Get("/services/{id}", s.handleGetService)
 			r.Post("/services/{id}/action", s.handleServiceAction)
 			r.Get("/services/{id}/logs", s.handleServiceLogs)

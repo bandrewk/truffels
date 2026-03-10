@@ -84,6 +84,35 @@ export interface ConfigResponse {
   message?: string
 }
 
+export interface BitcoindStats {
+  blockchain: {
+    chain: string
+    blocks: number
+    headers: number
+    bestblockhash: string
+    difficulty: number
+    verificationprogress: number
+    size_on_disk: number
+    pruned: boolean
+  }
+  network: {
+    version: number
+    subversion: string
+    protocolversion: number
+    connections: number
+    connections_in: number
+    connections_out: number
+  }
+  mempool: {
+    size: number
+    bytes: number
+    usage: number
+    total_fee: number
+    mempoolminfee: number
+    minrelaytxfee: number
+  }
+}
+
 export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   services: () => get<ServiceInstance[]>('/services'),
@@ -93,6 +122,7 @@ export const api = {
   serviceConfig: (id: string) => get<ConfigResponse>(`/services/${id}/config`),
   updateConfig: (id: string, config: string, restart: boolean) =>
     post<{ status: string }>(`/services/${id}/config`, { config, restart }),
+  bitcoindStats: () => get<BitcoindStats>('/services/bitcoind/stats'),
   host: () => get<HostMetrics>('/host'),
   alerts: (all = false) => get<Alert[]>(`/alerts${all ? '?all=true' : ''}`),
 }

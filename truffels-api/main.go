@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"truffels-api/internal/alerts"
 	"truffels-api/internal/api"
 	"truffels-api/internal/auth"
+	"truffels-api/internal/bitcoin"
 	"truffels-api/internal/config"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
@@ -52,8 +55,11 @@ func main() {
 	// Auth
 	authenticator := auth.New(st)
 
+	// Bitcoin RPC client
+	btcRPC := initBitcoinRPC(cfg.SecretsRoot)
+
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector, authenticator)
+	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),
@@ -73,4 +79,41 @@ func main() {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func initBitcoinRPC(secretsRoot string) *bitcoin.Client {
+	rpcHost := os.Getenv("BITCOIN_RPC_HOST")
+	if rpcHost == "" {
+		rpcHost = "truffels-bitcoind:8332"
+	}
+
+	envFile := secretsRoot + "/rpc.env"
+	f, err := os.Open(envFile)
+	if err != nil {
+		slog.Warn("cannot open rpc.env, bitcoin stats disabled", "err", err)
+		return nil
+	}
+	defer f.Close()
+
+	var user, pass string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if k, v, ok := strings.Cut(line, "="); ok {
+			switch k {
+			case "RPC_USER":
+				user = v
+			case "RPC_PASSWORD":
+				pass = v
+			}
+		}
+	}
+
+	if user == "" || pass == "" {
+		slog.Warn("rpc.env missing credentials, bitcoin stats disabled")
+		return nil
+	}
+
+	slog.Info("bitcoin RPC configured", "host", rpcHost)
+	return bitcoin.NewClient(rpcHost, user, pass)
 }

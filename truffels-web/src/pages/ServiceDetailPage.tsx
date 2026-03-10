@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api, ServiceInstance } from '@/lib/api'
+import { api, ServiceInstance, BitcoindStats } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -78,8 +78,12 @@ export default function ServiceDetailPage() {
       {/* Actions */}
       {!svc.template.read_only && (
         <div className="flex gap-2 items-center">
-          <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
-          <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
+          {svc.state !== 'running' && (
+            <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
+          )}
+          {svc.state !== 'stopped' && (
+            <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
+          )}
           <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
           {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
         </div>
@@ -107,9 +111,86 @@ export default function ServiceDetailPage() {
   )
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${mb.toFixed(1)} MB`
+  const gb = mb / 1024
+  return `${gb.toFixed(1)} GB`
+}
+
+function formatDifficulty(d: number): string {
+  if (d >= 1e12) return `${(d / 1e12).toFixed(2)}T`
+  if (d >= 1e9) return `${(d / 1e9).toFixed(2)}G`
+  if (d >= 1e6) return `${(d / 1e6).toFixed(2)}M`
+  return d.toFixed(0)
+}
+
+function BitcoinStatsCard() {
+  const fetcher = useCallback(() => api.bitcoindStats(), [])
+  const { data, error } = useApi(fetcher, 30000)
+
+  if (error) return (
+    <Card>
+      <CardTitle>Bitcoin Core</CardTitle>
+      <p className="text-sm text-red-400">Unable to fetch stats: {error}</p>
+    </Card>
+  )
+  if (!data) return null
+
+  const { blockchain, network, mempool } = data
+
+  return (
+    <>
+      <Card>
+        <CardTitle>Blockchain</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">Block Height</dt>
+          <dd className="text-gray-300 font-mono">{blockchain.blocks.toLocaleString()}</dd>
+          <dt className="text-gray-500">Sync Progress</dt>
+          <dd className="text-gray-300">{(blockchain.verificationprogress * 100).toFixed(4)}%</dd>
+          <dt className="text-gray-500">Difficulty</dt>
+          <dd className="text-gray-300 font-mono">{formatDifficulty(blockchain.difficulty)}</dd>
+          <dt className="text-gray-500">Chain Size</dt>
+          <dd className="text-gray-300">{(blockchain.size_on_disk / 1e9).toFixed(1)} GB</dd>
+          <dt className="text-gray-500">Best Block</dt>
+          <dd className="text-gray-400 font-mono text-xs truncate">{blockchain.bestblockhash}</dd>
+          <dt className="text-gray-500">Pruned</dt>
+          <dd className="text-gray-300">{blockchain.pruned ? 'Yes' : 'No'}</dd>
+        </dl>
+      </Card>
+      <Card>
+        <CardTitle>Network</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">Version</dt>
+          <dd className="text-gray-300">{network.subversion.replace(/\//g, '')}</dd>
+          <dt className="text-gray-500">Peers</dt>
+          <dd className="text-gray-300">{network.connections_in} in / {network.connections_out} out ({network.connections} total)</dd>
+        </dl>
+      </Card>
+      <Card>
+        <CardTitle>Mempool</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">Transactions</dt>
+          <dd className="text-gray-300 font-mono">{mempool.size.toLocaleString()}</dd>
+          <dt className="text-gray-500">Size</dt>
+          <dd className="text-gray-300">{formatBytes(mempool.bytes)}</dd>
+          <dt className="text-gray-500">Total Fees</dt>
+          <dd className="text-gray-300 font-mono">{mempool.total_fee.toFixed(8)} BTC</dd>
+          <dt className="text-gray-500">Min Fee Rate</dt>
+          <dd className="text-gray-300 font-mono">{(mempool.mempoolminfee * 100_000_000).toFixed(0)} sat/kvB</dd>
+        </dl>
+      </Card>
+    </>
+  )
+}
+
 function OverviewTab({ svc }: { svc: ServiceInstance }) {
   return (
     <div className="space-y-4">
+      {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
       <Card>
         <CardTitle>Containers</CardTitle>
         <div className="overflow-x-auto">
