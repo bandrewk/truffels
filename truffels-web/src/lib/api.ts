@@ -29,6 +29,7 @@ export interface HostMetrics {
   mem_percent: number
   temperature_c: number
   fan_rpm: number
+  fan_percent: number
   disks: { path: string; total_gb: number; used_gb: number; avail_gb: number; used_percent: number }[]
   uptime_seconds: number
 }

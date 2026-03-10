@@ -43,7 +43,7 @@ func (c *Collector) Collect() model.HostMetrics {
 	m.CPUPercent = c.collectCPU()
 	c.collectMemory(&m)
 	m.Temperature = c.collectTemp()
-	m.FanRPM = c.collectFanSpeed()
+	m.FanRPM, m.FanPercent = c.collectFan()
 	m.Disks = c.collectDisk()
 	m.UptimeSeconds = c.collectUptime()
 
@@ -135,22 +135,27 @@ func (c *Collector) collectTemp() float64 {
 	return v / 1000.0
 }
 
-func (c *Collector) collectFanSpeed() int {
-	// hwmon number is not stable across reboots, so glob for it
+func (c *Collector) collectFan() (rpm int, percent int) {
+	// hwmon number is not stable across reboots, so scan for it
 	base := c.sysPath + "/devices/platform/cooling_fan/hwmon"
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	for _, e := range entries {
-		data, err := os.ReadFile(base + "/" + e.Name() + "/fan1_input")
-		if err != nil {
-			continue
+		dir := base + "/" + e.Name()
+		if data, err := os.ReadFile(dir + "/fan1_input"); err == nil {
+			rpm, _ = strconv.Atoi(strings.TrimSpace(string(data)))
 		}
-		v, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		return v
+		if data, err := os.ReadFile(dir + "/pwm1"); err == nil {
+			pwm, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+			percent = pwm * 100 / 255
+		}
+		if rpm > 0 {
+			return rpm, percent
+		}
 	}
-	return 0
+	return 0, 0
 }
 
 func (c *Collector) collectDisk() []model.DiskUsage {

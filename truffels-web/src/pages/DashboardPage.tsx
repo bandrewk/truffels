@@ -62,7 +62,7 @@ export default function DashboardPage() {
             {host.temperature_c.toFixed(1)}<span className="text-lg text-gray-400">°C</span>
           </div>
           <div className="text-sm text-gray-400 mt-1">
-            Fan: {host.fan_rpm.toLocaleString()} RPM
+            Fan: {host.fan_percent}% · {host.fan_rpm.toLocaleString()} RPM
           </div>
         </Card>
         <Card>
