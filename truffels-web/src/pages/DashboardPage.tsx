@@ -58,8 +58,8 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardTitle>Temperature</CardTitle>
-          <div className="text-3xl font-mono text-gray-100">
-            {host.temperature_c.toFixed(1)}<span className="text-lg text-gray-400">°C</span>
+          <div className={`text-3xl font-mono ${host.temperature_c >= 80 ? 'text-red-400' : host.temperature_c >= 75 ? 'text-orange-400' : 'text-green-400'}`}>
+            {host.temperature_c.toFixed(1)}<span className="text-lg opacity-60">°C</span>
           </div>
           <div className="text-sm text-gray-400 mt-1">
             Fan: {host.fan_percent}% · {host.fan_rpm.toLocaleString()} RPM
