@@ -94,7 +94,7 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 	// Set the global agent inspector to use our mock
 	docker.NewAgentInspector(mockSrv.URL)
 
-	srv := NewServer(reg, st, compose, nil, a, nil)
+	srv := NewServer(reg, st, compose, nil, a, nil, nil)
 	return srv, st, mockSrv
 }
 

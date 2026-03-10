@@ -20,8 +20,9 @@ type ServiceTemplate struct {
 	Dependencies   []string `json:"dependencies"`
 	MemoryLimit    string   `json:"memory_limit"`
 	ConfigPath     string   `json:"-"`
-	Port           string   `json:"port,omitempty"`
-	ReadOnly       bool     `json:"read_only,omitempty"`
+	Port           string        `json:"port,omitempty"`
+	ReadOnly       bool          `json:"read_only,omitempty"`
+	UpdateSource   *UpdateSource `json:"update_source,omitempty"`
 }
 
 type ContainerState struct {

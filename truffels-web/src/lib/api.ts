@@ -148,6 +148,34 @@ export interface ElectrsStats {
   index_height: number
 }
 
+export interface UpdateCheck {
+  id: number
+  service_id: string
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  checked_at: string
+  error?: string
+}
+
+export interface UpdateLog {
+  id: number
+  service_id: string
+  from_version: string
+  to_version: string
+  status: 'pending' | 'pulling' | 'building' | 'restarting' | 'done' | 'failed' | 'rolled_back'
+  started_at: string
+  completed_at?: string
+  error?: string
+  rollback_version?: string
+}
+
+export interface UpdateStatus {
+  pending_count: number
+  checks: UpdateCheck[]
+  updating: Record<string, boolean>
+}
+
 export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   services: () => get<ServiceInstance[]>('/services'),
@@ -162,4 +190,10 @@ export const api = {
   electrsStats: () => get<ElectrsStats>('/services/electrs/stats'),
   host: () => get<HostMetrics>('/host'),
   alerts: (all = false) => get<Alert[]>(`/alerts${all ? '?all=true' : ''}`),
+  updates: () => get<UpdateCheck[]>('/updates'),
+  updateStatus: () => get<UpdateStatus>('/updates/status'),
+  checkUpdates: () => post<{ status: string }>('/updates/check'),
+  applyUpdate: (id: string) => post<{ status: string }>(`/updates/apply/${id}`),
+  applyAllUpdates: () => post<{ status: string; queued: string[] }>('/updates/apply-all'),
+  updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
 }

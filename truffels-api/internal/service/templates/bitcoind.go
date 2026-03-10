@@ -12,4 +12,8 @@ var Bitcoind = model.ServiceTemplate{
 	MemoryLimit:    "3500M",
 	ConfigPath:     "bitcoin/bitcoin.conf",
 	Port:           "8333 (P2P)",
+	UpdateSource: &model.UpdateSource{
+		Type:   model.SourceDockerHub,
+		Images: []string{"btcpayserver/bitcoin"},
+	},
 }
