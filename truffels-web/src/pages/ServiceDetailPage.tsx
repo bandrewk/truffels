@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api, ServiceInstance, BitcoindStats } from '@/lib/api'
+import { api, ServiceInstance } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -187,10 +187,125 @@ function BitcoinStatsCard() {
   )
 }
 
+function formatLargeNumber(n: number): string {
+  if (n >= 1e12) return `${(n / 1e12).toFixed(2)} T`
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} G`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)} M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(2)} K`
+  return n.toString()
+}
+
+function formatHashrate(raw: string): string {
+  if (!raw || raw === '0') return '0 H/s'
+  // ckpool returns e.g. "1.92M", "655G", "1.5T" — add space and H/s
+  const match = raw.match(/^([\d.]+)\s*([KMGTPE]?)$/)
+  if (!match) return raw
+  return match[2] ? `${match[1]} ${match[2]}H/s` : `${match[1]} H/s`
+}
+
+function CkpoolStatsCard() {
+  const fetcher = useCallback(() => api.ckpoolStats(), [])
+  const { data, error } = useApi(fetcher, 30000)
+
+  if (error) return (
+    <Card>
+      <CardTitle>Mining Pool</CardTitle>
+      <p className="text-sm text-red-400">Unable to fetch stats: {error}</p>
+    </Card>
+  )
+  if (!data) return null
+
+  const { status, hashrates, shares } = data
+  const runtimeH = Math.floor(status.runtime / 3600)
+  const runtimeD = Math.floor(runtimeH / 24)
+  const runtimeStr = runtimeD > 0 ? `${runtimeD}d ${runtimeH % 24}h` : `${runtimeH}h`
+  const rejectRate = shares.accepted > 0
+    ? ((shares.rejected / (shares.accepted + shares.rejected)) * 100).toFixed(2)
+    : '0'
+
+  return (
+    <>
+      <Card>
+        <CardTitle>Hashrate</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">1 min</dt>
+          <dd className="text-gray-300 font-mono">{formatHashrate(hashrates.hashrate1m)}</dd>
+          <dt className="text-gray-500">5 min</dt>
+          <dd className="text-gray-300 font-mono">{formatHashrate(hashrates.hashrate5m)}</dd>
+          <dt className="text-gray-500">1 hour</dt>
+          <dd className="text-gray-300 font-mono">{formatHashrate(hashrates.hashrate1hr)}</dd>
+          <dt className="text-gray-500">1 day</dt>
+          <dd className="text-gray-300 font-mono">{formatHashrate(hashrates.hashrate1d)}</dd>
+          <dt className="text-gray-500">7 day</dt>
+          <dd className="text-gray-300 font-mono">{formatHashrate(hashrates.hashrate7d)}</dd>
+        </dl>
+      </Card>
+      <Card>
+        <CardTitle>Pool</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">Workers</dt>
+          <dd className="text-gray-300 font-mono">{status.Workers}</dd>
+          <dt className="text-gray-500">Users</dt>
+          <dd className="text-gray-300 font-mono">{status.Users}</dd>
+          <dt className="text-gray-500">Runtime</dt>
+          <dd className="text-gray-300">{runtimeStr}</dd>
+          <dt className="text-gray-500">Accepted</dt>
+          <dd className="text-gray-300 font-mono">{formatLargeNumber(shares.accepted)}</dd>
+          <dt className="text-gray-500">Rejected</dt>
+          <dd className="text-gray-300 font-mono">{formatLargeNumber(shares.rejected)} ({rejectRate}%)</dd>
+          <dt className="text-gray-500">Best Share</dt>
+          <dd className="text-gray-300 font-mono">{formatLargeNumber(shares.bestshare)}</dd>
+        </dl>
+      </Card>
+    </>
+  )
+}
+
+function ElectrsStatsCard() {
+  const fetcher = useCallback(() => api.electrsStats(), [])
+  const btcFetcher = useCallback(() => api.bitcoindStats(), [])
+  const { data, error } = useApi(fetcher, 30000)
+  const { data: btcData } = useApi(btcFetcher, 30000)
+
+  if (error) return (
+    <Card>
+      <CardTitle>Index</CardTitle>
+      <p className="text-sm text-red-400">Unable to fetch stats: {error}</p>
+    </Card>
+  )
+  if (!data) return null
+
+  const btcHeight = btcData?.blockchain.blocks
+  const synced = btcHeight != null && data.index_height >= btcHeight
+  const behind = btcHeight != null ? btcHeight - data.index_height : null
+
+  return (
+    <Card>
+      <CardTitle>Index</CardTitle>
+      <dl className="grid grid-cols-2 gap-2 text-sm">
+        <dt className="text-gray-500">Index Height</dt>
+        <dd className="text-gray-300 font-mono">{data.index_height.toLocaleString()}</dd>
+        {btcHeight != null && (
+          <>
+            <dt className="text-gray-500">Bitcoin Core</dt>
+            <dd className="text-gray-300 font-mono">{btcHeight.toLocaleString()}</dd>
+            <dt className="text-gray-500">Status</dt>
+            <dd className={synced ? 'text-green-400' : 'text-yellow-400'}>
+              {synced ? 'Synced' : `${behind!.toLocaleString()} blocks behind`}
+            </dd>
+          </>
+        )}
+      </dl>
+    </Card>
+  )
+}
+
 function OverviewTab({ svc }: { svc: ServiceInstance }) {
   return (
     <div className="space-y-4">
       {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
+      {svc.template.id === 'ckpool' && <CkpoolStatsCard />}
+      {svc.template.id === 'electrs' && <ElectrsStatsCard />}
       <Card>
         <CardTitle>Containers</CardTitle>
         <div className="overflow-x-auto">

@@ -113,6 +113,39 @@ export interface BitcoindStats {
   }
 }
 
+export interface CkpoolStats {
+  status: {
+    runtime: number
+    lastupdate: number
+    Users: number
+    Workers: number
+    Idle: number
+  }
+  hashrates: {
+    hashrate1m: string
+    hashrate5m: string
+    hashrate15m: string
+    hashrate1hr: string
+    hashrate6hr: string
+    hashrate1d: string
+    hashrate7d: string
+  }
+  shares: {
+    diff: number
+    accepted: number
+    rejected: number
+    bestshare: number
+    SPS1m: number
+    SPS5m: number
+    SPS15m: number
+    SPS1h: number
+  }
+}
+
+export interface ElectrsStats {
+  index_height: number
+}
+
 export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   services: () => get<ServiceInstance[]>('/services'),
@@ -123,6 +156,8 @@ export const api = {
   updateConfig: (id: string, config: string, restart: boolean) =>
     post<{ status: string }>(`/services/${id}/config`, { config, restart }),
   bitcoindStats: () => get<BitcoindStats>('/services/bitcoind/stats'),
+  ckpoolStats: () => get<CkpoolStats>('/services/ckpool/stats'),
+  electrsStats: () => get<ElectrsStats>('/services/electrs/stats'),
   host: () => get<HostMetrics>('/host'),
   alerts: (all = false) => get<Alert[]>(`/alerts${all ? '?all=true' : ''}`),
 }
