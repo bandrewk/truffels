@@ -42,6 +42,23 @@ type UpdateCheck struct {
 	Error          string     `json:"error,omitempty"`
 }
 
+// PreflightResult holds the outcome of pre-update checks for a service.
+type PreflightResult struct {
+	ServiceID   string           `json:"service_id"`
+	FromVersion string           `json:"from_version"`
+	ToVersion   string           `json:"to_version"`
+	CanProceed  bool             `json:"can_proceed"`
+	Checks      []PreflightCheck `json:"checks"`
+}
+
+// PreflightCheck is a single pass/fail/warn check within a preflight result.
+type PreflightCheck struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`   // "pass", "fail", "warn"
+	Message  string `json:"message"`
+	Blocking bool   `json:"blocking"`
+}
+
 // UpdateLog records an update attempt.
 type UpdateLog struct {
 	ID              int64        `json:"id"`

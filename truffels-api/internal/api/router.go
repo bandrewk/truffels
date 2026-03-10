@@ -79,6 +79,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/updates", s.handleGetUpdates)
 			r.Post("/updates/check", s.handleCheckUpdates)
+			r.Get("/updates/preflight/{id}", s.handleUpdatePreflight)
 			r.Post("/updates/apply/{id}", s.handleApplyUpdate)
 			r.Post("/updates/apply-all", s.handleApplyAllUpdates)
 			r.Get("/updates/logs", s.handleUpdateLogs)

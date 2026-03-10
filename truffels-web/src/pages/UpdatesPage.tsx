@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react'
-import { api, UpdateCheck, UpdateLog, UpdateSource } from '@/lib/api'
+import { api, PreflightResult, UpdateCheck, UpdateLog, UpdateSource } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 function DockerIcon() {
   return (
@@ -98,6 +99,8 @@ export default function UpdatesPage() {
   const { data: status, loading, refresh: refreshStatus } = useApi(statusFetcher, 10000)
   const { data: logs, refresh: refreshLogs } = useApi(logsFetcher, 10000)
   const [actionPending, setActionPending] = useState<string | null>(null)
+  const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null)
+  const [preflightLoading, setPreflightLoading] = useState<string | null>(null)
 
   async function handleCheck() {
     setActionPending('check')
@@ -109,7 +112,22 @@ export default function UpdatesPage() {
     }
   }
 
-  async function handleApply(serviceId: string) {
+  async function handlePreflight(serviceId: string) {
+    setPreflightLoading(serviceId)
+    try {
+      const result = await api.updatePreflight(serviceId)
+      setPreflightResult(result)
+    } catch {
+      setPreflightResult(null)
+    } finally {
+      setPreflightLoading(null)
+    }
+  }
+
+  async function handleConfirmUpdate() {
+    if (!preflightResult) return
+    const serviceId = preflightResult.service_id
+    setPreflightResult(null)
     setActionPending(serviceId)
     try {
       await api.applyUpdate(serviceId)
@@ -201,11 +219,11 @@ export default function UpdatesPage() {
               <div className="flex-shrink-0">
                 {c.has_update && !c.error && !updating[c.service_id] && (
                   <button
-                    onClick={() => handleApply(c.service_id)}
-                    disabled={actionPending !== null}
+                    onClick={() => handlePreflight(c.service_id)}
+                    disabled={actionPending !== null || preflightLoading !== null}
                     className="px-3 py-1.5 text-sm rounded bg-accent/20 hover:bg-accent/30 text-accent transition-colors disabled:opacity-50"
                   >
-                    {actionPending === c.service_id ? 'Updating...' : 'Update'}
+                    {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : 'Update'}
                   </button>
                 )}
               </div>
@@ -224,6 +242,48 @@ export default function UpdatesPage() {
           </Card>
         )}
       </div>
+
+      {/* Preflight Confirmation Dialog */}
+      <ConfirmDialog
+        open={preflightResult !== null}
+        title={`Update ${preflightResult?.service_id}?`}
+        onConfirm={handleConfirmUpdate}
+        onCancel={() => setPreflightResult(null)}
+        confirmLabel="Confirm Update"
+        confirmDisabled={!preflightResult?.can_proceed}
+      >
+        {preflightResult && (
+          <div className="space-y-4">
+            <div className="text-sm text-gray-400">
+              <span className="font-mono text-gray-200">{preflightResult.from_version}</span>
+              <span className="text-gray-600 mx-2">&rarr;</span>
+              <span className="font-mono text-gray-200">{preflightResult.to_version}</span>
+            </div>
+
+            <div className="space-y-2">
+              {preflightResult.checks.map((check, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm">
+                  <span className={`flex-shrink-0 mt-0.5 ${
+                    check.status === 'pass' ? 'text-green-400' :
+                    check.status === 'fail' ? 'text-red-400' :
+                    'text-yellow-400'
+                  }`}>
+                    {check.status === 'pass' ? '\u2713' : check.status === 'fail' ? '\u2717' : '\u26A0'}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="text-gray-300">{check.name}</span>
+                    <p className="text-xs text-gray-500">{check.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {!preflightResult.can_proceed && (
+              <p className="text-sm text-red-400">Cannot proceed — resolve issues above.</p>
+            )}
+          </div>
+        )}
+      </ConfirmDialog>
 
       {/* Update History */}
       {logs && logs.length > 0 && (
