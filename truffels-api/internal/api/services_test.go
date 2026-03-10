@@ -266,8 +266,8 @@ func TestServiceAction_Stop_DependentRunning(t *testing.T) {
 	}
 	var body map[string]string
 	json.Unmarshal(w.Body.Bytes(), &body)
-	if !strings.Contains(body["error"], "electrs") {
-		t.Fatalf("expected error about electrs, got %q", body["error"])
+	if !strings.Contains(body["error"], "depends on this service") {
+		t.Fatalf("expected dependent-running error, got %q", body["error"])
 	}
 }
 
