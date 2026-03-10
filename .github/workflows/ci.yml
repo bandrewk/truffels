@@ -22,7 +22,7 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go build -o /dev/null .
-      - run: go test ./...
+      - run: go test -v -count=1 ./...
 
   agent:
     name: Agent (Go)
@@ -38,6 +38,7 @@ jobs:
           cache: false
       - run: go vet ./...
       - run: go build -o /dev/null .
+      - run: go test -v -count=1 ./...
 
   web:
     name: Web (React)
@@ -54,4 +55,5 @@ jobs:
         with:
           node-version: 20
       - run: pnpm install --no-frozen-lockfile
+      - run: pnpm test
       - run: pnpm build
