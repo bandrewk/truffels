@@ -47,7 +47,7 @@ Updates: automatic version checking (Docker Hub, GitHub, Bitbucket), one-click u
 
 Security: admin auth (bcrypt + HMAC sessions), nftables firewall, Docker capability hardening, secrets isolation.
 
-CI: GitHub Actions with 156+ tests across Go and TypeScript.
+CI: GitHub Actions with 240+ tests across Go and TypeScript.
 
 Next milestone: Phase 9 — ePaper display subsystem.
 
