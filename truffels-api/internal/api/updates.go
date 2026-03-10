@@ -98,6 +98,16 @@ func (s *Server) handleUpdateLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, logs)
 }
 
+func (s *Server) handleUpdatePreflight(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	result, err := s.updateEngine.RunPreflight(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	checks, _ := s.store.GetAllUpdateChecks()
 	pendingCount, _ := s.store.PendingUpdateCount()

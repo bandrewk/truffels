@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"truffels-api/internal/docker"
@@ -141,6 +142,164 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	}
 }
 
+// RunPreflight checks whether a service is safe to update and returns detailed results.
+func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) {
+	result := &model.PreflightResult{
+		ServiceID:  serviceID,
+		CanProceed: true,
+	}
+
+	// 1. Service exists and has UpdateSource
+	tmpl, ok := e.registry.Get(serviceID)
+	if !ok {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "service_exists", Status: "fail", Message: "unknown service", Blocking: true,
+		})
+		result.CanProceed = false
+		return result, nil
+	}
+	if tmpl.UpdateSource == nil {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "update_source", Status: "fail", Message: "service has no update source configured", Blocking: true,
+		})
+		result.CanProceed = false
+		return result, nil
+	}
+	result.Checks = append(result.Checks, model.PreflightCheck{
+		Name: "service_exists", Status: "pass", Message: "service found with update source", Blocking: true,
+	})
+
+	// 2. Update available
+	check, _ := e.store.GetLatestUpdateCheck(serviceID)
+	if check == nil || !check.HasUpdate {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "update_available", Status: "fail", Message: "no update available", Blocking: true,
+		})
+		result.CanProceed = false
+	} else {
+		result.FromVersion = check.CurrentVersion
+		result.ToVersion = check.LatestVersion
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "update_available", Status: "pass",
+			Message:  fmt.Sprintf("update available: %s → %s", check.CurrentVersion, check.LatestVersion),
+			Blocking: true,
+		})
+	}
+
+	// 3. Not already updating
+	if e.IsUpdating(serviceID) {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "not_updating", Status: "fail", Message: "update already in progress", Blocking: true,
+		})
+		result.CanProceed = false
+	} else {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "not_updating", Status: "pass", Message: "no update in progress", Blocking: true,
+		})
+	}
+
+	// 4. Compose file accessible
+	composePath := tmpl.ComposeDir + "/docker-compose.yml"
+	if _, err := os.Stat(composePath); err != nil {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "compose_file", Status: "fail", Message: "compose file not accessible: " + err.Error(), Blocking: true,
+		})
+		result.CanProceed = false
+	} else {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "compose_file", Status: "pass", Message: "compose file accessible", Blocking: true,
+		})
+	}
+
+	// 5. Disk space (require at least 2GB free)
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/srv/truffels", &stat); err != nil {
+		result.Checks = append(result.Checks, model.PreflightCheck{
+			Name: "disk_space", Status: "fail", Message: "cannot check disk space: " + err.Error(), Blocking: true,
+		})
+		result.CanProceed = false
+	} else {
+		availGB := float64(stat.Bavail*uint64(stat.Bsize)) / (1 << 30)
+		if availGB < 2.0 {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "disk_space", Status: "fail",
+				Message:  fmt.Sprintf("insufficient disk space: %.1f GB available (need 2 GB)", availGB),
+				Blocking: true,
+			})
+			result.CanProceed = false
+		} else {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "disk_space", Status: "pass",
+				Message:  fmt.Sprintf("%.1f GB available", availGB),
+				Blocking: true,
+			})
+		}
+	}
+
+	// 6. Dependencies healthy
+	for _, dep := range tmpl.Dependencies {
+		depTmpl, depOK := e.registry.Get(dep)
+		if !depOK {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "dependency_" + dep, Status: "fail",
+				Message: "dependency not found in registry", Blocking: true,
+			})
+			result.CanProceed = false
+			continue
+		}
+		allHealthy := true
+		for _, cname := range depTmpl.ContainerNames {
+			cs, err := docker.InspectContainer(cname)
+			if err != nil || cs.Status != "running" {
+				allHealthy = false
+				break
+			}
+			if cs.Health == "unhealthy" {
+				allHealthy = false
+				break
+			}
+		}
+		if !allHealthy {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "dependency_" + dep, Status: "fail",
+				Message: dep + " is not healthy", Blocking: true,
+			})
+			result.CanProceed = false
+		} else {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "dependency_" + dep, Status: "pass",
+				Message: dep + " is healthy", Blocking: true,
+			})
+		}
+	}
+
+	// 7. Affected dependents (warning only)
+	dependents := e.registry.Dependents(serviceID)
+	for _, depID := range dependents {
+		depTmpl, depOK := e.registry.Get(depID)
+		if !depOK {
+			continue
+		}
+		running := false
+		for _, cname := range depTmpl.ContainerNames {
+			cs, _ := docker.InspectContainer(cname)
+			if cs.Status == "running" {
+				running = true
+				break
+			}
+		}
+		if running {
+			result.Checks = append(result.Checks, model.PreflightCheck{
+				Name: "dependent_" + depID, Status: "warn",
+				Message:  depID + " depends on this service and may be temporarily disrupted",
+				Blocking: false,
+			})
+		}
+	}
+
+	return result, nil
+}
+
 // ApplyUpdate performs the update for a single service with automatic rollback on health failure.
 func (e *Engine) ApplyUpdate(serviceID string) error {
 	tmpl, ok := e.registry.Get(serviceID)
@@ -181,6 +340,18 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	}
 
 	src := tmpl.UpdateSource
+
+	// Snapshot compose file before update
+	composePath := tmpl.ComposeDir + "/docker-compose.yml"
+	if snapshot, err := os.ReadFile(composePath); err == nil {
+		e.store.CreateConfigRevision(&model.ConfigRevision{
+			ServiceID:        serviceID,
+			Actor:            "update_engine",
+			Diff:             fmt.Sprintf("pre-update snapshot (%s → %s)", check.CurrentVersion, check.LatestVersion),
+			ConfigSnapshot:   string(snapshot),
+			ValidationResult: "ok",
+		})
+	}
 
 	// Step 1: Pull or build
 	if src.NeedsBuild {

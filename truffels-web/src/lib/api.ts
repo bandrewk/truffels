@@ -170,6 +170,21 @@ export interface UpdateLog {
   rollback_version?: string
 }
 
+export interface PreflightCheck {
+  name: string
+  status: 'pass' | 'fail' | 'warn'
+  message: string
+  blocking: boolean
+}
+
+export interface PreflightResult {
+  service_id: string
+  from_version: string
+  to_version: string
+  can_proceed: boolean
+  checks: PreflightCheck[]
+}
+
 export interface UpdateSource {
   type: 'dockerhub' | 'github' | 'bitbucket'
   images?: string[]
@@ -204,5 +219,6 @@ export const api = {
   checkUpdates: () => post<{ status: string }>('/updates/check'),
   applyUpdate: (id: string) => post<{ status: string }>(`/updates/apply/${id}`),
   applyAllUpdates: () => post<{ status: string; queued: string[] }>('/updates/apply-all'),
+  updatePreflight: (id: string) => get<PreflightResult>(`/updates/preflight/${id}`),
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
 }
