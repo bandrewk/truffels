@@ -15,6 +15,23 @@ function formatUptime(seconds: number): string {
   return `${m}m`
 }
 
+function serviceUptime(containers: { started_at: string }[]): string {
+  if (!containers.length) return ''
+  const starts = containers
+    .map((c) => new Date(c.started_at).getTime())
+    .filter((t) => !isNaN(t))
+  if (!starts.length) return ''
+  const oldest = Math.min(...starts)
+  const secs = Math.floor((Date.now() - oldest) / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ${mins % 60}m`
+  const days = Math.floor(hours / 24)
+  return `${days}d ${hours % 24}h`
+}
+
 export default function DashboardPage() {
   const fetcher = useCallback(() => api.dashboard(), [])
   const { data, error, loading } = useApi(fetcher, 10000)
@@ -87,7 +104,10 @@ export default function DashboardPage() {
                   {svc.containers.length} container{svc.containers.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              <StatusBadge status={svc.state} />
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">{serviceUptime(svc.containers)}</span>
+                <StatusBadge status={svc.state} />
+              </div>
             </Link>
           ))}
         </div>
