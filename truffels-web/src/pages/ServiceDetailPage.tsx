@@ -378,7 +378,12 @@ function LogsTab({ id }: { id: string }) {
 
 function ConfigTab({ id }: { id: string }) {
   const fetcher = useCallback(() => api.serviceConfig(id), [id])
-  const { data, error, loading } = useApi(fetcher)
+  const { data, error, loading, refresh } = useApi(fetcher)
+  const [editing, setEditing] = useState(false)
+  const [editValue, setEditValue] = useState('')
+  const [restartAfter, setRestartAfter] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState('')
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">{error}</div>
@@ -392,13 +397,89 @@ function ConfigTab({ id }: { id: string }) {
     )
   }
 
+  const startEdit = () => {
+    setEditValue(data.config!)
+    setEditing(true)
+    setSaveMsg('')
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setSaveMsg('')
+  }
+
+  const saveConfig = async () => {
+    setSaving(true)
+    setSaveMsg('')
+    try {
+      await api.updateConfig(id, editValue, restartAfter)
+      setSaveMsg(restartAfter ? 'Saved and restarting...' : 'Saved')
+      setEditing(false)
+      setTimeout(refresh, 1000)
+    } catch (e: any) {
+      setSaveMsg(`Error: ${e.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Card>
-        <CardTitle>Configuration — {data.path}</CardTitle>
-        <pre className="text-sm font-mono text-gray-300 bg-surface rounded p-3 overflow-auto whitespace-pre-wrap">
-          {data.config}
-        </pre>
+        <div className="flex justify-between items-center mb-3">
+          <CardTitle>Configuration — {data.path}</CardTitle>
+          {!editing && (
+            <button onClick={startEdit} className="text-xs text-accent hover:text-accent-hover">
+              Edit
+            </button>
+          )}
+        </div>
+        {editing ? (
+          <>
+            <textarea
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              className="w-full h-96 text-sm font-mono text-gray-300 bg-surface rounded p-3 border border-border-subtle focus:border-accent focus:outline-none resize-y"
+              spellCheck={false}
+            />
+            <div className="flex items-center gap-4 mt-3">
+              <label className="flex items-center gap-2 text-sm text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={restartAfter}
+                  onChange={(e) => setRestartAfter(e.target.checked)}
+                  className="rounded border-border-subtle"
+                />
+                Restart service after save
+              </label>
+              <div className="flex gap-2 ml-auto">
+                <button
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="px-3 py-1.5 rounded text-sm text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveConfig}
+                  disabled={saving}
+                  className="px-3 py-1.5 rounded text-sm font-medium text-white bg-accent hover:bg-accent-hover transition-colors disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <pre className="text-sm font-mono text-gray-300 bg-surface rounded p-3 overflow-auto whitespace-pre-wrap">
+            {data.config}
+          </pre>
+        )}
+        {saveMsg && (
+          <p className={`text-sm mt-2 ${saveMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+            {saveMsg}
+          </p>
+        )}
       </Card>
 
       {data.revisions.length > 0 && (
