@@ -9,11 +9,21 @@ import (
 
 // UpsertUpdateCheck creates or replaces the latest update check for a service.
 func (s *Store) UpsertUpdateCheck(c *model.UpdateCheck) error {
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	tx.Exec(`DELETE FROM update_checks WHERE service_id = ?`, c.ServiceID)
+	_, err = tx.Exec(
 		`INSERT INTO update_checks (service_id, current_version, latest_version, has_update, error)
 		 VALUES (?, ?, ?, ?, ?)`,
 		c.ServiceID, c.CurrentVersion, c.LatestVersion, boolToInt(c.HasUpdate), c.Error)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetLatestUpdateCheck returns the most recent check for a service.
