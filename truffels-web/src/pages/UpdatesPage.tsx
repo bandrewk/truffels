@@ -162,7 +162,9 @@ export default function UpdatesPage() {
                       update available
                     </span>
                   ) : (
-                    <span className="text-xs text-gray-500">up to date</span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30">
+                      up to date
+                    </span>
                   )}
                 </div>
                 <div className="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
