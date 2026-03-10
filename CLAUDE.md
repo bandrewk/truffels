@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Project Truffels is a Bitcoin-first infrastructure appliance for Raspberry Pi 5 (8 GB) with NVMe storage. It provides strict Docker-based lifecycle management for Bitcoin services (Bitcoin Core, electrs, mempool, ckpool) with a web UI and ePaper status display.
 
-**Current state:** Managed service layer, reverse proxy, control plane (API + web UI), and privileged agent deployed. 13 Docker containers running. CI pipeline with 156+ tests. Next milestone: Phase 9 (ePaper display).
+**Current state:** Managed service layer, reverse proxy, control plane (API + web UI), and privileged agent deployed. 13 Docker containers running. CI pipeline with 240+ tests. Next milestone: Phase 9 (ePaper display).
 
 ## Key Documents
 
@@ -99,6 +99,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
 - **Updates:** Automatic version checking (Docker Hub / GitHub / Bitbucket), one-click apply with automatic rollback, 24h background check cycle
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 156+ tests total (~85% logic coverage)
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 240+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
