@@ -11,4 +11,10 @@ var Ckpool = model.ServiceTemplate{
 	MemoryLimit:    "256M",
 	ConfigPath:     "ckpool/ckpool.conf",
 	Port:           "3333 (stratum)",
+	UpdateSource: &model.UpdateSource{
+		Type:       model.SourceBitbucket,
+		Repo:       "ckolivas/ckpool",
+		Branch:     "master",
+		NeedsBuild: true,
+	},
 }

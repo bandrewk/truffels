@@ -60,6 +60,9 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/restart", handleComposeRestart)
 	mux.HandleFunc("POST /v1/compose/logs", handleComposeLogs)
 	mux.HandleFunc("POST /v1/inspect", handleInspect)
+	mux.HandleFunc("POST /v1/image/pull", handleImagePull)
+	mux.HandleFunc("POST /v1/image/inspect", handleImageInspect)
+	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/health", handleHealth)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
@@ -249,6 +252,130 @@ func inspectContainer(name string) containerState {
 		cs.Health = ir.State.Health.Status
 	}
 	return cs
+}
+
+// --- Image/Build Handlers ---
+
+type imagePullRequest struct {
+	Image string `json:"image"`
+}
+
+func handleImagePull(w http.ResponseWriter, r *http.Request) {
+	var req imagePullRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Image == "" {
+		writeJSON(w, 400, map[string]string{"error": "image required"})
+		return
+	}
+
+	slog.Info("pulling image", "image", req.Image)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "pull", req.Image)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out.String()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+}
+
+type imageInspectRequest struct {
+	Container string `json:"container"`
+}
+
+type imageInspectResult struct {
+	Image   string   `json:"image"`
+	Digest  string   `json:"digest"`
+	Tags    []string `json:"tags"`
+}
+
+func handleImageInspect(w http.ResponseWriter, r *http.Request) {
+	var req imageInspectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if !allowedContainers[req.Container] {
+		writeJSON(w, 403, map[string]string{"error": "container not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get image name from container
+	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format",
+		"{{.Config.Image}}", req.Container)
+	var imageOut bytes.Buffer
+	cmd.Stdout = &imageOut
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "cannot inspect container: " + err.Error()})
+		return
+	}
+	imageName := strings.TrimSpace(imageOut.String())
+
+	// Get image digest
+	cmd2 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+		"{{index .RepoDigests 0}}", imageName)
+	var digestOut bytes.Buffer
+	cmd2.Stdout = &digestOut
+	cmd2.Stderr = &digestOut
+	digest := ""
+	if err := cmd2.Run(); err == nil {
+		digest = strings.TrimSpace(digestOut.String())
+		// Extract just the digest part after @
+		if idx := strings.Index(digest, "@"); idx >= 0 {
+			digest = digest[idx+1:]
+		}
+	}
+
+	// Get tags
+	cmd3 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+		"{{json .RepoTags}}", imageName)
+	var tagsOut bytes.Buffer
+	cmd3.Stdout = &tagsOut
+	var tags []string
+	if cmd3.Run() == nil {
+		json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
+	}
+
+	writeJSON(w, 200, imageInspectResult{
+		Image:  imageName,
+		Digest: digest,
+		Tags:   tags,
+	})
+}
+
+func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+
+	dir := composeDir(req.ServiceID)
+	slog.Info("building service", "service", req.ServiceID, "dir", dir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "compose", "-f",
+		dir+"/docker-compose.yml", "build", "--no-cache")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out.String()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
 }
 
 // --- Helpers ---

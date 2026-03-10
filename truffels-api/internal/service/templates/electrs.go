@@ -10,4 +10,8 @@ var Electrs = model.ServiceTemplate{
 	Dependencies:   []string{"bitcoind"},
 	MemoryLimit:    "2048M",
 	ConfigPath:     "electrs/electrs.toml",
+	UpdateSource: &model.UpdateSource{
+		Type:   model.SourceDockerHub,
+		Images: []string{"getumbrel/electrs"},
+	},
 }

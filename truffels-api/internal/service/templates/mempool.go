@@ -11,4 +11,8 @@ var Mempool = model.ServiceTemplate{
 	MemoryLimit:    "1792M",
 	ConfigPath:     "",
 	Port:           "80 (via proxy)",
+	UpdateSource: &model.UpdateSource{
+		Type:   model.SourceDockerHub,
+		Images: []string{"mempool/backend", "mempool/frontend"},
+	},
 }

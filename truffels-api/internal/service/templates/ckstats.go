@@ -11,4 +11,10 @@ var Ckstats = model.ServiceTemplate{
 	MemoryLimit:    "1024M",
 	ConfigPath:     "",
 	Port:           "80/ckstats (via proxy)",
+	UpdateSource: &model.UpdateSource{
+		Type:       model.SourceGitHub,
+		Repo:       "mrv777/ckstats",
+		Branch:     "main",
+		NeedsBuild: true,
+	},
 }

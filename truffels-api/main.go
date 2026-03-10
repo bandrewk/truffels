@@ -18,6 +18,7 @@ import (
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
+	"truffels-api/internal/updates"
 )
 
 func main() {
@@ -55,6 +56,11 @@ func main() {
 	alertEngine.Start()
 	defer alertEngine.Stop()
 
+	// Update engine
+	updateEngine := updates.NewEngine(st, registry, compose)
+	updateEngine.Start()
+	defer updateEngine.Stop()
+
 	// Auth
 	authenticator := auth.New(st)
 
@@ -62,7 +68,7 @@ func main() {
 	btcRPC := initBitcoinRPC(cfg.SecretsRoot)
 
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC)
+	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),

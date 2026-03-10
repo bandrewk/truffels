@@ -27,7 +27,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	reg := service.NewRegistry("/srv/truffels/compose")
 	a := auth.New(st)
 
-	srv := NewServer(reg, st, nil, nil, a, nil)
+	srv := NewServer(reg, st, nil, nil, a, nil, nil)
 	return srv, st
 }
 

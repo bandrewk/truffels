@@ -1,9 +1,11 @@
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 
 const navItems = [
   { to: '/', label: 'Dashboard' },
   { to: '/services', label: 'Services' },
   { to: '/alerts', label: 'Alerts' },
+  { to: '/updates', label: 'Updates' },
 ]
 
 interface Props {
@@ -11,6 +13,26 @@ interface Props {
 }
 
 export default function Layout({ onLogout }: Props) {
+  const [pendingUpdates, setPendingUpdates] = useState(0)
+
+  const fetchUpdateCount = useCallback(async () => {
+    try {
+      const res = await fetch('/api/truffels/updates/status')
+      if (res.ok) {
+        const data = await res.json()
+        setPendingUpdates(data.pending_count || 0)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchUpdateCount()
+    const id = setInterval(fetchUpdateCount, 60000)
+    return () => clearInterval(id)
+  }, [fetchUpdateCount])
+
   async function handleLogout() {
     await fetch('/api/truffels/auth/logout', { method: 'POST' })
     onLogout()
@@ -38,6 +60,11 @@ export default function Layout({ onLogout }: Props) {
               }
             >
               {item.label}
+              {item.to === '/updates' && pendingUpdates > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-accent text-black">
+                  {pendingUpdates}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

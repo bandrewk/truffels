@@ -14,25 +14,28 @@ import (
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
+	"truffels-api/internal/updates"
 )
 
 type Server struct {
-	registry  *service.Registry
-	store     *store.Store
-	compose   *docker.ComposeClient
-	collector *metrics.Collector
-	auth      *auth.Auth
-	btcRPC    *bitcoin.Client
+	registry     *service.Registry
+	store        *store.Store
+	compose      *docker.ComposeClient
+	collector    *metrics.Collector
+	auth         *auth.Auth
+	btcRPC       *bitcoin.Client
+	updateEngine *updates.Engine
 }
 
-func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client) *Server {
+func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine) *Server {
 	return &Server{
-		registry:  reg,
-		store:     st,
-		compose:   comp,
-		collector: coll,
-		auth:      a,
-		btcRPC:    btc,
+		registry:     reg,
+		store:        st,
+		compose:      comp,
+		collector:    coll,
+		auth:         a,
+		btcRPC:       btc,
+		updateEngine: ue,
 	}
 }
 
@@ -73,6 +76,13 @@ func (s *Server) Router() http.Handler {
 			r.Get("/services/{id}/logs", s.handleServiceLogs)
 			r.Get("/services/{id}/config", s.handleGetConfig)
 			r.Post("/services/{id}/config", s.handleUpdateConfig)
+
+			r.Get("/updates", s.handleGetUpdates)
+			r.Post("/updates/check", s.handleCheckUpdates)
+			r.Post("/updates/apply/{id}", s.handleApplyUpdate)
+			r.Post("/updates/apply-all", s.handleApplyAllUpdates)
+			r.Get("/updates/logs", s.handleUpdateLogs)
+			r.Get("/updates/status", s.handleUpdateStatus)
 		})
 	})
 

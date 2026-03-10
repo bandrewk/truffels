@@ -842,6 +842,7 @@ services:
       dockerfile: $TRUFFELS_API_SRC/Dockerfile
     image: truffels/api:v0.1.0
     container_name: truffels-api
+    user: "1000:1000"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
