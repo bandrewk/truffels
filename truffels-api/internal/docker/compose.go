@@ -2,58 +2,84 @@ package docker
 
 import (
 	"bytes"
-	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
-	"strings"
+	"net/http"
 	"time"
 )
 
-type ComposeClient struct{}
-
-func NewComposeClient() *ComposeClient {
-	return &ComposeClient{}
+type ComposeClient struct {
+	agentURL   string
+	httpClient *http.Client
 }
 
-func (c *ComposeClient) Up(composeDir string) error {
-	return c.run(composeDir, "up", "-d", "--remove-orphans")
+func NewComposeClient(agentURL string) *ComposeClient {
+	return &ComposeClient{
+		agentURL: agentURL,
+		httpClient: &http.Client{
+			Timeout: 3 * time.Minute,
+		},
+	}
 }
 
-func (c *ComposeClient) Down(composeDir string) error {
-	return c.run(composeDir, "down")
+type agentServiceReq struct {
+	ServiceID string `json:"service_id"`
 }
 
-func (c *ComposeClient) Restart(composeDir string) error {
-	return c.run(composeDir, "restart")
+type agentLogsReq struct {
+	ServiceID string `json:"service_id"`
+	Tail      int    `json:"tail"`
 }
 
-func (c *ComposeClient) Logs(composeDir string, tail int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-f",
-		composeDir+"/docker-compose.yml", "logs", "--tail",
-		fmt.Sprintf("%d", tail), "--no-color")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.String(), err
+type agentResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error"`
+	Logs   string `json:"logs"`
 }
 
-func (c *ComposeClient) run(composeDir string, args ...string) error {
-	fullArgs := append([]string{"compose", "-f", composeDir + "/docker-compose.yml"}, args...)
-	slog.Info("docker compose", "dir", composeDir, "args", strings.Join(args, " "))
+func (c *ComposeClient) Up(serviceID string) error {
+	return c.composeAction("/v1/compose/up", serviceID)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+func (c *ComposeClient) Down(serviceID string) error {
+	return c.composeAction("/v1/compose/down", serviceID)
+}
 
-	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, stderr.String())
+func (c *ComposeClient) Restart(serviceID string) error {
+	return c.composeAction("/v1/compose/restart", serviceID)
+}
+
+func (c *ComposeClient) Logs(serviceID string, tail int) (string, error) {
+	body, _ := json.Marshal(agentLogsReq{ServiceID: serviceID, Tail: tail})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/logs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("agent logs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var ar agentResponse
+	json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return ar.Logs, fmt.Errorf("agent logs: %s", ar.Error)
+	}
+	return ar.Logs, nil
+}
+
+func (c *ComposeClient) composeAction(path, serviceID string) error {
+	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
+	slog.Info("agent request", "path", path, "service", serviceID)
+
+	resp, err := c.httpClient.Post(c.agentURL+path, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	var ar agentResponse
+	json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent %s: %s", path, ar.Error)
 	}
 	return nil
 }

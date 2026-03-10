@@ -41,8 +41,11 @@ func main() {
 		st.EnsureService(tmpl.ID)
 	}
 
-	// Docker compose client
-	compose := docker.NewComposeClient()
+	// Agent client (Docker operations go through truffels-agent)
+	agentURL := envOr("TRUFFELS_AGENT_URL", "http://truffels-agent:9090")
+	compose := docker.NewComposeClient(agentURL)
+	docker.NewAgentInspector(agentURL)
+	slog.Info("agent configured", "url", agentURL)
 
 	// Host metrics collector
 	collector := metrics.NewCollector(cfg.HostProc, cfg.HostSys, cfg.DataRoot)
@@ -79,6 +82,13 @@ func main() {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func initBitcoinRPC(secretsRoot string) *bitcoin.Client {
