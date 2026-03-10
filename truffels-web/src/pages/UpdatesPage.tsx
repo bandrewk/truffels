@@ -28,19 +28,35 @@ function BitbucketIcon() {
   )
 }
 
-function SourceLink({ source }: { source?: UpdateSource }) {
+function SourceLinks({ source }: { source?: UpdateSource }) {
   if (!source) return null
+
+  if (source.type === 'dockerhub') {
+    const images = source.images || []
+    return (
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        {images.map((img, i) => (
+          <a
+            key={img}
+            href={`https://hub.docker.com/r/${img}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            title={img}
+          >
+            {i === 0 && <DockerIcon />}
+            <span className="hidden sm:inline">{img}</span>
+          </a>
+        ))}
+      </span>
+    )
+  }
 
   let url: string
   let icon: React.ReactNode
   let label: string
 
   switch (source.type) {
-    case 'dockerhub':
-      url = `https://hub.docker.com/r/${source.images?.[0] || ''}`
-      icon = <DockerIcon />
-      label = source.images?.[0] || 'Docker Hub'
-      break
     case 'github':
       url = `https://github.com/${source.repo || ''}`
       icon = <GitHubIcon />
@@ -152,7 +168,7 @@ export default function UpdatesPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium text-gray-200">{c.service_id}</span>
-                  <SourceLink source={sources[c.service_id]} />
+                  <SourceLinks source={sources[c.service_id]} />
                   {c.error ? (
                     <span className="text-xs text-red-400">error</span>
                   ) : updating[c.service_id] ? (
