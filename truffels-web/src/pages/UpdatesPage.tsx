@@ -34,7 +34,7 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
   if (source.type === 'dockerhub') {
     const images = source.images || []
     return (
-      <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
         {images.map((img, i) => (
           <a
             key={img}
@@ -45,10 +45,10 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
             title={img}
           >
             {i === 0 && <DockerIcon />}
-            <span className="hidden sm:inline">{img}</span>
+            <span>{img}</span>
           </a>
         ))}
-      </span>
+      </div>
     )
   }
 
@@ -76,11 +76,11 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors mt-1.5"
       title={label}
     >
       {icon}
-      <span className="hidden sm:inline">{label}</span>
+      <span>{label}</span>
     </a>
   )
 }
@@ -168,7 +168,6 @@ export default function UpdatesPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium text-gray-200">{c.service_id}</span>
-                  <SourceLinks source={sources[c.service_id]} />
                   {c.error ? (
                     <span className="text-xs text-red-400">error</span>
                   ) : updating[c.service_id] ? (
@@ -198,6 +197,7 @@ export default function UpdatesPage() {
                 {c.error && (
                   <p className="text-xs text-red-400 mt-1">{c.error}</p>
                 )}
+                <SourceLinks source={sources[c.service_id]} />
                 <p className="text-xs text-gray-600 mt-1">Checked {formatTime(c.checked_at)}</p>
               </div>
               <div className="flex-shrink-0">
