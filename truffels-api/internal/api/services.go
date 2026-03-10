@@ -111,6 +111,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.store.LogAudit("service_"+req.Action, id, "", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": req.Action})
 }
 
@@ -208,7 +209,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create revision
+	// Create revision + audit
+	s.store.LogAudit("config_update", id, "", r.RemoteAddr)
 	diff := simpleDiff(oldConfig, req.Config)
 	s.store.CreateConfigRevision(&model.ConfigRevision{
 		ServiceID:        id,

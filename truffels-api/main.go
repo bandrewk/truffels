@@ -9,6 +9,7 @@ import (
 
 	"truffels-api/internal/alerts"
 	"truffels-api/internal/api"
+	"truffels-api/internal/auth"
 	"truffels-api/internal/config"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
@@ -48,8 +49,11 @@ func main() {
 	alertEngine.Start()
 	defer alertEngine.Stop()
 
+	// Auth
+	authenticator := auth.New(st)
+
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector)
+	srv := api.NewServer(registry, st, compose, collector, authenticator)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),
