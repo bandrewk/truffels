@@ -62,16 +62,18 @@ export default function ServiceDetailPage() {
       <p className="text-gray-400">{svc.template.description}</p>
 
       {/* Actions */}
-      <div className="flex gap-2 items-center">
-        <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
-        <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
-        <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
-        {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
-      </div>
+      {!svc.template.read_only && (
+        <div className="flex gap-2 items-center">
+          <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
+          <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
+          <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
+          {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
-        {(['overview', 'logs', 'config'] as const).map((t) => (
+        {(svc.template.read_only ? ['overview', 'logs'] as const : ['overview', 'logs', 'config'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
