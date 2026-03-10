@@ -25,7 +25,11 @@ func NewRegistry(composeRoot string) *Registry {
 	}
 
 	for _, svc := range all {
-		svc.ComposeDir = composeRoot + "/" + svc.ID
+		dirName := svc.ID
+		if svc.ComposeDir != "" {
+			dirName = svc.ComposeDir
+		}
+		svc.ComposeDir = composeRoot + "/" + dirName
 		r.services[svc.ID] = svc
 	}
 
