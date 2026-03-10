@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api, ServiceInstance } from '@/lib/api'
+import { api, ServiceInstance, UpdateCheck } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -46,6 +46,8 @@ export default function ServiceDetailPage() {
 
   const fetcher = useCallback(() => api.service(id!), [id])
   const { data: svc, error, loading, refresh } = useApi(fetcher, 5000)
+  const updateFetcher = useCallback(() => api.updateStatus(), [])
+  const { data: updateStatus } = useApi(updateFetcher, 30000)
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
@@ -104,7 +106,7 @@ export default function ServiceDetailPage() {
         ))}
       </div>
 
-      {tab === 'overview' && <OverviewTab svc={svc} />}
+      {tab === 'overview' && <OverviewTab svc={svc} updateCheck={updateStatus?.checks?.find(c => c.service_id === id)} />}
       {tab === 'logs' && <LogsTab id={id!} />}
       {tab === 'config' && <ConfigTab id={id!} />}
     </div>
@@ -300,7 +302,7 @@ function ElectrsStatsCard() {
   )
 }
 
-function OverviewTab({ svc }: { svc: ServiceInstance }) {
+function OverviewTab({ svc, updateCheck }: { svc: ServiceInstance; updateCheck?: UpdateCheck | null }) {
   return (
     <div className="space-y-4">
       {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
@@ -349,6 +351,24 @@ function OverviewTab({ svc }: { svc: ServiceInstance }) {
           )}
           <dt className="text-gray-500">Dependencies</dt>
           <dd className="text-gray-300">{svc.template.dependencies?.join(', ') || 'None'}</dd>
+          {updateCheck && (
+            <>
+              <dt className="text-gray-500">Version</dt>
+              <dd className="text-gray-300 font-mono">{updateCheck.current_version || '—'}</dd>
+              <dt className="text-gray-500">Update</dt>
+              <dd>
+                {updateCheck.has_update ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent border border-accent/30">
+                    {updateCheck.latest_version} available
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30">
+                    up to date
+                  </span>
+                )}
+              </dd>
+            </>
+          )}
         </dl>
       </Card>
     </div>
