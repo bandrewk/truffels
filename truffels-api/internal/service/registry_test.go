@@ -164,3 +164,25 @@ func TestRegistry_ReadOnlyServices(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistry_FloatingTagServices(t *testing.T) {
+	r := NewRegistry("/srv/truffels/compose")
+
+	// mempool-db uses a floating tag (mariadb:lts)
+	svc, ok := r.Get("mempool-db")
+	if !ok {
+		t.Fatal("expected to find mempool-db")
+	}
+	if !svc.FloatingTag {
+		t.Fatal("expected mempool-db to have FloatingTag=true")
+	}
+
+	// Other services should not be floating
+	nonFloating := []string{"bitcoind", "electrs", "proxy", "ckstats-db", "truffels-api"}
+	for _, id := range nonFloating {
+		s, _ := r.Get(id)
+		if s.FloatingTag {
+			t.Fatalf("expected %s to not be floating", id)
+		}
+	}
+}

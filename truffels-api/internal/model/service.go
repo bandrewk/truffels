@@ -22,6 +22,7 @@ type ServiceTemplate struct {
 	ConfigPath     string   `json:"-"`
 	Port           string        `json:"port,omitempty"`
 	ReadOnly       bool          `json:"read_only,omitempty"`
+	FloatingTag    bool          `json:"floating_tag,omitempty"`
 	UpdateSource   *UpdateSource `json:"update_source,omitempty"`
 }
 

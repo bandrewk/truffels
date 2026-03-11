@@ -52,6 +52,7 @@ export interface ServiceTemplate {
   memory_limit: string
   port?: string
   read_only?: boolean
+  floating_tag?: boolean
   update_source?: UpdateSource
 }
 
@@ -195,11 +196,17 @@ export interface UpdateSource {
   tag_filter?: string
 }
 
+export interface FloatingService {
+  id: string
+  display_name: string
+}
+
 export interface UpdateStatus {
   pending_count: number
   checks: UpdateCheck[]
   updating: Record<string, boolean>
   sources: Record<string, UpdateSource>
+  floating_services?: FloatingService[]
 }
 
 export interface MonitoringContainer {

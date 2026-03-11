@@ -117,6 +117,11 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	updating := make(map[string]bool)
 	sources := make(map[string]*model.UpdateSource)
+	type floatingService struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}
+	var floating []floatingService
 	for _, tmpl := range s.registry.All() {
 		if s.updateEngine.IsUpdating(tmpl.ID) {
 			updating[tmpl.ID] = true
@@ -124,12 +129,16 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		if tmpl.UpdateSource != nil {
 			sources[tmpl.ID] = tmpl.UpdateSource
 		}
+		if tmpl.FloatingTag {
+			floating = append(floating, floatingService{ID: tmpl.ID, DisplayName: tmpl.DisplayName})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"pending_count": pendingCount,
-		"checks":        checks,
-		"updating":      updating,
-		"sources":       sources,
+		"pending_count":    pendingCount,
+		"checks":           checks,
+		"updating":         updating,
+		"sources":          sources,
+		"floating_services": floating,
 	})
 }
