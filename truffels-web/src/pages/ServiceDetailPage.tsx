@@ -573,34 +573,34 @@ function MonitorTab({ id }: { id: string }) {
           formatter={(v) => `${v.toFixed(0)} MB`}
         />
         <ContainerChart
-          title="Network RX (cumulative MB)"
+          title="Network RX / interval"
           data={netRxData}
           containers={containers}
-          unit=" MB"
+          unit=""
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />
         <ContainerChart
-          title="Network TX (cumulative MB)"
+          title="Network TX / interval"
           data={netTxData}
           containers={containers}
-          unit=" MB"
+          unit=""
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />
         <ContainerChart
-          title="Block I/O Read (cumulative MB)"
+          title="Disk Read / interval"
           data={blockReadData}
           containers={containers}
-          unit=" MB"
+          unit=""
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />
         <ContainerChart
-          title="Block I/O Write (cumulative MB)"
+          title="Disk Write / interval"
           data={blockWriteData}
           containers={containers}
-          unit=" MB"
+          unit=""
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />

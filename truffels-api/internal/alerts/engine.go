@@ -26,16 +26,20 @@ type Engine struct {
 
 	// Monitoring: counter to record every other tick (60s intervals)
 	snapshotTick int
+
+	// Monitoring: previous container stats for delta computation
+	prevContainerStats map[string]docker.ContainerResourceStats
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector) *Engine {
 	return &Engine{
-		store:             s,
-		registry:          r,
-		collector:         c,
-		stopCh:            make(chan struct{}),
-		lastRestartCounts: make(map[string]int),
-		prevStates:        make(map[string]model.ContainerState),
+		store:              s,
+		registry:           r,
+		collector:          c,
+		stopCh:             make(chan struct{}),
+		lastRestartCounts:  make(map[string]int),
+		prevStates:         make(map[string]model.ContainerState),
+		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 	}
 }
 
@@ -88,22 +92,28 @@ func (e *Engine) evaluate() {
 			slog.Error("insert metric snapshot", "err", err)
 		}
 
-		// Per-container resource snapshots
+		// Per-container resource snapshots (with delta computation for I/O)
 		if stats, err := docker.Stats(); err != nil {
 			slog.Error("collect container stats", "err", err)
 		} else if len(stats) > 0 {
-			snaps := make([]model.ContainerSnapshot, len(stats))
-			for i, s := range stats {
-				snaps[i] = model.ContainerSnapshot{
-					Container:       s.Name,
-					CPUPercent:      s.CPUPercent,
-					MemUsageMB:      s.MemUsageMB,
-					MemLimitMB:      s.MemLimitMB,
-					NetRxBytes:      s.NetRxBytes,
-					NetTxBytes:      s.NetTxBytes,
-					BlockReadBytes:  s.BlockReadBytes,
-					BlockWriteBytes: s.BlockWriteBytes,
+			snaps := make([]model.ContainerSnapshot, 0, len(stats))
+			for _, s := range stats {
+				snap := model.ContainerSnapshot{
+					Container:  s.Name,
+					CPUPercent: s.CPUPercent,
+					MemUsageMB: s.MemUsageMB,
+					MemLimitMB: s.MemLimitMB,
 				}
+				// Compute deltas from previous sample
+				if prev, ok := e.prevContainerStats[s.Name]; ok {
+					snap.NetRxBytes = clampDelta(s.NetRxBytes, prev.NetRxBytes)
+					snap.NetTxBytes = clampDelta(s.NetTxBytes, prev.NetTxBytes)
+					snap.BlockReadBytes = clampDelta(s.BlockReadBytes, prev.BlockReadBytes)
+					snap.BlockWriteBytes = clampDelta(s.BlockWriteBytes, prev.BlockWriteBytes)
+				}
+				// else: first sample, deltas stay 0
+				e.prevContainerStats[s.Name] = s
+				snaps = append(snaps, snap)
 			}
 			if err := e.store.InsertContainerSnapshots(snaps); err != nil {
 				slog.Error("insert container snapshots", "err", err)
@@ -240,4 +250,12 @@ func (e *Engine) resolve(alertType, serviceID string) {
 
 func sprintf(format string, args ...interface{}) string {
 	return fmt.Sprintf(format, args...)
+}
+
+// clampDelta returns cur - prev, clamped to 0 on counter reset (container restart).
+func clampDelta(cur, prev int64) int64 {
+	if cur < prev {
+		return 0
+	}
+	return cur - prev
 }
