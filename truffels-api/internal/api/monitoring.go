@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
@@ -92,6 +94,45 @@ func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request) {
 			Summary: summary,
 		},
 		Alerts: alerts,
+	})
+}
+
+func (s *Server) handleServiceMonitoring(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	tmpl, ok := s.registry.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	hours := 24
+	if h := r.URL.Query().Get("hours"); h != "" {
+		if v, err := strconv.Atoi(h); err == nil {
+			hours = v
+		}
+	}
+	if hours < 1 {
+		hours = 1
+	}
+	if hours > 48 {
+		hours = 48
+	}
+
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+
+	snapshots, err := s.store.GetContainerSnapshotsByNames(since, tmpl.ContainerNames, 120)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if snapshots == nil {
+		snapshots = []model.ContainerSnapshot{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"service_id": id,
+		"containers": tmpl.ContainerNames,
+		"snapshots":  snapshots,
 	})
 }
 

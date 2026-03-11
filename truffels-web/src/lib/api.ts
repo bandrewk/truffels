@@ -254,6 +254,25 @@ export interface ServiceEvent {
   message: string
 }
 
+export interface ContainerSnapshot {
+  id: number
+  timestamp: string
+  container: string
+  cpu_percent: number
+  mem_usage_mb: number
+  mem_limit_mb: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  block_read_bytes: number
+  block_write_bytes: number
+}
+
+export interface ServiceMonitoringResponse {
+  service_id: string
+  containers: string[]
+  snapshots: ContainerSnapshot[]
+}
+
 export interface MonitoringResponse {
   containers: MonitoringContainer[]
   events: ServiceEvent[]
@@ -287,4 +306,5 @@ export const api = {
   updatePreflight: (id: string) => get<PreflightResult>(`/updates/preflight/${id}`),
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
   monitoring: (hours = 24) => get<MonitoringResponse>(`/monitoring?hours=${hours}`),
+  serviceMonitoring: (id: string, hours = 24) => get<ServiceMonitoringResponse>(`/services/${id}/monitoring?hours=${hours}`),
 }
