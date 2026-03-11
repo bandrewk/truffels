@@ -93,6 +93,12 @@ function formatTime(iso: string): string {
   return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function truncDigest(v: string): string {
+  if (!v) return '—'
+  if (v.startsWith('sha256:')) return v.slice(0, 19) + '…'
+  return v
+}
+
 export default function UpdatesPage() {
   const statusFetcher = useCallback(() => api.updateStatus(), [])
   const logsFetcher = useCallback(() => api.updateLogs(), [])
@@ -205,60 +211,85 @@ export default function UpdatesPage() {
 
       {/* Service Update Cards */}
       <div className="space-y-3">
-        {checks.map((c: UpdateCheck) => (
-          <Card key={c.service_id}>
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-gray-200">{c.service_id}</span>
-                  {c.error ? (
-                    <span className="text-xs text-red-400">error</span>
-                  ) : updating[c.service_id] ? (
-                    <span className="text-xs text-yellow-400 animate-pulse">updating...</span>
-                  ) : c.has_update ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent border border-accent/30">
-                      update available
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30">
-                      up to date
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
-                  <span className="text-gray-400">
-                    <span className="text-gray-500">Current: </span>
-                    <span className="font-mono">{c.current_version || '—'}</span>
-                  </span>
-                  {c.latest_version && c.latest_version !== c.current_version && (
+        {checks.map((c: UpdateCheck) => {
+          const floating = floatingServices.find(f => f.id === c.service_id)
+          const isDigest = c.current_version?.startsWith('sha256:') || c.latest_version?.startsWith('sha256:')
+          const displayName = floating?.display_name || c.service_id
+          const imgName = floating?.image ? floating.image.split(':')[0] : ''
+          return (
+            <Card key={c.service_id}>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-gray-200">{displayName}</span>
+                    {floating && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                        floating tag
+                      </span>
+                    )}
+                    {c.error ? (
+                      <span className="text-xs text-red-400">error</span>
+                    ) : updating[c.service_id] ? (
+                      <span className="text-xs text-yellow-400 animate-pulse">updating...</span>
+                    ) : c.has_update ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent border border-accent/30">
+                        update available
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400 border border-green-500/30">
+                        up to date
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
                     <span className="text-gray-400">
-                      <span className="text-gray-500">Latest: </span>
-                      <span className="font-mono">{c.latest_version}</span>
+                      <span className="text-gray-500">Current: </span>
+                      <span className="font-mono">{isDigest ? truncDigest(c.current_version) : (c.current_version || '—')}</span>
                     </span>
+                    {c.latest_version && c.latest_version !== c.current_version && (
+                      <span className="text-gray-400">
+                        <span className="text-gray-500">Latest: </span>
+                        <span className="font-mono">{isDigest ? truncDigest(c.latest_version) : c.latest_version}</span>
+                      </span>
+                    )}
+                  </div>
+                  {c.error && (
+                    <p className="text-xs text-red-400 mt-1">{c.error}</p>
                   )}
                 </div>
-                {c.error && (
-                  <p className="text-xs text-red-400 mt-1">{c.error}</p>
-                )}
+                <div className="flex-shrink-0">
+                  {c.has_update && !c.error && !updating[c.service_id] && (
+                    <button
+                      onClick={() => floating ? setPullRestartTarget(floating) : handlePreflight(c.service_id)}
+                      disabled={actionPending !== null || preflightLoading !== null}
+                      className={`px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 ${
+                        floating ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-400' : 'bg-accent/20 hover:bg-accent/30 text-accent'
+                      }`}
+                    >
+                      {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : floating ? 'Pull & Restart' : 'Update'}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex-shrink-0">
-                {c.has_update && !c.error && !updating[c.service_id] && (
-                  <button
-                    onClick={() => handlePreflight(c.service_id)}
-                    disabled={actionPending !== null || preflightLoading !== null}
-                    className="px-3 py-1.5 text-sm rounded bg-accent/20 hover:bg-accent/30 text-accent transition-colors disabled:opacity-50"
+              <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                <p className="text-xs text-gray-600">Checked {formatTime(c.checked_at)}</p>
+                {floating && imgName ? (
+                  <a
+                    href={`https://hub.docker.com/${imgName.includes('/') ? 'r' : '_'}/${imgName}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
                   >
-                    {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : 'Update'}
-                  </button>
+                    <span>{imgName}</span>
+                    <DockerIcon />
+                  </a>
+                ) : (
+                  <SourceLinks source={sources[c.service_id]} />
                 )}
               </div>
-            </div>
-            <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-              <p className="text-xs text-gray-600">Checked {formatTime(c.checked_at)}</p>
-              <SourceLinks source={sources[c.service_id]} />
-            </div>
-          </Card>
-        ))}
+            </Card>
+          )
+        })}
         {checks.length === 0 && (
           <Card>
             <p className="text-sm text-gray-500 text-center py-4">
@@ -267,63 +298,6 @@ export default function UpdatesPage() {
           </Card>
         )}
       </div>
-
-      {/* Floating Tag Services */}
-      {floatingServices.length > 0 && (
-        <div className="space-y-3">
-          {floatingServices.map((fs) => {
-            const imgName = fs.image ? fs.image.split(':')[0] : ''
-            return (
-              <Card key={fs.id}>
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-gray-200">{fs.display_name}</span>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                        floating tag
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
-                      <span className="text-gray-400">
-                        <span className="text-gray-500">Current: </span>
-                        <span className="font-mono">{fs.current_version || '—'}</span>
-                      </span>
-                    </div>
-                    {pullRestartMsg?.startsWith(fs.id) && (
-                      <p className={`text-xs mt-1 ${pullRestartMsg.includes('error') ? 'text-red-400' : 'text-green-400'}`}>
-                        {pullRestartMsg.replace(`${fs.id}: `, '')}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex-shrink-0">
-                    <button
-                      onClick={() => setPullRestartTarget(fs)}
-                      disabled={actionPending !== null}
-                      className="px-3 py-1.5 text-sm rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 transition-colors disabled:opacity-50"
-                    >
-                      {actionPending === fs.id ? 'Pulling...' : 'Pull & Restart'}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                  <p className="text-xs text-gray-600">Running since {formatTime(fs.started_at)}</p>
-                  {imgName && (
-                    <a
-                      href={`https://hub.docker.com/${imgName.includes('/') ? 'r' : '_'}/${imgName}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
-                    >
-                      <span>{imgName}</span>
-                      <DockerIcon />
-                    </a>
-                  )}
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
 
       {/* Pull & Restart Confirmation Dialog */}
       <ConfirmDialog
@@ -357,13 +331,16 @@ export default function UpdatesPage() {
             This will update the following services sequentially:
           </p>
           <ul className="text-sm text-gray-300 space-y-1">
-            {checks.filter(c => c.has_update && !c.error).map(c => (
-              <li key={c.service_id} className="flex items-center gap-2">
-                <span className="text-accent">&#8226;</span>
-                <span className="font-medium">{c.service_id}</span>
-                <span className="text-gray-500 font-mono text-xs">{c.current_version} &rarr; {c.latest_version}</span>
-              </li>
-            ))}
+            {checks.filter(c => c.has_update && !c.error).map(c => {
+              const fs = floatingServices.find(f => f.id === c.service_id)
+              return (
+                <li key={c.service_id} className="flex items-center gap-2">
+                  <span className="text-accent">&#8226;</span>
+                  <span className="font-medium">{fs?.display_name || c.service_id}</span>
+                  <span className="text-gray-500 font-mono text-xs">{truncDigest(c.current_version)} &rarr; {truncDigest(c.latest_version)}</span>
+                </li>
+              )
+            })}
           </ul>
           <p className="text-sm text-yellow-400">
             Each service will be restarted. Health checks run automatically — failed updates are rolled back.

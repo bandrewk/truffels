@@ -28,8 +28,11 @@ var MempoolDB = model.ServiceTemplate{
 	MemoryLimit:    "512M",
 	ReadOnly:       true,
 	FloatingTag:    true,
-	// No UpdateSource: mariadb:lts is a floating tag — version comparison
-	// is meaningless. Pull manually: docker compose pull && docker compose up -d
+	UpdateSource: &model.UpdateSource{
+		Type:      model.SourceDockerDigest,
+		Images:    []string{"mariadb"},
+		TagFilter: "lts",
+	},
 }
 
 var CkstatsDB = model.ServiceTemplate{
