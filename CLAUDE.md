@@ -99,7 +99,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
 - **Updates:** Automatic version checking (Docker Hub / Docker Digest / GitHub / Bitbucket) for 8 services (bitcoind, electrs, mempool, mempool-db, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
-- **Monitoring:** Resource trends (Recharts), container status table, health timeline, actionable errors — `/admin/monitoring`. Per-container CPU/memory/network snapshots collected every 60s (48h retention).
+- **Monitoring:** Resource trends (Recharts), container status table, health timeline, actionable errors — `/admin/monitoring`. Per-container metrics (CPU, memory, network I/O, block I/O) collected every 60s as deltas, 48h retention. Per-service Monitor tab on service detail pages with charts and live totals table. Host metrics include network rx/tx, disk read/write bytes, and disk I/O utilization %.
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
 - **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 310+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
