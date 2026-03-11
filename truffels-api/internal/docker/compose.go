@@ -73,24 +73,24 @@ func (c *ComposeClient) Logs(serviceID string, tail int) (string, error) {
 	return ar.Logs, nil
 }
 
-// Pull pulls a Docker image via the agent.
-func (c *ComposeClient) Pull(image string) error {
+// Pull pulls a Docker image via the agent. Returns the docker pull output.
+func (c *ComposeClient) Pull(image string) (string, error) {
 	body, _ := json.Marshal(map[string]string{"image": image})
 	slog.Info("agent pull", "image", image)
 
 	longClient := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := longClient.Post(c.agentURL+"/v1/image/pull", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("agent pull: %w", err)
+		return "", fmt.Errorf("agent pull: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var ar agentResponse
 	json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent pull: %s", ar.Error)
+		return "", fmt.Errorf("agent pull: %s", ar.Error)
 	}
-	return nil
+	return ar.Output, nil
 }
 
 // ImageInspect returns image info for a running container via the agent.

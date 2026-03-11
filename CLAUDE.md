@@ -98,7 +98,9 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
-- **Updates:** Automatic version checking (Docker Hub / GitHub / Bitbucket), one-click apply with automatic rollback, 24h background check cycle
+- **Updates:** Automatic version checking (Docker Hub / GitHub / Bitbucket) for 7 services (bitcoind, electrs, mempool, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
+- **Monitoring:** Resource trends (Recharts), container status table, health timeline, actionable errors — `/admin/monitoring`
+- **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
 - **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 240+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)

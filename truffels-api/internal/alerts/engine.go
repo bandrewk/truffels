@@ -20,6 +20,12 @@ type Engine struct {
 
 	// Track restart counts for restart-loop detection
 	lastRestartCounts map[string]int
+
+	// Monitoring: cached previous container states for change detection
+	prevStates map[string]model.ContainerState
+
+	// Monitoring: counter to record every other tick (60s intervals)
+	snapshotTick int
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector) *Engine {
@@ -29,6 +35,7 @@ func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector) *Engin
 		collector:         c,
 		stopCh:            make(chan struct{}),
 		lastRestartCounts: make(map[string]int),
+		prevStates:        make(map[string]model.ContainerState),
 	}
 }
 
@@ -69,9 +76,31 @@ func (e *Engine) evaluate() {
 	// Temperature alerts
 	e.checkTemp(host.Temperature)
 
-	// Service health alerts
+	// ---- Monitoring: record metric snapshot every other tick (60s) ----
+	e.snapshotTick++
+	if e.snapshotTick%2 == 0 {
+		diskPercent := 0.0
+		if len(host.Disks) > 0 {
+			diskPercent = host.Disks[0].UsedPercent
+		}
+		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent); err != nil {
+			slog.Error("insert metric snapshot", "err", err)
+		}
+	}
+
+	// Service health alerts + monitoring state change detection
 	for _, tmpl := range e.registry.All() {
 		e.checkService(tmpl)
+	}
+
+	// ---- Monitoring: prune old data every 100th tick (~50 minutes) ----
+	if e.snapshotTick%100 == 0 {
+		if err := e.store.PruneMetricSnapshots(time.Now().Add(-48 * time.Hour)); err != nil {
+			slog.Error("prune metric snapshots", "err", err)
+		}
+		if err := e.store.PruneServiceEvents(500); err != nil {
+			slog.Error("prune service events", "err", err)
+		}
 	}
 }
 
@@ -134,6 +163,31 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		} else if exists && cs.RestartCount == prevCount {
 			e.resolve("restart_loop", tmpl.ID)
 		}
+
+		// ---- Monitoring: detect state/health changes and restarts ----
+		prev, hasPrev := e.prevStates[name]
+		if hasPrev {
+			if prev.Status != cs.Status {
+				msg := fmt.Sprintf("Container %s status changed: %s -> %s", name, prev.Status, cs.Status)
+				if err := e.store.InsertServiceEvent(tmpl.ID, name, "state_change", prev.Status, cs.Status, msg); err != nil {
+					slog.Error("insert service event", "err", err)
+				}
+			}
+			if prev.Health != cs.Health {
+				msg := fmt.Sprintf("Container %s health changed: %s -> %s", name, prev.Health, cs.Health)
+				if err := e.store.InsertServiceEvent(tmpl.ID, name, "health_change", prev.Health, cs.Health, msg); err != nil {
+					slog.Error("insert service event", "err", err)
+				}
+			}
+			if cs.RestartCount > prev.RestartCount {
+				msg := fmt.Sprintf("Container %s restarted (%d -> %d)", name, prev.RestartCount, cs.RestartCount)
+				if err := e.store.InsertServiceEvent(tmpl.ID, name, "restart",
+					fmt.Sprintf("%d", prev.RestartCount), fmt.Sprintf("%d", cs.RestartCount), msg); err != nil {
+					slog.Error("insert service event", "err", err)
+				}
+			}
+		}
+		e.prevStates[name] = cs
 	}
 }
 

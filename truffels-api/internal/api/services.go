@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -58,14 +59,16 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if tmpl.ReadOnly {
-		writeError(w, http.StatusForbidden, "this is an infrastructure service and cannot be managed")
-		return
-	}
-
 	var req actionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// pull-restart is allowed for all services (including ReadOnly)
+	// start/stop/restart are blocked for ReadOnly services
+	if req.Action != "pull-restart" && tmpl.ReadOnly {
+		writeError(w, http.StatusForbidden, "this is an infrastructure service and cannot be managed")
 		return
 	}
 
@@ -111,8 +114,41 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+	case "pull-restart":
+		// Pull latest images, check if anything changed, restart only if needed
+		changed := false
+		for _, cname := range tmpl.ContainerNames {
+			info, err := s.compose.ImageInspect(cname)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "inspect failed: "+err.Error())
+				return
+			}
+			imgRef := info.Image
+			if atIdx := strings.Index(imgRef, "@"); atIdx >= 0 {
+				imgRef = imgRef[:atIdx]
+			}
+			output, err := s.compose.Pull(imgRef)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "pull failed: "+err.Error())
+				return
+			}
+			if !strings.Contains(output, "Image is up to date") {
+				changed = true
+			}
+		}
+		if !changed {
+			s.store.LogAudit("service_pull_restart", id, "already up to date", r.RemoteAddr)
+			writeJSON(w, http.StatusOK, map[string]string{"status": "already_up_to_date", "action": "pull-restart"})
+			return
+		}
+		// Use compose up (without down) — only recreates containers whose image changed
+		if err := s.compose.Up(id); err != nil {
+			writeError(w, http.StatusInternalServerError, "restart failed: "+err.Error())
+			return
+		}
+
 	default:
-		writeError(w, http.StatusBadRequest, "action must be start, stop, or restart")
+		writeError(w, http.StatusBadRequest, "action must be start, stop, restart, or pull-restart")
 		return
 	}
 

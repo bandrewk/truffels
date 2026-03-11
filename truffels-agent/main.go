@@ -18,15 +18,17 @@ import (
 
 // Allowlisted service IDs and their compose directory names.
 var allowedServices = map[string]string{
-	"bitcoind":     "bitcoin",
-	"electrs":      "electrs",
-	"ckpool":       "ckpool",
-	"mempool":      "mempool",
-	"ckstats":      "ckstats",
-	"proxy":        "proxy",
-	"truffels-agent": "truffels",
-	"truffels-api":   "truffels",
-	"truffels-web":   "truffels",
+	"bitcoind":        "bitcoin",
+	"electrs":         "electrs",
+	"ckpool":          "ckpool",
+	"mempool":         "mempool",
+	"ckstats":         "ckstats",
+	"proxy":           "proxy",
+	"mempool-db":      "mempool",
+	"ckstats-db":      "ckstats",
+	"truffels-agent":  "truffels",
+	"truffels-api":    "truffels",
+	"truffels-web":    "truffels",
 }
 
 // Allowlisted container names for inspection.

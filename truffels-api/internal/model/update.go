@@ -29,6 +29,7 @@ type UpdateSource struct {
 	Repo       string     `json:"repo,omitempty"`       // github/bitbucket: "owner/repo"
 	Branch     string     `json:"branch,omitempty"`     // github/bitbucket: "main" or "master"
 	NeedsBuild bool       `json:"needs_build"`          // true for custom-built images (ckpool, ckstats)
+	TagFilter  string     `json:"tag_filter,omitempty"` // dockerhub: only consider tags matching this prefix (e.g. "2.9-alpine", "16-alpine")
 }
 
 // UpdateCheck represents the latest known version info for a service.
