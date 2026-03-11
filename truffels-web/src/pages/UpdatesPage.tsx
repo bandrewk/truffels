@@ -110,12 +110,37 @@ export default function UpdatesPage() {
   const [pullRestartTarget, setPullRestartTarget] = useState<FloatingService | null>(null)
   const [pullRestartMsg, setPullRestartMsg] = useState<string | null>(null)
   const [showUpdateAllConfirm, setShowUpdateAllConfirm] = useState(false)
+  const [checkMsg, setCheckMsg] = useState<string | null>(null)
 
   async function handleCheck() {
     setActionPending('check')
+    setCheckMsg(null)
     try {
       await api.checkUpdates()
-      setTimeout(() => { refreshStatus(); refreshLogs() }, 3000)
+      // Poll until checks are updated (max 15s)
+      const before = status?.checks?.map(c => c.checked_at).join(',') || ''
+      let attempts = 0
+      const poll = async () => {
+        while (attempts < 10) {
+          attempts++
+          await new Promise(r => setTimeout(r, 1500))
+          const fresh = await api.updateStatus()
+          const after = fresh.checks?.map(c => c.checked_at).join(',') || ''
+          if (after !== before) {
+            refreshStatus()
+            refreshLogs()
+            const pending = fresh.pending_count || 0
+            setCheckMsg(pending > 0 ? `${pending} update${pending > 1 ? 's' : ''} available` : 'All services up to date')
+            setTimeout(() => setCheckMsg(null), 5000)
+            return
+          }
+        }
+        refreshStatus()
+        refreshLogs()
+        setCheckMsg('Check complete')
+        setTimeout(() => setCheckMsg(null), 5000)
+      }
+      await poll()
     } finally {
       setActionPending(null)
     }
@@ -205,6 +230,11 @@ export default function UpdatesPage() {
             >
               {actionPending === 'all' ? 'Updating...' : `Update All (${pendingCount})`}
             </button>
+          )}
+          {checkMsg && (
+            <span className={`text-sm ${checkMsg.includes('available') ? 'text-accent' : 'text-green-400'}`}>
+              {checkMsg}
+            </span>
           )}
         </div>
       </div>
