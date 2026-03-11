@@ -448,6 +448,126 @@ function buildTimeSeries(
   return points.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
 }
 
+const DUAL_COLORS: Record<string, [string, string]> = {
+  network: ['#10b981', '#ef4444'],  // RX green, TX red
+  disk: ['#3b82f6', '#ec4899'],     // Read blue, Write pink
+}
+
+function buildDualTimeSeries(
+  snapshots: ContainerSnapshot[],
+  containers: string[],
+  valueFnA: (s: ContainerSnapshot) => number,
+  valueFnB: (s: ContainerSnapshot) => number,
+  labelA: string,
+  labelB: string,
+): { points: ChartPoint[]; keys: string[] } {
+  const byTime = new Map<string, Map<string, { a: number; b: number }>>()
+  for (const s of snapshots) {
+    if (!byTime.has(s.timestamp)) byTime.set(s.timestamp, new Map())
+    byTime.get(s.timestamp)!.set(s.container, { a: valueFnA(s), b: valueFnB(s) })
+  }
+
+  const keys: string[] = []
+  for (const c of containers) {
+    const short = c.replace(/^truffels-/, '')
+    if (containers.length === 1) {
+      keys.push(labelA, labelB)
+    } else {
+      keys.push(`${short} ${labelA}`, `${short} ${labelB}`)
+    }
+  }
+
+  const points: ChartPoint[] = []
+  for (const [ts, vals] of byTime) {
+    const point: ChartPoint = { timestamp: ts }
+    for (const c of containers) {
+      const short = c.replace(/^truffels-/, '')
+      const v = vals.get(c) ?? { a: 0, b: 0 }
+      if (containers.length === 1) {
+        point[labelA] = v.a
+        point[labelB] = v.b
+      } else {
+        point[`${short} ${labelA}`] = v.a
+        point[`${short} ${labelB}`] = v.b
+      }
+    }
+    points.push(point)
+  }
+  return { points: points.sort((a, b) => a.timestamp.localeCompare(b.timestamp)), keys }
+}
+
+function DualContainerChart({ title, data, keys, colorScheme, domain, formatter }: {
+  title: string
+  data: ChartPoint[]
+  keys: string[]
+  colorScheme: 'network' | 'disk'
+  domain?: [number | string, number | string]
+  formatter?: (value: number) => string
+}) {
+  if (data.length === 0) {
+    return (
+      <Card>
+        <CardTitle>{title}</CardTitle>
+        <div className="h-40 flex items-center justify-center text-gray-500 text-sm">Collecting data...</div>
+      </Card>
+    )
+  }
+
+  const fmt = formatter || ((v: number) => v.toFixed(1))
+  const [colorA, colorB] = DUAL_COLORS[colorScheme]
+
+  return (
+    <Card>
+      <CardTitle>{title}</CardTitle>
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={formatChartTime}
+              tick={{ fill: '#6b7280', fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              domain={domain || ['auto', 'auto']}
+              tick={{ fill: '#6b7280', fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              contentStyle={{ background: '#1e1e2e', border: '1px solid #2e2e3e', borderRadius: 8, fontSize: 12 }}
+              labelFormatter={formatChartTimestamp}
+              formatter={(value: number, name: string) => [fmt(value), name]}
+            />
+            <Legend
+              formatter={(value: string) => <span className="text-xs text-gray-400">{value}</span>}
+            />
+            {keys.map((k, i) => {
+              // Alternate between colorA and colorB
+              const color = i % 2 === 0 ? colorA : colorB
+              return (
+                <Area
+                  key={k}
+                  type="monotone"
+                  dataKey={k}
+                  stroke={color}
+                  fill={color}
+                  fillOpacity={0.1}
+                  strokeWidth={1.5}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              )
+            })}
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </Card>
+  )
+}
+
 function ContainerChart({ title, data, containers, unit, domain, formatter }: {
   title: string
   data: ChartPoint[]
@@ -529,10 +649,18 @@ function MonitorTab({ id }: { id: string }) {
 
   const cpuData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.cpu_percent), [snapshots, containers])
   const memData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.mem_usage_mb), [snapshots, containers])
-  const netRxData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.net_rx_bytes / (1024 * 1024)), [snapshots, containers])
-  const netTxData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.net_tx_bytes / (1024 * 1024)), [snapshots, containers])
-  const blockReadData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.block_read_bytes / (1024 * 1024)), [snapshots, containers])
-  const blockWriteData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.block_write_bytes / (1024 * 1024)), [snapshots, containers])
+  const netData = useMemo(() => buildDualTimeSeries(
+    snapshots, containers,
+    s => s.net_rx_bytes / (1024 * 1024),
+    s => s.net_tx_bytes / (1024 * 1024),
+    'RX', 'TX',
+  ), [snapshots, containers])
+  const blockData = useMemo(() => buildDualTimeSeries(
+    snapshots, containers,
+    s => s.block_read_bytes / (1024 * 1024),
+    s => s.block_write_bytes / (1024 * 1024),
+    'Read', 'Write',
+  ), [snapshots, containers])
 
   if (loading && !data) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
@@ -573,35 +701,19 @@ function MonitorTab({ id }: { id: string }) {
           domain={[0, 'auto']}
           formatter={(v) => `${v.toFixed(0)} MB`}
         />
-        <ContainerChart
-          title="Network RX / interval"
-          data={netRxData}
-          containers={containers}
-          unit=""
+        <DualContainerChart
+          title="Network I/O (per minute)"
+          data={netData.points}
+          keys={netData.keys}
+          colorScheme="network"
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />
-        <ContainerChart
-          title="Network TX / interval"
-          data={netTxData}
-          containers={containers}
-          unit=""
-          domain={[0, 'auto']}
-          formatter={(v) => formatDataSize(v * 1024 * 1024)}
-        />
-        <ContainerChart
-          title="Disk Read / interval"
-          data={blockReadData}
-          containers={containers}
-          unit=""
-          domain={[0, 'auto']}
-          formatter={(v) => formatDataSize(v * 1024 * 1024)}
-        />
-        <ContainerChart
-          title="Disk Write / interval"
-          data={blockWriteData}
-          containers={containers}
-          unit=""
+        <DualContainerChart
+          title="Block I/O (per minute)"
+          data={blockData.points}
+          keys={blockData.keys}
+          colorScheme="disk"
           domain={[0, 'auto']}
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />

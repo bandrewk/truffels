@@ -32,6 +32,11 @@ export interface HostMetrics {
   fan_percent: number
   disks: { path: string; total_gb: number; used_gb: number; avail_gb: number; used_percent: number }[]
   uptime_seconds: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  disk_read_bytes: number
+  disk_write_bytes: number
+  disk_io_percent: number
 }
 
 export interface ContainerState {
@@ -232,6 +237,11 @@ export interface MetricSnapshot {
   disk_percent: number
   fan_rpm: number
   fan_percent: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  disk_read_bytes: number
+  disk_write_bytes: number
+  disk_io_percent: number
 }
 
 export interface MetricsSummary {

@@ -22,7 +22,17 @@ const CHART_COLORS = {
   temp: '#f97316',
   fan: '#06b6d4',
   disk: '#a855f7',
+  netRx: '#10b981',
+  netTx: '#ef4444',
+  diskIO: '#ec4899',
 } as const
+
+function formatDataSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
 
 function formatTime(ts: string): string {
   const d = new Date(ts)
@@ -182,13 +192,14 @@ export default function MonitoringPage() {
 
   const diskCurrent = metrics.current.disks?.[0]?.used_percent ?? 0
 
-  // Compute disk avg/peak from history
-  let diskAvg = 0, diskMax = 0
+  // Compute disk avg/peak/min from history
+  let diskAvg = 0, diskMax = 0, diskMin = 100
   if (metrics.history.length > 0) {
     let sum = 0
     for (const s of metrics.history) {
       sum += s.disk_percent
       if (s.disk_percent > diskMax) diskMax = s.disk_percent
+      if (s.disk_percent < diskMin) diskMin = s.disk_percent
     }
     diskAvg = sum / metrics.history.length
   }
@@ -342,6 +353,80 @@ export default function MonitoringPage() {
           current={diskCurrent}
           avg={diskAvg}
           peak={diskMax}
+          domain={[Math.max(0, Math.floor(diskMin / 5) * 5 - 5), Math.min(100, Math.ceil(diskMax / 5) * 5 + 5)]}
+        />
+        <Card>
+          <CardTitle>Network I/O (per minute)</CardTitle>
+          {metrics.history.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-gray-500 text-sm">Collecting data...</div>
+          ) : (
+            <>
+              <div className="h-40">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={metrics.history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="timestamp"
+                      tickFormatter={formatTime}
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v: number) => formatDataSize(v)}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: '#1e1e2e', border: '1px solid #2e2e3e', borderRadius: 8, fontSize: 12 }}
+                      labelFormatter={formatTimestamp}
+                      formatter={(value: number, name: string) => {
+                        const label = name === 'net_rx_bytes' ? 'RX' : 'TX'
+                        return [formatDataSize(value), label]
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="net_rx_bytes"
+                      stroke={CHART_COLORS.netRx}
+                      fill={CHART_COLORS.netRx}
+                      fillOpacity={0.15}
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="net_tx_bytes"
+                      stroke={CHART_COLORS.netTx}
+                      fill={CHART_COLORS.netTx}
+                      fillOpacity={0.1}
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">
+                <span style={{ color: CHART_COLORS.netRx }}>RX:</span>
+                <span>Current: <span className="text-gray-200 font-mono">{formatDataSize(metrics.current.net_rx_bytes ?? 0)}/min</span></span>
+                <span className="ml-2" style={{ color: CHART_COLORS.netTx }}>TX:</span>
+                <span>Current: <span className="text-gray-200 font-mono">{formatDataSize(metrics.current.net_tx_bytes ?? 0)}/min</span></span>
+              </div>
+            </>
+          )}
+        </Card>
+        <MetricChart
+          data={metrics.history}
+          dataKey="disk_io_percent"
+          color={CHART_COLORS.diskIO}
+          label="Disk I/O Utilization (%)"
+          unit="%"
+          current={metrics.history.length > 0 ? metrics.history[metrics.history.length - 1].disk_io_percent : 0}
+          avg={metrics.history.length > 0 ? metrics.history.reduce((s, h) => s + h.disk_io_percent, 0) / metrics.history.length : 0}
+          peak={metrics.history.length > 0 ? Math.max(...metrics.history.map(h => h.disk_io_percent)) : 0}
           domain={[0, 100]}
         />
       </div>
