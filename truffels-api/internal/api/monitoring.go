@@ -129,10 +129,28 @@ func (s *Server) handleServiceMonitoring(w http.ResponseWriter, r *http.Request)
 		snapshots = []model.ContainerSnapshot{}
 	}
 
+	// Current live stats (cumulative totals) for the info panel
+	allowed := make(map[string]bool, len(tmpl.ContainerNames))
+	for _, n := range tmpl.ContainerNames {
+		allowed[n] = true
+	}
+	var current []docker.ContainerResourceStats
+	if allStats, err := docker.Stats(); err == nil {
+		for _, st := range allStats {
+			if allowed[st.Name] {
+				current = append(current, st)
+			}
+		}
+	}
+	if current == nil {
+		current = []docker.ContainerResourceStats{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"service_id": id,
 		"containers": tmpl.ContainerNames,
 		"snapshots":  snapshots,
+		"current":    current,
 	})
 }
 

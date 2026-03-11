@@ -267,10 +267,22 @@ export interface ContainerSnapshot {
   block_write_bytes: number
 }
 
+export interface ContainerCurrentStats {
+  name: string
+  cpu_percent: number
+  mem_usage_mb: number
+  mem_limit_mb: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  block_read_bytes: number
+  block_write_bytes: number
+}
+
 export interface ServiceMonitoringResponse {
   service_id: string
   containers: string[]
   snapshots: ContainerSnapshot[]
+  current: ContainerCurrentStats[]
 }
 
 export interface MonitoringResponse {
