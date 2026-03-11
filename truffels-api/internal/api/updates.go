@@ -2,9 +2,11 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
 
@@ -118,8 +120,11 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	updating := make(map[string]bool)
 	sources := make(map[string]*model.UpdateSource)
 	type floatingService struct {
-		ID          string `json:"id"`
-		DisplayName string `json:"display_name"`
+		ID             string `json:"id"`
+		DisplayName    string `json:"display_name"`
+		Image          string `json:"image"`
+		CurrentVersion string `json:"current_version"`
+		StartedAt      string `json:"started_at"`
 	}
 	var floating []floatingService
 	for _, tmpl := range s.registry.All() {
@@ -130,7 +135,23 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 			sources[tmpl.ID] = tmpl.UpdateSource
 		}
 		if tmpl.FloatingTag {
-			floating = append(floating, floatingService{ID: tmpl.ID, DisplayName: tmpl.DisplayName})
+			fs := floatingService{ID: tmpl.ID, DisplayName: tmpl.DisplayName}
+			// Get image and tag from running container
+			containers := docker.InspectContainers(tmpl.ContainerNames)
+			if len(containers) > 0 && containers[0].Image != "" {
+				img := containers[0].Image
+				// Strip digest
+				if at := strings.Index(img, "@"); at >= 0 {
+					img = img[:at]
+				}
+				fs.Image = img
+				// Extract tag as version
+				if colon := strings.LastIndex(img, ":"); colon >= 0 {
+					fs.CurrentVersion = img[colon+1:]
+				}
+				fs.StartedAt = containers[0].StartedAt
+			}
+			floating = append(floating, fs)
 		}
 	}
 
