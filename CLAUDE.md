@@ -101,6 +101,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Updates:** Automatic version checking (Docker Hub / Docker Digest / GitHub / Bitbucket) for 8 services (bitcoind, electrs, mempool, mempool-db, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
 - **Monitoring:** Resource trends (Recharts), container status table, health timeline, actionable errors — `/admin/monitoring`
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 240+ tests total
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 270+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
