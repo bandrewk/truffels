@@ -72,6 +72,18 @@ func (r *Registry) ValidateDependencies(id string, isRunning func(string) bool) 
 	return nil
 }
 
+// NewTestRegistry creates a registry with custom templates (for testing).
+func NewTestRegistry(tmpls []model.ServiceTemplate) *Registry {
+	r := &Registry{
+		services: make(map[string]model.ServiceTemplate, len(tmpls)),
+	}
+	for _, t := range tmpls {
+		r.services[t.ID] = t
+		r.order = append(r.order, t.ID)
+	}
+	return r
+}
+
 // Dependents returns services that depend on the given service.
 func (r *Registry) Dependents(id string) []string {
 	var deps []string
