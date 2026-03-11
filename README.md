@@ -43,7 +43,9 @@ Fully operational Bitcoin infrastructure running 13 Docker containers on Raspber
 - **truffels-api** — Go control plane backend (REST API, alerts, metrics)
 - **truffels-web** — React admin UI (dark-mode, Tailwind)
 
-Updates: automatic version checking (Docker Hub, GitHub, Bitbucket), one-click updates with automatic rollback on health failure.
+Updates: automatic version checking (Docker Hub, GitHub, Bitbucket) for all services including Caddy and PostgreSQL, one-click updates with preflight checks and automatic rollback on health failure. Pull & Restart for floating-tag services (MariaDB).
+
+Monitoring: resource trend charts (CPU, memory, temperature, disk), container status table, health timeline, actionable errors.
 
 Security: admin auth (bcrypt + HMAC sessions), nftables firewall, Docker capability hardening, secrets isolation.
 

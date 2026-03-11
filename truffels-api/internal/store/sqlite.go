@@ -39,7 +39,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_init.sql", "migrations/002_auth.sql", "migrations/003_updates.sql"}
+	migrations := []string{"migrations/001_init.sql", "migrations/002_auth.sql", "migrations/003_updates.sql", "migrations/004_monitoring.sql"}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {

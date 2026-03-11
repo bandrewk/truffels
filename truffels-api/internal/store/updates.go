@@ -149,6 +149,12 @@ func (s *Store) PendingUpdateCount() (int, error) {
 	return count, err
 }
 
+// DeleteUpdateCheck removes all update check records for a service.
+func (s *Store) DeleteUpdateCheck(serviceID string) error {
+	_, err := s.db.Exec(`DELETE FROM update_checks WHERE service_id = ?`, serviceID)
+	return err
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1

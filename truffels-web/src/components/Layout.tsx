@@ -6,6 +6,7 @@ const navItems = [
   { to: '/services', label: 'Services' },
   { to: '/alerts', label: 'Alerts' },
   { to: '/updates', label: 'Updates' },
+  { to: '/monitoring', label: 'Monitoring' },
 ]
 
 interface Props {

@@ -52,6 +52,7 @@ export interface ServiceTemplate {
   memory_limit: string
   port?: string
   read_only?: boolean
+  update_source?: UpdateSource
 }
 
 export interface ServiceInstance {
@@ -191,6 +192,7 @@ export interface UpdateSource {
   repo?: string
   branch?: string
   needs_build: boolean
+  tag_filter?: string
 }
 
 export interface UpdateStatus {
@@ -198,6 +200,57 @@ export interface UpdateStatus {
   checks: UpdateCheck[]
   updating: Record<string, boolean>
   sources: Record<string, UpdateSource>
+}
+
+export interface MonitoringContainer {
+  name: string
+  service_id: string
+  display_name: string
+  status: string
+  health: string
+  restart_count: number
+  started_at: string
+  image: string
+}
+
+export interface MetricSnapshot {
+  id: number
+  timestamp: string
+  cpu_percent: number
+  mem_percent: number
+  temp_c: number
+  disk_percent: number
+}
+
+export interface MetricsSummary {
+  cpu_avg: number
+  cpu_max: number
+  mem_avg: number
+  mem_max: number
+  temp_avg: number
+  temp_max: number
+}
+
+export interface ServiceEvent {
+  id: number
+  timestamp: string
+  service_id: string
+  container: string
+  event_type: string
+  from_state: string
+  to_state: string
+  message: string
+}
+
+export interface MonitoringResponse {
+  containers: MonitoringContainer[]
+  events: ServiceEvent[]
+  metrics: {
+    current: HostMetrics
+    history: MetricSnapshot[]
+    summary: MetricsSummary
+  }
+  alerts: Alert[]
 }
 
 export const api = {
@@ -221,4 +274,5 @@ export const api = {
   applyAllUpdates: () => post<{ status: string; queued: string[] }>('/updates/apply-all'),
   updatePreflight: (id: string) => get<PreflightResult>(`/updates/preflight/${id}`),
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
+  monitoring: (hours = 24) => get<MonitoringResponse>(`/monitoring?hours=${hours}`),
 }

@@ -39,7 +39,7 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
         {images.map((img, i) => (
           <a
             key={img}
-            href={`https://hub.docker.com/r/${img}`}
+            href={`https://hub.docker.com/${img.includes('/') ? 'r' : '_'}/${img}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"

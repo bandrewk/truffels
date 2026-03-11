@@ -82,7 +82,9 @@ func (e *Engine) loop() {
 func (e *Engine) checkAll() {
 	slog.Info("update check starting")
 	for _, tmpl := range e.registry.All() {
-		if tmpl.UpdateSource == nil || tmpl.ReadOnly {
+		if tmpl.UpdateSource == nil {
+			// Clean up stale checks for services that lost their UpdateSource
+			e.store.DeleteUpdateCheck(tmpl.ID)
 			continue
 		}
 		e.checkService(tmpl)
@@ -364,7 +366,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
 		for _, img := range src.Images {
 			newImage := img + ":" + check.LatestVersion
-			if err := e.compose.Pull(newImage); err != nil {
+			if _, err := e.compose.Pull(newImage); err != nil {
 				e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
 				return &UpdateError{Msg: "pull failed (" + img + "): " + err.Error()}
 			}
@@ -429,7 +431,7 @@ func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *mod
 			slog.Error("rollback: compose rewrite failed", "service", serviceID, "err", err)
 		}
 		for _, img := range src.Images {
-			e.compose.Pull(img + ":" + currentVersion)
+			e.compose.Pull(img + ":" + currentVersion) //nolint:errcheck
 		}
 	}
 	e.compose.Down(serviceID)

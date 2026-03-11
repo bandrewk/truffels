@@ -57,9 +57,13 @@ export default function ServiceDetailPage() {
     setActionLoading(true)
     setActionMsg('')
     try {
-      await api.serviceAction(id!, action)
-      setActionMsg(`${action} successful`)
-      setTimeout(refresh, 2000)
+      const result = await api.serviceAction(id!, action)
+      if (result.status === 'already_up_to_date') {
+        setActionMsg('Already up to date — no restart needed')
+      } else {
+        setActionMsg(`${action} successful`)
+        setTimeout(refresh, 2000)
+      }
     } catch (e: any) {
       setActionMsg(`Error: ${e.message}`)
     } finally {
@@ -78,18 +82,23 @@ export default function ServiceDetailPage() {
       <p className="text-gray-400">{svc.template.description}</p>
 
       {/* Actions */}
-      {!svc.template.read_only && (
-        <div className="flex gap-2 items-center">
-          {svc.state !== 'running' && (
-            <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
-          )}
-          {svc.state !== 'stopped' && (
-            <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
-          )}
-          <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
-          {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
-        </div>
-      )}
+      <div className="flex gap-2 items-center">
+        {!svc.template.read_only && (
+          <>
+            {svc.state !== 'running' && (
+              <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
+            )}
+            {svc.state !== 'stopped' && (
+              <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
+            )}
+            <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
+          </>
+        )}
+        {!svc.template.update_source && svc.state === 'running' && (
+          <ActionButton label="Pull & Restart" variant="restart" onClick={() => doAction('pull-restart')} disabled={actionLoading} />
+        )}
+        {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
+      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">

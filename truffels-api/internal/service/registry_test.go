@@ -8,8 +8,8 @@ import (
 func TestNewRegistry_AllServices(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose")
 	all := r.All()
-	if len(all) != 9 {
-		t.Fatalf("expected 9 services, got %d", len(all))
+	if len(all) != 11 {
+		t.Fatalf("expected 11 services, got %d", len(all))
 	}
 }
 
@@ -17,8 +17,8 @@ func TestRegistry_TopologicalOrder(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose")
 	all := r.All()
 	expected := []string{
-		"bitcoind", "electrs", "ckpool", "mempool", "ckstats",
-		"proxy", "truffels-agent", "truffels-api", "truffels-web",
+		"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db",
+		"mempool", "ckstats", "proxy", "truffels-agent", "truffels-api", "truffels-web",
 	}
 	for i, svc := range all {
 		if svc.ID != expected[i] {
@@ -145,7 +145,7 @@ func TestRegistry_Dependents_NoDependents(t *testing.T) {
 
 func TestRegistry_ReadOnlyServices(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose")
-	readOnly := []string{"proxy", "truffels-agent", "truffels-api", "truffels-web"}
+	readOnly := []string{"proxy", "mempool-db", "ckstats-db", "truffels-agent", "truffels-api", "truffels-web"}
 	for _, id := range readOnly {
 		svc, ok := r.Get(id)
 		if !ok {
