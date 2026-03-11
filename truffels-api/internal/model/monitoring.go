@@ -14,6 +14,18 @@ type MetricSnapshot struct {
 	FanPercent  int       `json:"fan_percent"`
 }
 
+// ContainerSnapshot is a single recorded point of per-container resource usage.
+type ContainerSnapshot struct {
+	ID         int64     `json:"id"`
+	Timestamp  time.Time `json:"timestamp"`
+	Container  string    `json:"container"`
+	CPUPercent float64   `json:"cpu_percent"`
+	MemUsageMB float64   `json:"mem_usage_mb"`
+	MemLimitMB float64   `json:"mem_limit_mb"`
+	NetRxBytes int64     `json:"net_rx_bytes"`
+	NetTxBytes int64     `json:"net_tx_bytes"`
+}
+
 // ServiceEvent records a container state/health change or restart.
 type ServiceEvent struct {
 	ID        int64     `json:"id"`

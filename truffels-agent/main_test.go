@@ -208,6 +208,90 @@ func TestWriteJSON(t *testing.T) {
 	}
 }
 
+// --- Stats Parsing ---
+
+func TestParsePercent(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"65.71%", 65.71},
+		{"0.00%", 0},
+		{"100.00%", 100},
+		{"  3.5% ", 3.5},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		got := parsePercent(tt.input)
+		if got != tt.want {
+			t.Errorf("parsePercent(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseBytes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"909MB", 909e6},
+		{"30.7GB", 30.7e9},
+		{"7.09kB", 7090},
+		{"2.083GiB", 2.083 * 1024 * 1024 * 1024},
+		{"64.55MiB", 64.55 * 1024 * 1024},
+		{"0B", 0},
+		{"1TB", 1e12},
+		{"512KiB", 512 * 1024},
+	}
+	for _, tt := range tests {
+		got := parseBytes(tt.input)
+		// Allow 0.1% tolerance for floating point
+		diff := got - tt.want
+		if diff < 0 {
+			diff = -diff
+		}
+		if tt.want != 0 && diff/tt.want > 0.001 {
+			t.Errorf("parseBytes(%q) = %v, want %v", tt.input, got, tt.want)
+		} else if tt.want == 0 && got != 0 {
+			t.Errorf("parseBytes(%q) = %v, want 0", tt.input, got)
+		}
+	}
+}
+
+func TestParseMemUsage(t *testing.T) {
+	usage, limit := parseMemUsage("2.083GiB / 3.418GiB")
+	if usage < 2130 || usage > 2140 {
+		t.Errorf("expected ~2133 MB usage, got %.1f", usage)
+	}
+	if limit < 3500 || limit > 3510 {
+		t.Errorf("expected ~3501 MB limit, got %.1f", limit)
+	}
+}
+
+func TestParseNetIO(t *testing.T) {
+	rx, tx := parseNetIO("909MB / 30.7GB")
+	if rx != 909000000 {
+		t.Errorf("expected rx=909000000, got %d", rx)
+	}
+	if tx != 30700000000 {
+		t.Errorf("expected tx=30700000000, got %d", tx)
+	}
+}
+
+func TestParseMemUsage_Empty(t *testing.T) {
+	usage, limit := parseMemUsage("")
+	if usage != 0 || limit != 0 {
+		t.Errorf("expected 0/0, got %.1f/%.1f", usage, limit)
+	}
+}
+
+func TestParseNetIO_Empty(t *testing.T) {
+	rx, tx := parseNetIO("")
+	if rx != 0 || tx != 0 {
+		t.Errorf("expected 0/0, got %d/%d", rx, tx)
+	}
+}
+
 // --- envOr ---
 
 func TestEnvOr(t *testing.T) {

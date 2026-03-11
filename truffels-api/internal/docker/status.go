@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -54,6 +55,43 @@ func InspectContainers(names []string) []model.ContainerState {
 		return states
 	}
 	return agentClient.Inspect(names)
+}
+
+// ContainerResourceStats holds per-container resource usage from docker stats.
+type ContainerResourceStats struct {
+	Name       string  `json:"name"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemUsageMB float64 `json:"mem_usage_mb"`
+	MemLimitMB float64 `json:"mem_limit_mb"`
+	NetRxBytes int64   `json:"net_rx_bytes"`
+	NetTxBytes int64   `json:"net_tx_bytes"`
+}
+
+// Stats returns resource usage for all allowed containers via the agent.
+func Stats() ([]ContainerResourceStats, error) {
+	if agentClient == nil {
+		return nil, nil
+	}
+	return agentClient.stats()
+}
+
+func (ai *AgentInspector) stats() ([]ContainerResourceStats, error) {
+	resp, err := ai.httpClient.Get(ai.agentURL + "/v1/stats")
+	if err != nil {
+		slog.Error("agent stats", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("agent stats: HTTP %d", resp.StatusCode)
+	}
+
+	var stats []ContainerResourceStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return nil, fmt.Errorf("agent stats decode: %w", err)
+	}
+	return stats, nil
 }
 
 func (ai *AgentInspector) Inspect(names []string) []model.ContainerState {

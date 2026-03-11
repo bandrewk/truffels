@@ -65,6 +65,7 @@ func main() {
 	mux.HandleFunc("POST /v1/image/pull", handleImagePull)
 	mux.HandleFunc("POST /v1/image/inspect", handleImageInspect)
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
+	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
@@ -354,6 +355,121 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 		Digest: digest,
 		Tags:   tags,
 	})
+}
+
+// --- Container Stats ---
+
+type containerStats struct {
+	Name        string  `json:"name"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemUsageMB  float64 `json:"mem_usage_mb"`
+	MemLimitMB  float64 `json:"mem_limit_mb"`
+	NetRxBytes  int64   `json:"net_rx_bytes"`
+	NetTxBytes  int64   `json:"net_tx_bytes"`
+}
+
+type dockerStatsJSON struct {
+	Name     string `json:"Name"`
+	CPUPerc  string `json:"CPUPerc"`
+	MemUsage string `json:"MemUsage"`
+	NetIO    string `json:"NetIO"`
+}
+
+func handleStats(w http.ResponseWriter, r *http.Request) {
+	// Collect names of all allowed containers
+	names := make([]string, 0, len(allowedContainers))
+	for name := range allowedContainers {
+		names = append(names, name)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	args := append([]string{"stats", "--no-stream", "--format", "{{json .}}"}, names...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &bytes.Buffer{}
+	if err := cmd.Run(); err != nil {
+		slog.Error("docker stats", "err", err)
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var results []containerStats
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var ds dockerStatsJSON
+		if err := json.Unmarshal([]byte(line), &ds); err != nil {
+			slog.Error("parse stats line", "err", err, "line", line)
+			continue
+		}
+
+		cs := containerStats{Name: ds.Name}
+		cs.CPUPercent = parsePercent(ds.CPUPerc)
+		cs.MemUsageMB, cs.MemLimitMB = parseMemUsage(ds.MemUsage)
+		cs.NetRxBytes, cs.NetTxBytes = parseNetIO(ds.NetIO)
+		results = append(results, cs)
+	}
+
+	writeJSON(w, 200, results)
+}
+
+// parsePercent parses "65.71%" to 65.71
+func parsePercent(s string) float64 {
+	s = strings.TrimSuffix(strings.TrimSpace(s), "%")
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
+// parseBytes parses human-readable byte values like "909MB", "2.083GiB", "7.09kB"
+func parseBytes(s string) float64 {
+	s = strings.TrimSpace(s)
+	multipliers := []struct {
+		suffix string
+		mult   float64
+	}{
+		{"TiB", 1024 * 1024 * 1024 * 1024},
+		{"GiB", 1024 * 1024 * 1024},
+		{"MiB", 1024 * 1024},
+		{"KiB", 1024},
+		{"TB", 1e12},
+		{"GB", 1e9},
+		{"MB", 1e6},
+		{"kB", 1e3},
+		{"B", 1},
+	}
+	for _, m := range multipliers {
+		if strings.HasSuffix(s, m.suffix) {
+			numStr := strings.TrimSpace(strings.TrimSuffix(s, m.suffix))
+			v, _ := strconv.ParseFloat(numStr, 64)
+			return v * m.mult
+		}
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
+// parseMemUsage parses "2.083GiB / 3.418GiB" to (usage_mb, limit_mb)
+func parseMemUsage(s string) (float64, float64) {
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	usageBytes := parseBytes(parts[0])
+	limitBytes := parseBytes(parts[1])
+	return usageBytes / (1024 * 1024), limitBytes / (1024 * 1024)
+}
+
+// parseNetIO parses "909MB / 30.7GB" to (rx_bytes, tx_bytes)
+func parseNetIO(s string) (int64, int64) {
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	return int64(parseBytes(parts[0])), int64(parseBytes(parts[1]))
 }
 
 func handleComposeBuild(w http.ResponseWriter, r *http.Request) {

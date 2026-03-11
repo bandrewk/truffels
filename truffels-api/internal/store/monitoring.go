@@ -68,6 +68,83 @@ func (s *Store) PruneMetricSnapshots(olderThan time.Time) error {
 	return err
 }
 
+// InsertContainerSnapshots records per-container resource snapshots in a single transaction.
+func (s *Store) InsertContainerSnapshots(snaps []model.ContainerSnapshot) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO container_snapshots (container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, snap := range snaps {
+		if _, err := stmt.Exec(snap.Container, snap.CPUPercent, snap.MemUsageMB, snap.MemLimitMB, snap.NetRxBytes, snap.NetTxBytes); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetContainerSnapshots returns per-container snapshots since the given time.
+func (s *Store) GetContainerSnapshots(since time.Time, maxRows int) ([]model.ContainerSnapshot, error) {
+	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
+
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes
+		 FROM container_snapshots WHERE timestamp >= ?
+		 ORDER BY timestamp ASC`, sinceStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []model.ContainerSnapshot
+	for rows.Next() {
+		var snap model.ContainerSnapshot
+		var ts string
+		if err := rows.Scan(&snap.ID, &ts, &snap.Container, &snap.CPUPercent, &snap.MemUsageMB, &snap.MemLimitMB, &snap.NetRxBytes, &snap.NetTxBytes); err != nil {
+			continue
+		}
+		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		all = append(all, snap)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Downsample: maxRows applies per container
+	if maxRows <= 0 || len(all) <= maxRows {
+		return all, nil
+	}
+
+	step := len(all) / maxRows
+	if step < 1 {
+		step = 1
+	}
+	sampled := make([]model.ContainerSnapshot, 0, maxRows+1)
+	for i := 0; i < len(all); i += step {
+		sampled = append(sampled, all[i])
+	}
+	if len(all) > 0 && sampled[len(sampled)-1].ID != all[len(all)-1].ID {
+		sampled = append(sampled, all[len(all)-1])
+	}
+	return sampled, nil
+}
+
+// PruneContainerSnapshots deletes per-container snapshots older than the given time.
+func (s *Store) PruneContainerSnapshots(olderThan time.Time) error {
+	ts := olderThan.UTC().Format("2006-01-02 15:04:05")
+	_, err := s.db.Exec(`DELETE FROM container_snapshots WHERE timestamp < ?`, ts)
+	return err
+}
+
 // InsertServiceEvent records a container state change, health change, or restart event.
 func (s *Store) InsertServiceEvent(serviceID, container, eventType, fromState, toState, message string) error {
 	_, err := s.db.Exec(

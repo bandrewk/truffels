@@ -86,6 +86,26 @@ func (e *Engine) evaluate() {
 		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent, host.FanRPM, host.FanPercent); err != nil {
 			slog.Error("insert metric snapshot", "err", err)
 		}
+
+		// Per-container resource snapshots
+		if stats, err := docker.Stats(); err != nil {
+			slog.Error("collect container stats", "err", err)
+		} else if len(stats) > 0 {
+			snaps := make([]model.ContainerSnapshot, len(stats))
+			for i, s := range stats {
+				snaps[i] = model.ContainerSnapshot{
+					Container:  s.Name,
+					CPUPercent: s.CPUPercent,
+					MemUsageMB: s.MemUsageMB,
+					MemLimitMB: s.MemLimitMB,
+					NetRxBytes: s.NetRxBytes,
+					NetTxBytes: s.NetTxBytes,
+				}
+			}
+			if err := e.store.InsertContainerSnapshots(snaps); err != nil {
+				slog.Error("insert container snapshots", "err", err)
+			}
+		}
 	}
 
 	// Service health alerts + monitoring state change detection
@@ -100,6 +120,9 @@ func (e *Engine) evaluate() {
 		}
 		if err := e.store.PruneServiceEvents(500); err != nil {
 			slog.Error("prune service events", "err", err)
+		}
+		if err := e.store.PruneContainerSnapshots(time.Now().Add(-48 * time.Hour)); err != nil {
+			slog.Error("prune container snapshots", "err", err)
 		}
 	}
 }
