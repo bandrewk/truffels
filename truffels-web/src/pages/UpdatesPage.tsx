@@ -271,37 +271,57 @@ export default function UpdatesPage() {
       {/* Floating Tag Services */}
       {floatingServices.length > 0 && (
         <div className="space-y-3">
-          {floatingServices.map((fs) => (
-            <Card key={fs.id}>
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-gray-200">{fs.display_name}</span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                      floating tag
-                    </span>
+          {floatingServices.map((fs) => {
+            const imgName = fs.image ? fs.image.split(':')[0] : ''
+            return (
+              <Card key={fs.id}>
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-gray-200">{fs.display_name}</span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                        floating tag
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
+                      <span className="text-gray-400">
+                        <span className="text-gray-500">Current: </span>
+                        <span className="font-mono">{fs.current_version || '—'}</span>
+                      </span>
+                    </div>
+                    {pullRestartMsg?.startsWith(fs.id) && (
+                      <p className={`text-xs mt-1 ${pullRestartMsg.includes('error') ? 'text-red-400' : 'text-green-400'}`}>
+                        {pullRestartMsg.replace(`${fs.id}: `, '')}
+                      </p>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Uses a floating Docker tag — pull to check for newer image layers
-                  </p>
-                  {pullRestartMsg?.startsWith(fs.id) && (
-                    <p className={`text-xs mt-1 ${pullRestartMsg.includes('error') ? 'text-red-400' : 'text-green-400'}`}>
-                      {pullRestartMsg.replace(`${fs.id}: `, '')}
-                    </p>
+                  <div className="flex-shrink-0">
+                    <button
+                      onClick={() => setPullRestartTarget(fs)}
+                      disabled={actionPending !== null}
+                      className="px-3 py-1.5 text-sm rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 transition-colors disabled:opacity-50"
+                    >
+                      {actionPending === fs.id ? 'Pulling...' : 'Pull & Restart'}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                  <p className="text-xs text-gray-600">Running since {formatTime(fs.started_at)}</p>
+                  {imgName && (
+                    <a
+                      href={`https://hub.docker.com/${imgName.includes('/') ? 'r' : '_'}/${imgName}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                    >
+                      <span>{imgName}</span>
+                      <DockerIcon />
+                    </a>
                   )}
                 </div>
-                <div className="flex-shrink-0">
-                  <button
-                    onClick={() => setPullRestartTarget(fs)}
-                    disabled={actionPending !== null}
-                    className="px-3 py-1.5 text-sm rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 transition-colors disabled:opacity-50"
-                  >
-                    {actionPending === fs.id ? 'Pulling...' : 'Pull & Restart'}
-                  </button>
-                </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            )
+          })}
         </div>
       )}
 

@@ -199,6 +199,9 @@ export interface UpdateSource {
 export interface FloatingService {
   id: string
   display_name: string
+  image: string
+  current_version: string
+  started_at: string
 }
 
 export interface UpdateStatus {
