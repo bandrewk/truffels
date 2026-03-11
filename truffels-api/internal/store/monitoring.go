@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"time"
 
 	"truffels-api/internal/model"
@@ -138,6 +139,64 @@ func (s *Store) GetContainerSnapshots(since time.Time, maxRows int) ([]model.Con
 		sampled = append(sampled, all[len(all)-1])
 	}
 	return sampled, nil
+}
+
+// GetContainerSnapshotsByNames returns snapshots for specific containers since the given time.
+func (s *Store) GetContainerSnapshotsByNames(since time.Time, containers []string, maxRows int) ([]model.ContainerSnapshot, error) {
+	if len(containers) == 0 {
+		return nil, nil
+	}
+	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
+
+	// Build placeholders
+	placeholders := make([]string, len(containers))
+	args := make([]interface{}, 0, len(containers)+1)
+	args = append(args, sinceStr)
+	for i, c := range containers {
+		placeholders[i] = "?"
+		args = append(args, c)
+	}
+
+	query := `SELECT id, timestamp, container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes
+		 FROM container_snapshots
+		 WHERE timestamp >= ? AND container IN (` + strings.Join(placeholders, ",") + `)
+		 ORDER BY timestamp ASC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []model.ContainerSnapshot
+	for rows.Next() {
+		var snap model.ContainerSnapshot
+		var ts string
+		if err := rows.Scan(&snap.ID, &ts, &snap.Container, &snap.CPUPercent, &snap.MemUsageMB, &snap.MemLimitMB, &snap.NetRxBytes, &snap.NetTxBytes, &snap.BlockReadBytes, &snap.BlockWriteBytes); err != nil {
+			continue
+		}
+		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		all = append(all, snap)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if maxRows > 0 && len(all) > maxRows {
+		step := len(all) / maxRows
+		if step < 1 {
+			step = 1
+		}
+		sampled := make([]model.ContainerSnapshot, 0, maxRows+1)
+		for i := 0; i < len(all); i += step {
+			sampled = append(sampled, all[i])
+		}
+		if len(all) > 0 && sampled[len(sampled)-1].ID != all[len(all)-1].ID {
+			sampled = append(sampled, all[len(all)-1])
+		}
+		return sampled, nil
+	}
+	return all, nil
 }
 
 // PruneContainerSnapshots deletes per-container snapshots older than the given time.

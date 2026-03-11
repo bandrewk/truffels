@@ -1,6 +1,16 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api, ServiceInstance, UpdateCheck } from '@/lib/api'
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts'
+import { api, ServiceInstance, UpdateCheck, ContainerSnapshot } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -40,7 +50,7 @@ function ActionButton({ label, variant, onClick, disabled }: {
 
 export default function ServiceDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const [tab, setTab] = useState<'overview' | 'logs' | 'config'>('overview')
+  const [tab, setTab] = useState<'overview' | 'monitor' | 'logs' | 'config'>('overview')
   const [actionLoading, setActionLoading] = useState(false)
   const [actionMsg, setActionMsg] = useState('')
 
@@ -99,7 +109,7 @@ export default function ServiceDetailPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
-        {(svc.template.read_only ? ['overview', 'logs'] as const : ['overview', 'logs', 'config'] as const).map((t) => (
+        {(svc.template.read_only ? ['overview', 'monitor', 'logs'] as const : ['overview', 'monitor', 'logs', 'config'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -113,6 +123,7 @@ export default function ServiceDetailPage() {
       </div>
 
       {tab === 'overview' && <OverviewTab svc={svc} updateCheck={updateStatus?.checks?.find(c => c.service_id === id)} />}
+      {tab === 'monitor' && <MonitorTab id={id!} />}
       {tab === 'logs' && <LogsTab id={id!} />}
       {tab === 'config' && <ConfigTab id={id!} />}
     </div>
@@ -377,6 +388,223 @@ function OverviewTab({ svc, updateCheck }: { svc: ServiceInstance; updateCheck?:
           )}
         </dl>
       </Card>
+    </div>
+  )
+}
+
+type TimeRange = 1 | 6 | 24
+
+const CONTAINER_COLORS = [
+  '#f59e0b', '#3b82f6', '#10b981', '#f97316', '#a855f7',
+  '#06b6d4', '#ec4899', '#84cc16', '#ef4444', '#6366f1',
+]
+
+function formatChartTime(ts: string): string {
+  const d = new Date(ts)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatChartTimestamp(ts: string): string {
+  const d = new Date(ts)
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatDataSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${mb.toFixed(1)} MB`
+  const gb = mb / 1024
+  return `${gb.toFixed(2)} GB`
+}
+
+interface ChartPoint {
+  timestamp: string
+  [key: string]: number | string
+}
+
+function buildTimeSeries(
+  snapshots: ContainerSnapshot[],
+  containers: string[],
+  valueFn: (s: ContainerSnapshot) => number,
+): ChartPoint[] {
+  // Group snapshots by timestamp
+  const byTime = new Map<string, Map<string, number>>()
+  for (const s of snapshots) {
+    if (!byTime.has(s.timestamp)) byTime.set(s.timestamp, new Map())
+    byTime.get(s.timestamp)!.set(s.container, valueFn(s))
+  }
+
+  // Build chart data
+  const points: ChartPoint[] = []
+  for (const [ts, vals] of byTime) {
+    const point: ChartPoint = { timestamp: ts }
+    for (const c of containers) {
+      point[c] = vals.get(c) ?? 0
+    }
+    points.push(point)
+  }
+  return points.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+}
+
+function ContainerChart({ title, data, containers, unit, domain, formatter }: {
+  title: string
+  data: ChartPoint[]
+  containers: string[]
+  unit: string
+  domain?: [number | string, number | string]
+  formatter?: (value: number) => string
+}) {
+  if (data.length === 0) {
+    return (
+      <Card>
+        <CardTitle>{title}</CardTitle>
+        <div className="h-40 flex items-center justify-center text-gray-500 text-sm">Collecting data...</div>
+      </Card>
+    )
+  }
+
+  const fmt = formatter || ((v: number) => `${v.toFixed(1)}${unit}`)
+  const shortName = (name: string) => name.replace(/^truffels-/, '')
+
+  return (
+    <Card>
+      <CardTitle>{title}</CardTitle>
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={formatChartTime}
+              tick={{ fill: '#6b7280', fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              domain={domain || ['auto', 'auto']}
+              tick={{ fill: '#6b7280', fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              contentStyle={{ background: '#1e1e2e', border: '1px solid #2e2e3e', borderRadius: 8, fontSize: 12 }}
+              labelFormatter={formatChartTimestamp}
+              formatter={(value: number, name: string) => [fmt(value), shortName(name)]}
+            />
+            {containers.length > 1 && (
+              <Legend
+                formatter={(value: string) => <span className="text-xs text-gray-400">{shortName(value)}</span>}
+              />
+            )}
+            {containers.map((c, i) => (
+              <Area
+                key={c}
+                type="monotone"
+                dataKey={c}
+                stroke={CONTAINER_COLORS[i % CONTAINER_COLORS.length]}
+                fill={CONTAINER_COLORS[i % CONTAINER_COLORS.length]}
+                fillOpacity={0.12}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            ))}
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </Card>
+  )
+}
+
+function MonitorTab({ id }: { id: string }) {
+  const [hours, setHours] = useState<TimeRange>(6)
+  const fetcher = useCallback(() => api.serviceMonitoring(id, hours), [id, hours])
+  const { data, error, loading } = useApi(fetcher, 15000)
+
+  const containers = data?.containers ?? []
+  const snapshots = data?.snapshots ?? []
+
+  const cpuData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.cpu_percent), [snapshots, containers])
+  const memData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.mem_usage_mb), [snapshots, containers])
+  const netRxData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.net_rx_bytes / (1024 * 1024)), [snapshots, containers])
+  const netTxData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.net_tx_bytes / (1024 * 1024)), [snapshots, containers])
+  const blockReadData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.block_read_bytes / (1024 * 1024)), [snapshots, containers])
+  const blockWriteData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.block_write_bytes / (1024 * 1024)), [snapshots, containers])
+
+  if (loading && !data) return <div className="text-gray-400">Loading...</div>
+  if (error) return <div className="text-red-400">Error: {error}</div>
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <div className="flex gap-1 bg-surface-overlay rounded-lg p-0.5">
+          {([1, 6, 24] as TimeRange[]).map((h) => (
+            <button
+              key={h}
+              onClick={() => setHours(h)}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                hours === h
+                  ? 'bg-accent text-black'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {h}h
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ContainerChart
+          title="CPU Usage (%)"
+          data={cpuData}
+          containers={containers}
+          unit="%"
+          domain={[0, 'auto']}
+        />
+        <ContainerChart
+          title="Memory Usage (MB)"
+          data={memData}
+          containers={containers}
+          unit=" MB"
+          domain={[0, 'auto']}
+          formatter={(v) => `${v.toFixed(0)} MB`}
+        />
+        <ContainerChart
+          title="Network RX (cumulative MB)"
+          data={netRxData}
+          containers={containers}
+          unit=" MB"
+          domain={[0, 'auto']}
+          formatter={(v) => formatDataSize(v * 1024 * 1024)}
+        />
+        <ContainerChart
+          title="Network TX (cumulative MB)"
+          data={netTxData}
+          containers={containers}
+          unit=" MB"
+          domain={[0, 'auto']}
+          formatter={(v) => formatDataSize(v * 1024 * 1024)}
+        />
+        <ContainerChart
+          title="Block I/O Read (cumulative MB)"
+          data={blockReadData}
+          containers={containers}
+          unit=" MB"
+          domain={[0, 'auto']}
+          formatter={(v) => formatDataSize(v * 1024 * 1024)}
+        />
+        <ContainerChart
+          title="Block I/O Write (cumulative MB)"
+          data={blockWriteData}
+          containers={containers}
+          unit=" MB"
+          domain={[0, 'auto']}
+          formatter={(v) => formatDataSize(v * 1024 * 1024)}
+        />
+      </div>
     </div>
   )
 }
