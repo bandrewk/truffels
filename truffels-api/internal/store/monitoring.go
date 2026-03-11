@@ -7,10 +7,10 @@ import (
 )
 
 // InsertMetricSnapshot records a point-in-time host resource snapshot.
-func (s *Store) InsertMetricSnapshot(cpu, mem, temp, disk float64) error {
+func (s *Store) InsertMetricSnapshot(cpu, mem, temp, disk float64, fanRPM, fanPercent int) error {
 	_, err := s.db.Exec(
-		`INSERT INTO metric_snapshots (cpu_percent, mem_percent, temp_c, disk_percent)
-		 VALUES (?, ?, ?, ?)`, cpu, mem, temp, disk)
+		`INSERT INTO metric_snapshots (cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent)
+		 VALUES (?, ?, ?, ?, ?, ?)`, cpu, mem, temp, disk, fanRPM, fanPercent)
 	return err
 }
 
@@ -19,7 +19,7 @@ func (s *Store) GetMetricSnapshots(since time.Time, maxRows int) ([]model.Metric
 	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
 
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, cpu_percent, mem_percent, temp_c, disk_percent
+		`SELECT id, timestamp, cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent
 		 FROM metric_snapshots WHERE timestamp >= ?
 		 ORDER BY timestamp ASC`, sinceStr)
 	if err != nil {
@@ -31,7 +31,7 @@ func (s *Store) GetMetricSnapshots(since time.Time, maxRows int) ([]model.Metric
 	for rows.Next() {
 		var snap model.MetricSnapshot
 		var ts string
-		if err := rows.Scan(&snap.ID, &ts, &snap.CPUPercent, &snap.MemPercent, &snap.TempC, &snap.DiskPercent); err != nil {
+		if err := rows.Scan(&snap.ID, &ts, &snap.CPUPercent, &snap.MemPercent, &snap.TempC, &snap.DiskPercent, &snap.FanRPM, &snap.FanPercent); err != nil {
 			continue
 		}
 		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
