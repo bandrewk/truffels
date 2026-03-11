@@ -525,6 +525,7 @@ function MonitorTab({ id }: { id: string }) {
 
   const containers = data?.containers ?? []
   const snapshots = data?.snapshots ?? []
+  const current = data?.current ?? []
 
   const cpuData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.cpu_percent), [snapshots, containers])
   const memData = useMemo(() => buildTimeSeries(snapshots, containers, s => s.mem_usage_mb), [snapshots, containers])
@@ -605,6 +606,41 @@ function MonitorTab({ id }: { id: string }) {
           formatter={(v) => formatDataSize(v * 1024 * 1024)}
         />
       </div>
+
+      {/* Current stats info panel */}
+      {current.length > 0 && (
+        <Card>
+          <CardTitle>Current Totals (since container start)</CardTitle>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-border-subtle">
+                  <th className="pb-2 pr-4">Container</th>
+                  <th className="pb-2 pr-4">CPU</th>
+                  <th className="pb-2 pr-4">Memory</th>
+                  <th className="pb-2 pr-4">Net RX</th>
+                  <th className="pb-2 pr-4">Net TX</th>
+                  <th className="pb-2 pr-4">Disk Read</th>
+                  <th className="pb-2">Disk Write</th>
+                </tr>
+              </thead>
+              <tbody>
+                {current.map((c) => (
+                  <tr key={c.name} className="border-b border-border-subtle last:border-0">
+                    <td className="py-2 pr-4 font-mono text-gray-300 text-xs">{c.name.replace(/^truffels-/, '')}</td>
+                    <td className="py-2 pr-4 text-gray-300 font-mono">{c.cpu_percent.toFixed(1)}%</td>
+                    <td className="py-2 pr-4 text-gray-300 font-mono">{c.mem_usage_mb.toFixed(0)} / {c.mem_limit_mb.toFixed(0)} MB</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">{formatDataSize(c.net_rx_bytes)}</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">{formatDataSize(c.net_tx_bytes)}</td>
+                    <td className="py-2 pr-4 text-gray-400 font-mono">{formatDataSize(c.block_read_bytes)}</td>
+                    <td className="py-2 text-gray-400 font-mono">{formatDataSize(c.block_write_bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
