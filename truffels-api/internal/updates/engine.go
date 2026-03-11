@@ -23,16 +23,18 @@ type Engine struct {
 	triggerCh chan struct{}
 	mu       sync.Mutex
 	updating map[string]bool // services currently being updated
+	healthWait time.Duration  // wait before health check (default 30s)
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *docker.ComposeClient) *Engine {
 	return &Engine{
-		store:     s,
-		registry:  r,
-		compose:   c,
-		stopCh:    make(chan struct{}),
-		triggerCh: make(chan struct{}, 1),
-		updating:  make(map[string]bool),
+		store:      s,
+		registry:   r,
+		compose:    c,
+		stopCh:     make(chan struct{}),
+		triggerCh:  make(chan struct{}, 1),
+		updating:   make(map[string]bool),
+		healthWait: 30 * time.Second,
 	}
 }
 
@@ -415,8 +417,8 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		return &UpdateError{Msg: "start failed, rolled back: " + err.Error()}
 	}
 
-	// Step 3: Wait for health check (30s)
-	time.Sleep(30 * time.Second)
+	// Step 3: Wait for health check
+	time.Sleep(e.healthWait)
 
 	healthy := e.checkHealth(tmpl)
 	if !healthy {

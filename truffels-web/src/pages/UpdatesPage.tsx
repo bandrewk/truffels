@@ -4,6 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { truncDigest, formatTime, logStatusMap } from '@/lib/updates'
 
 function DockerIcon() {
   return (
@@ -84,19 +85,6 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
       {icon}
     </a>
   )
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function truncDigest(v: string): string {
-  if (!v) return '—'
-  if (v.startsWith('sha256:')) return v.slice(0, 19) + '…'
-  return v
 }
 
 export default function UpdatesPage() {
@@ -453,14 +441,3 @@ export default function UpdatesPage() {
   )
 }
 
-function logStatusMap(status: string): string {
-  switch (status) {
-    case 'done': return 'running'
-    case 'failed': return 'critical'
-    case 'rolled_back': return 'warning'
-    case 'pulling':
-    case 'building':
-    case 'restarting': return 'degraded'
-    default: return 'unknown'
-  }
-}
