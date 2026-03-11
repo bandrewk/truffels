@@ -283,6 +283,7 @@ export default function MonitoringPage() {
                     <YAxis
                       yAxisId="fan"
                       orientation="right"
+                      domain={[0, 100]}
                       tick={{ fill: '#6b7280', fontSize: 11 }}
                       axisLine={false}
                       tickLine={false}
@@ -292,7 +293,7 @@ export default function MonitoringPage() {
                       labelFormatter={formatTimestamp}
                       formatter={(value: number, name: string) => {
                         if (name === 'temp_c') return [`${value.toFixed(1)}°C`, 'Temp']
-                        if (name === 'fan_rpm') return [`${value} RPM`, 'Fan']
+                        if (name === 'fan_percent') return [`${value}%`, 'Fan']
                         return [value, name]
                       }}
                     />
@@ -310,7 +311,7 @@ export default function MonitoringPage() {
                     <Area
                       yAxisId="fan"
                       type="monotone"
-                      dataKey="fan_rpm"
+                      dataKey="fan_percent"
                       stroke={CHART_COLORS.fan}
                       fill={CHART_COLORS.fan}
                       fillOpacity={0.08}
@@ -327,7 +328,7 @@ export default function MonitoringPage() {
                 <span>Avg: <span className="text-gray-200 font-mono">{metrics.summary.temp_avg.toFixed(1)}°C</span></span>
                 <span>Peak: <span className="text-gray-200 font-mono">{metrics.summary.temp_max.toFixed(1)}°C</span></span>
                 <span className="ml-2" style={{ color: CHART_COLORS.fan }}>Fan:</span>
-                <span>Current: <span className="text-gray-200 font-mono">{metrics.current.fan_rpm} RPM</span></span>
+                <span>Current: <span className="text-gray-200 font-mono">{metrics.current.fan_percent}%</span></span>
               </div>
             </>
           )}
