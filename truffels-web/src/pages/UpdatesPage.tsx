@@ -214,7 +214,12 @@ export default function UpdatesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Updates</h1>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-3">
+          {checkMsg && (
+            <span className={`text-sm ${checkMsg.includes('available') ? 'text-accent' : 'text-green-400'}`}>
+              {checkMsg}
+            </span>
+          )}
           <button
             onClick={handleCheck}
             disabled={actionPending !== null}
@@ -230,11 +235,6 @@ export default function UpdatesPage() {
             >
               {actionPending === 'all' ? 'Updating...' : `Update All (${pendingCount})`}
             </button>
-          )}
-          {checkMsg && (
-            <span className={`text-sm ${checkMsg.includes('available') ? 'text-accent' : 'text-green-400'}`}>
-              {checkMsg}
-            </span>
           )}
         </div>
       </div>
