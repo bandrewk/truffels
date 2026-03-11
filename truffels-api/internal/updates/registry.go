@@ -20,6 +20,15 @@ func CheckLatestVersion(src *model.UpdateSource) (string, error) {
 			return "", fmt.Errorf("no images configured")
 		}
 		return checkDockerHub(src.Images[0], src.TagFilter)
+	case model.SourceDockerDigest:
+		if len(src.Images) == 0 {
+			return "", fmt.Errorf("no images configured")
+		}
+		tag := src.TagFilter
+		if tag == "" {
+			tag = "latest"
+		}
+		return checkDockerDigest(src.Images[0], tag)
 	case model.SourceGitHub:
 		return checkGitHub(src.Repo, src.Branch)
 	case model.SourceBitbucket:
@@ -80,6 +89,63 @@ func checkDockerHub(image string, tagFilter string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no suitable tags found for %s", image)
+}
+
+// checkDockerDigest queries the Docker Hub registry v2 API for the remote manifest digest.
+// This allows detecting image updates for floating tags (e.g. mariadb:lts) by comparing
+// the remote digest against the locally running image digest.
+func checkDockerDigest(image, tag string) (string, error) {
+	// Official images need "library/" prefix for the registry API
+	repo := image
+	if !strings.Contains(image, "/") {
+		repo = "library/" + image
+	}
+
+	// Step 1: Get auth token (anonymous, no credentials needed for public images)
+	tokenURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", repo)
+	tokenResp, err := httpClient.Get(tokenURL)
+	if err != nil {
+		return "", fmt.Errorf("docker registry auth: %w", err)
+	}
+	defer tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != 200 {
+		return "", fmt.Errorf("docker registry auth: HTTP %d", tokenResp.StatusCode)
+	}
+
+	var tokenResult struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenResult); err != nil {
+		return "", fmt.Errorf("docker registry auth decode: %w", err)
+	}
+
+	// Step 2: HEAD the manifest to get the remote digest
+	manifestURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", repo, tag)
+	req, _ := http.NewRequest("HEAD", manifestURL, nil)
+	req.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+
+	manifestResp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("docker registry manifest: %w", err)
+	}
+	defer manifestResp.Body.Close()
+
+	if manifestResp.StatusCode != 200 {
+		return "", fmt.Errorf("docker registry manifest: HTTP %d for %s:%s", manifestResp.StatusCode, image, tag)
+	}
+
+	digest := manifestResp.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		return "", fmt.Errorf("docker registry: no digest header for %s:%s", image, tag)
+	}
+
+	return digest, nil
 }
 
 // checkGitHub returns the latest commit SHA on a branch.
@@ -206,6 +272,9 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 			return name[idx+1:]
 		}
 		return "unknown"
+	case model.SourceDockerDigest:
+		// Digest is extracted directly in checkService via ImageInspect
+		return ""
 	case model.SourceGitHub, model.SourceBitbucket:
 		// For custom builds, current version is stored in update_checks
 		return ""

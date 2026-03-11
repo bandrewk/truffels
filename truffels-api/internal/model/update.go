@@ -17,9 +17,10 @@ const (
 type SourceType string
 
 const (
-	SourceDockerHub  SourceType = "dockerhub"
-	SourceGitHub     SourceType = "github"
-	SourceBitbucket  SourceType = "bitbucket"
+	SourceDockerHub    SourceType = "dockerhub"
+	SourceDockerDigest SourceType = "docker_digest"
+	SourceGitHub       SourceType = "github"
+	SourceBitbucket    SourceType = "bitbucket"
 )
 
 // UpdateSource defines where a service gets its updates from.

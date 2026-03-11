@@ -101,6 +101,9 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		info, err := e.compose.ImageInspect(tmpl.ContainerNames[0])
 		if err != nil {
 			slog.Warn("update check: cannot inspect image", "service", tmpl.ID, "err", err)
+		} else if src.Type == model.SourceDockerDigest {
+			// For digest-based checks, use the local image digest directly
+			currentVersion = info.Digest
 		} else {
 			currentVersion = ExtractCurrentVersion(src, info.Image)
 		}
@@ -356,7 +359,18 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	}
 
 	// Step 1: Pull or build
-	if src.NeedsBuild {
+	if tmpl.FloatingTag {
+		// Floating-tag: pull the same tag (gets new image layers)
+		e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
+		for _, img := range src.Images {
+			pullRef := img + ":" + src.TagFilter
+			if _, err := e.compose.Pull(pullRef); err != nil {
+				e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+				return &UpdateError{Msg: "pull failed: " + err.Error()}
+			}
+		}
+		// No compose file rewrite needed — tag stays the same
+	} else if src.NeedsBuild {
 		e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
 		if err := e.compose.Build(serviceID); err != nil {
 			e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
@@ -373,8 +387,8 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		}
 	}
 
-	// Step 1b: Update compose file image tags
-	if !src.NeedsBuild {
+	// Step 1b: Update compose file image tags (skip for floating-tag and custom builds)
+	if !src.NeedsBuild && !tmpl.FloatingTag {
 		composePath := tmpl.ComposeDir + "/docker-compose.yml"
 		if err := updateComposeImageTags(composePath, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 			e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
@@ -390,7 +404,11 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		return &UpdateError{Msg: "stop failed: " + err.Error()}
 	}
 	if err := e.compose.Up(serviceID); err != nil {
-		// Attempt rollback
+		if tmpl.FloatingTag {
+			// No rollback possible for floating tags — old image is overwritten
+			e.store.UpdateLogStatus(logID, model.UpdateFailed, "start failed (no rollback for floating tag): "+err.Error(), "")
+			return &UpdateError{Msg: "start failed: " + err.Error()}
+		}
 		slog.Error("update: start failed, rolling back", "service", serviceID, "err", err)
 		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
 		e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "start failed: "+err.Error(), check.CurrentVersion)
@@ -402,6 +420,10 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 
 	healthy := e.checkHealth(tmpl)
 	if !healthy {
+		if tmpl.FloatingTag {
+			e.store.UpdateLogStatus(logID, model.UpdateFailed, "unhealthy after update (no rollback for floating tag)", "")
+			return &UpdateError{Msg: "service unhealthy after update, no rollback available for floating tag"}
+		}
 		slog.Error("update: service unhealthy after update, rolling back", "service", serviceID)
 		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
 		e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "unhealthy after update", check.CurrentVersion)

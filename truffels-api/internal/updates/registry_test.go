@@ -303,3 +303,96 @@ func TestCheckLatestVersion_UnknownSourceType(t *testing.T) {
 		t.Errorf("expected 'unknown source type' error, got: %v", err)
 	}
 }
+
+// ---------- DockerDigest ----------
+
+func TestExtractCurrentVersion_DockerDigest(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceDockerDigest}
+	got := ExtractCurrentVersion(src, "mariadb:lts")
+	if got != "" {
+		t.Errorf("expected empty (digest handled in engine), got %q", got)
+	}
+}
+
+func TestCheckLatestVersion_DockerDigest_Success(t *testing.T) {
+	expectedDigest := "sha256:abc123def456789012345678901234567890123456789012345678901234"
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if strings.Contains(r.URL.Path, "/token") || strings.Contains(r.URL.RawQuery, "token") {
+			// Token endpoint
+			json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			return
+		}
+		// Manifest HEAD endpoint
+		if r.Method == "HEAD" {
+			w.Header().Set("Docker-Content-Digest", expectedDigest)
+			w.WriteHeader(200)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type:      model.SourceDockerDigest,
+		Images:    []string{"mariadb"},
+		TagFilter: "lts",
+	}
+	got, err := CheckLatestVersion(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != expectedDigest {
+		t.Errorf("expected %s, got %s", expectedDigest, got)
+	}
+}
+
+func TestCheckLatestVersion_DockerDigest_NoImages(t *testing.T) {
+	src := &model.UpdateSource{
+		Type:   model.SourceDockerDigest,
+		Images: []string{},
+	}
+	_, err := CheckLatestVersion(src)
+	if err == nil {
+		t.Fatal("expected error for no images")
+	}
+}
+
+func TestCheckLatestVersion_DockerDigest_DefaultTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/token") || strings.Contains(r.URL.RawQuery, "token") {
+			json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			return
+		}
+		// Verify we're requesting "latest" tag
+		if r.Method == "HEAD" && strings.Contains(r.URL.Path, "/manifests/latest") {
+			w.Header().Set("Docker-Content-Digest", "sha256:test")
+			w.WriteHeader(200)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type:   model.SourceDockerDigest,
+		Images: []string{"nginx"},
+		// TagFilter empty — should default to "latest"
+	}
+	got, err := CheckLatestVersion(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "sha256:test" {
+		t.Errorf("expected sha256:test, got %s", got)
+	}
+}
