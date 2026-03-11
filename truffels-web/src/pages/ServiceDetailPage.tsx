@@ -94,9 +94,6 @@ export default function ServiceDetailPage() {
             <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
           </>
         )}
-        {!svc.template.update_source && svc.state === 'running' && (
-          <ActionButton label="Pull & Restart" variant="restart" onClick={() => doAction('pull-restart')} disabled={actionLoading} />
-        )}
         {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
       </div>
 

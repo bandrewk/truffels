@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { api, PreflightResult, UpdateCheck, UpdateLog, UpdateSource } from '@/lib/api'
+import { api, FloatingService, PreflightResult, UpdateCheck, UpdateLog, UpdateSource } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -101,6 +101,9 @@ export default function UpdatesPage() {
   const [actionPending, setActionPending] = useState<string | null>(null)
   const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null)
   const [preflightLoading, setPreflightLoading] = useState<string | null>(null)
+  const [pullRestartTarget, setPullRestartTarget] = useState<FloatingService | null>(null)
+  const [pullRestartMsg, setPullRestartMsg] = useState<string | null>(null)
+  const [showUpdateAllConfirm, setShowUpdateAllConfirm] = useState(false)
 
   async function handleCheck() {
     setActionPending('check')
@@ -147,12 +150,34 @@ export default function UpdatesPage() {
     }
   }
 
+  async function handlePullRestart() {
+    if (!pullRestartTarget) return
+    const serviceId = pullRestartTarget.id
+    setPullRestartTarget(null)
+    setActionPending(serviceId)
+    setPullRestartMsg(null)
+    try {
+      const result = await api.serviceAction(serviceId, 'pull-restart')
+      if (result.status === 'already_up_to_date') {
+        setPullRestartMsg(`${serviceId}: image already up to date — no restart needed`)
+      } else {
+        setPullRestartMsg(`${serviceId}: pulled and restarted`)
+      }
+      setTimeout(() => { refreshStatus(); refreshLogs() }, 5000)
+    } catch (e: any) {
+      setPullRestartMsg(`${serviceId}: error — ${e.message}`)
+    } finally {
+      setActionPending(null)
+    }
+  }
+
   if (loading) return <div className="text-gray-400">Loading...</div>
 
   const checks = status?.checks || []
   const updating = status?.updating || {}
   const pendingCount = status?.pending_count || 0
   const sources = status?.sources || {}
+  const floatingServices = status?.floating_services || []
 
   return (
     <div className="space-y-6">
@@ -168,7 +193,7 @@ export default function UpdatesPage() {
           </button>
           {pendingCount > 0 && (
             <button
-              onClick={handleApplyAll}
+              onClick={() => setShowUpdateAllConfirm(true)}
               disabled={actionPending !== null}
               className="px-4 py-2 text-sm rounded bg-accent/20 hover:bg-accent/30 text-accent transition-colors disabled:opacity-50"
             >
@@ -242,6 +267,89 @@ export default function UpdatesPage() {
           </Card>
         )}
       </div>
+
+      {/* Floating Tag Services */}
+      {floatingServices.length > 0 && (
+        <div className="space-y-3">
+          {floatingServices.map((fs) => (
+            <Card key={fs.id}>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-gray-200">{fs.display_name}</span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                      floating tag
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Uses a floating Docker tag — pull to check for newer image layers
+                  </p>
+                  {pullRestartMsg?.startsWith(fs.id) && (
+                    <p className={`text-xs mt-1 ${pullRestartMsg.includes('error') ? 'text-red-400' : 'text-green-400'}`}>
+                      {pullRestartMsg.replace(`${fs.id}: `, '')}
+                    </p>
+                  )}
+                </div>
+                <div className="flex-shrink-0">
+                  <button
+                    onClick={() => setPullRestartTarget(fs)}
+                    disabled={actionPending !== null}
+                    className="px-3 py-1.5 text-sm rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 transition-colors disabled:opacity-50"
+                  >
+                    {actionPending === fs.id ? 'Pulling...' : 'Pull & Restart'}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Pull & Restart Confirmation Dialog */}
+      <ConfirmDialog
+        open={pullRestartTarget !== null}
+        title={`Pull & Restart ${pullRestartTarget?.display_name}?`}
+        onConfirm={handlePullRestart}
+        onCancel={() => setPullRestartTarget(null)}
+        confirmLabel="Pull & Restart"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-400">
+            This will pull the latest image for <span className="text-gray-200 font-medium">{pullRestartTarget?.display_name}</span> and
+            restart the container if the image changed.
+          </p>
+          <p className="text-sm text-yellow-400">
+            This service shares a compose stack with its parent — other containers in the stack may also be recreated.
+          </p>
+        </div>
+      </ConfirmDialog>
+
+      {/* Update All Confirmation Dialog */}
+      <ConfirmDialog
+        open={showUpdateAllConfirm}
+        title={`Update all ${pendingCount} services?`}
+        onConfirm={() => { setShowUpdateAllConfirm(false); handleApplyAll() }}
+        onCancel={() => setShowUpdateAllConfirm(false)}
+        confirmLabel="Update All"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-400">
+            This will update the following services sequentially:
+          </p>
+          <ul className="text-sm text-gray-300 space-y-1">
+            {checks.filter(c => c.has_update && !c.error).map(c => (
+              <li key={c.service_id} className="flex items-center gap-2">
+                <span className="text-accent">&#8226;</span>
+                <span className="font-medium">{c.service_id}</span>
+                <span className="text-gray-500 font-mono text-xs">{c.current_version} &rarr; {c.latest_version}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-sm text-yellow-400">
+            Each service will be restarted. Health checks run automatically — failed updates are rolled back.
+          </p>
+        </div>
+      </ConfirmDialog>
 
       {/* Preflight Confirmation Dialog */}
       <ConfirmDialog

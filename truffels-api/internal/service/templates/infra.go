@@ -21,12 +21,13 @@ var Proxy = model.ServiceTemplate{
 var MempoolDB = model.ServiceTemplate{
 	ID:             "mempool-db",
 	DisplayName:    "mempool.space DB",
-	Description:    "MariaDB database for mempool (mariadb:lts floating tag)",
+	Description:    "MariaDB database for mempool",
 	ComposeDir:     "mempool",
 	ContainerNames: []string{"truffels-mempool-db"},
 	Dependencies:   nil,
 	MemoryLimit:    "512M",
 	ReadOnly:       true,
+	FloatingTag:    true,
 	// No UpdateSource: mariadb:lts is a floating tag — version comparison
 	// is meaningless. Pull manually: docker compose pull && docker compose up -d
 }
