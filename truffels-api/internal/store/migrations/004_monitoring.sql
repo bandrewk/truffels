@@ -1,12 +1,17 @@
 CREATE TABLE IF NOT EXISTS metric_snapshots (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp    TEXT NOT NULL DEFAULT (datetime('now')),
-    cpu_percent  REAL NOT NULL,
-    mem_percent  REAL NOT NULL,
-    temp_c       REAL NOT NULL,
-    disk_percent REAL NOT NULL,
-    fan_rpm      INTEGER NOT NULL DEFAULT 0,
-    fan_percent  INTEGER NOT NULL DEFAULT 0
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp        TEXT NOT NULL DEFAULT (datetime('now')),
+    cpu_percent      REAL NOT NULL,
+    mem_percent      REAL NOT NULL,
+    temp_c           REAL NOT NULL,
+    disk_percent     REAL NOT NULL,
+    fan_rpm          INTEGER NOT NULL DEFAULT 0,
+    fan_percent      INTEGER NOT NULL DEFAULT 0,
+    net_rx_bytes     INTEGER NOT NULL DEFAULT 0,
+    net_tx_bytes     INTEGER NOT NULL DEFAULT 0,
+    disk_read_bytes  INTEGER NOT NULL DEFAULT 0,
+    disk_write_bytes INTEGER NOT NULL DEFAULT 0,
+    disk_io_percent  REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_metric_snapshots_ts ON metric_snapshots(timestamp);
 

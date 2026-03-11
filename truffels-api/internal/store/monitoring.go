@@ -7,10 +7,10 @@ import (
 )
 
 // InsertMetricSnapshot records a point-in-time host resource snapshot.
-func (s *Store) InsertMetricSnapshot(cpu, mem, temp, disk float64, fanRPM, fanPercent int) error {
+func (s *Store) InsertMetricSnapshot(cpu, mem, temp, disk float64, fanRPM, fanPercent int, netRx, netTx, diskRead, diskWrite int64, diskIO float64) error {
 	_, err := s.db.Exec(
-		`INSERT INTO metric_snapshots (cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent)
-		 VALUES (?, ?, ?, ?, ?, ?)`, cpu, mem, temp, disk, fanRPM, fanPercent)
+		`INSERT INTO metric_snapshots (cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent, net_rx_bytes, net_tx_bytes, disk_read_bytes, disk_write_bytes, disk_io_percent)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, cpu, mem, temp, disk, fanRPM, fanPercent, netRx, netTx, diskRead, diskWrite, diskIO)
 	return err
 }
 
@@ -19,7 +19,8 @@ func (s *Store) GetMetricSnapshots(since time.Time, maxRows int) ([]model.Metric
 	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
 
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent
+		`SELECT id, timestamp, cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent,
+		        net_rx_bytes, net_tx_bytes, disk_read_bytes, disk_write_bytes, disk_io_percent
 		 FROM metric_snapshots WHERE timestamp >= ?
 		 ORDER BY timestamp ASC`, sinceStr)
 	if err != nil {
@@ -31,7 +32,8 @@ func (s *Store) GetMetricSnapshots(since time.Time, maxRows int) ([]model.Metric
 	for rows.Next() {
 		var snap model.MetricSnapshot
 		var ts string
-		if err := rows.Scan(&snap.ID, &ts, &snap.CPUPercent, &snap.MemPercent, &snap.TempC, &snap.DiskPercent, &snap.FanRPM, &snap.FanPercent); err != nil {
+		if err := rows.Scan(&snap.ID, &ts, &snap.CPUPercent, &snap.MemPercent, &snap.TempC, &snap.DiskPercent, &snap.FanRPM, &snap.FanPercent,
+			&snap.NetRxBytes, &snap.NetTxBytes, &snap.DiskReadBytes, &snap.DiskWriteBytes, &snap.DiskIOPercent); err != nil {
 			continue
 		}
 		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -77,15 +79,15 @@ func (s *Store) InsertContainerSnapshots(snaps []model.ContainerSnapshot) error 
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO container_snapshots (container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes)
-		 VALUES (?, ?, ?, ?, ?, ?)`)
+		`INSERT INTO container_snapshots (container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, snap := range snaps {
-		if _, err := stmt.Exec(snap.Container, snap.CPUPercent, snap.MemUsageMB, snap.MemLimitMB, snap.NetRxBytes, snap.NetTxBytes); err != nil {
+		if _, err := stmt.Exec(snap.Container, snap.CPUPercent, snap.MemUsageMB, snap.MemLimitMB, snap.NetRxBytes, snap.NetTxBytes, snap.BlockReadBytes, snap.BlockWriteBytes); err != nil {
 			return err
 		}
 	}
@@ -97,7 +99,7 @@ func (s *Store) GetContainerSnapshots(since time.Time, maxRows int) ([]model.Con
 	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
 
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes
+		`SELECT id, timestamp, container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes
 		 FROM container_snapshots WHERE timestamp >= ?
 		 ORDER BY timestamp ASC`, sinceStr)
 	if err != nil {
@@ -109,7 +111,7 @@ func (s *Store) GetContainerSnapshots(since time.Time, maxRows int) ([]model.Con
 	for rows.Next() {
 		var snap model.ContainerSnapshot
 		var ts string
-		if err := rows.Scan(&snap.ID, &ts, &snap.Container, &snap.CPUPercent, &snap.MemUsageMB, &snap.MemLimitMB, &snap.NetRxBytes, &snap.NetTxBytes); err != nil {
+		if err := rows.Scan(&snap.ID, &ts, &snap.Container, &snap.CPUPercent, &snap.MemUsageMB, &snap.MemLimitMB, &snap.NetRxBytes, &snap.NetTxBytes, &snap.BlockReadBytes, &snap.BlockWriteBytes); err != nil {
 			continue
 		}
 		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)

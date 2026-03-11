@@ -83,7 +83,8 @@ func (e *Engine) evaluate() {
 		if len(host.Disks) > 0 {
 			diskPercent = host.Disks[0].UsedPercent
 		}
-		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent, host.FanRPM, host.FanPercent); err != nil {
+		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent, host.FanRPM, host.FanPercent,
+			host.NetRxBytes, host.NetTxBytes, host.DiskReadBytes, host.DiskWriteBytes, host.DiskIOPercent); err != nil {
 			slog.Error("insert metric snapshot", "err", err)
 		}
 
@@ -94,12 +95,14 @@ func (e *Engine) evaluate() {
 			snaps := make([]model.ContainerSnapshot, len(stats))
 			for i, s := range stats {
 				snaps[i] = model.ContainerSnapshot{
-					Container:  s.Name,
-					CPUPercent: s.CPUPercent,
-					MemUsageMB: s.MemUsageMB,
-					MemLimitMB: s.MemLimitMB,
-					NetRxBytes: s.NetRxBytes,
-					NetTxBytes: s.NetTxBytes,
+					Container:       s.Name,
+					CPUPercent:      s.CPUPercent,
+					MemUsageMB:      s.MemUsageMB,
+					MemLimitMB:      s.MemLimitMB,
+					NetRxBytes:      s.NetRxBytes,
+					NetTxBytes:      s.NetTxBytes,
+					BlockReadBytes:  s.BlockReadBytes,
+					BlockWriteBytes: s.BlockWriteBytes,
 				}
 			}
 			if err := e.store.InsertContainerSnapshots(snaps); err != nil {

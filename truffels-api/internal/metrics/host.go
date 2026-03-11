@@ -19,10 +19,20 @@ type Collector struct {
 	// cached CPU stats for delta calculation
 	lastCPU     cpuStat
 	lastCPUTime time.Time
+
+	// cached disk I/O stats for delta calculation
+	lastDiskIO     diskIOStat
+	lastDiskIOTime time.Time
 }
 
 type cpuStat struct {
 	user, nice, system, idle, iowait, irq, softirq int64
+}
+
+type diskIOStat struct {
+	sectorsRead  int64
+	sectorsWrite int64
+	ioMs         int64 // ms spent doing I/O
 }
 
 func NewCollector(procPath, sysPath, diskPath string) *Collector {
@@ -31,9 +41,12 @@ func NewCollector(procPath, sysPath, diskPath string) *Collector {
 		sysPath:  sysPath,
 		diskPath: diskPath,
 	}
-	// Prime the CPU stats
+	// Prime the CPU and disk I/O stats
 	c.lastCPU, _ = c.readCPUStat()
-	c.lastCPUTime = time.Now()
+	c.lastDiskIO, _ = c.readDiskIOStat()
+	now := time.Now()
+	c.lastCPUTime = now
+	c.lastDiskIOTime = now
 	return c
 }
 
@@ -46,6 +59,8 @@ func (c *Collector) Collect() model.HostMetrics {
 	m.FanRPM, m.FanPercent = c.collectFan()
 	m.Disks = c.collectDisk()
 	m.UptimeSeconds = c.collectUptime()
+	m.NetRxBytes, m.NetTxBytes = c.collectNetIO()
+	m.DiskReadBytes, m.DiskWriteBytes, m.DiskIOPercent = c.collectDiskIO()
 
 	return m
 }
@@ -191,4 +206,93 @@ func (c *Collector) collectUptime() float64 {
 	}
 	v, _ := strconv.ParseFloat(fields[0], 64)
 	return v
+}
+
+// collectNetIO reads cumulative rx/tx bytes from /proc/net/dev.
+// Returns total across all physical interfaces (excludes lo, docker, veth, br-).
+func (c *Collector) collectNetIO() (rxBytes, txBytes int64) {
+	data, err := os.ReadFile(c.procPath + "/net/dev")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		// Skip header lines and virtual interfaces
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		iface := strings.TrimSpace(parts[0])
+		if iface == "lo" || strings.HasPrefix(iface, "docker") ||
+			strings.HasPrefix(iface, "veth") || strings.HasPrefix(iface, "br-") {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 10 {
+			continue
+		}
+		rx, _ := strconv.ParseInt(fields[0], 10, 64)
+		tx, _ := strconv.ParseInt(fields[8], 10, 64)
+		rxBytes += rx
+		txBytes += tx
+	}
+	return rxBytes, txBytes
+}
+
+// readDiskIOStat reads NVMe disk I/O counters from /proc/diskstats.
+func (c *Collector) readDiskIOStat() (diskIOStat, error) {
+	data, err := os.ReadFile(c.procPath + "/diskstats")
+	if err != nil {
+		return diskIOStat{}, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		// diskstats format: major minor name reads_completed reads_merged sectors_read ms_reading
+		//                   writes_completed writes_merged sectors_written ms_writing ios_in_progress ms_doing_io ...
+		if len(fields) < 14 {
+			continue
+		}
+		name := fields[2]
+		// Match the whole disk device, not partitions
+		if name != "nvme0n1" && name != "sda" && name != "mmcblk0" {
+			continue
+		}
+		var s diskIOStat
+		s.sectorsRead, _ = strconv.ParseInt(fields[5], 10, 64)
+		s.sectorsWrite, _ = strconv.ParseInt(fields[9], 10, 64)
+		s.ioMs, _ = strconv.ParseInt(fields[12], 10, 64)
+		return s, nil
+	}
+	return diskIOStat{}, fmt.Errorf("disk device not found in diskstats")
+}
+
+// collectDiskIO returns cumulative read/write bytes and I/O utilization %.
+func (c *Collector) collectDiskIO() (readBytes, writeBytes int64, ioPercent float64) {
+	cur, err := c.readDiskIOStat()
+	if err != nil {
+		return 0, 0, 0
+	}
+
+	prev := c.lastDiskIO
+	elapsed := time.Since(c.lastDiskIOTime)
+	c.lastDiskIO = cur
+	c.lastDiskIOTime = time.Now()
+
+	// Cumulative bytes (sector = 512 bytes)
+	readBytes = cur.sectorsRead * 512
+	writeBytes = cur.sectorsWrite * 512
+
+	// I/O utilization: delta ioMs / delta wall time
+	if elapsed.Milliseconds() > 0 {
+		deltaIO := cur.ioMs - prev.ioMs
+		ioPercent = float64(deltaIO) / float64(elapsed.Milliseconds()) * 100
+		if ioPercent > 100 {
+			ioPercent = 100
+		}
+		if ioPercent < 0 {
+			ioPercent = 0
+		}
+	}
+
+	return readBytes, writeBytes, ioPercent
 }

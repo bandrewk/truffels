@@ -10,10 +10,10 @@ import (
 func TestInsertAndGetMetricSnapshots(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.InsertMetricSnapshot(50.0, 60.0, 55.0, 70.0, 3000, 50); err != nil {
+	if err := s.InsertMetricSnapshot(50.0, 60.0, 55.0, 70.0, 3000, 50, 1000000, 2000000, 500000, 600000, 5.5); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.InsertMetricSnapshot(55.0, 65.0, 58.0, 72.0, 3500, 60); err != nil {
+	if err := s.InsertMetricSnapshot(55.0, 65.0, 58.0, 72.0, 3500, 60, 1100000, 2100000, 510000, 610000, 6.0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -33,7 +33,7 @@ func TestMetricSnapshots_Downsample(t *testing.T) {
 	s := newTestStore(t)
 
 	for i := 0; i < 20; i++ {
-		if err := s.InsertMetricSnapshot(float64(i), 50, 55, 70, 3000, 50); err != nil {
+		if err := s.InsertMetricSnapshot(float64(i), 50, 55, 70, 3000, 50, 0, 0, 0, 0, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestMetricSnapshots_Downsample(t *testing.T) {
 func TestPruneMetricSnapshots(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.InsertMetricSnapshot(50, 60, 55, 70, 3000, 50); err != nil {
+	if err := s.InsertMetricSnapshot(50, 60, 55, 70, 3000, 50, 0, 0, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 

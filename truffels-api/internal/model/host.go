@@ -10,6 +10,11 @@ type HostMetrics struct {
 	FanPercent    int         `json:"fan_percent"`
 	Disks         []DiskUsage `json:"disks"`
 	UptimeSeconds float64     `json:"uptime_seconds"`
+	NetRxBytes    int64       `json:"net_rx_bytes"`
+	NetTxBytes    int64       `json:"net_tx_bytes"`
+	DiskReadBytes  int64      `json:"disk_read_bytes"`
+	DiskWriteBytes int64      `json:"disk_write_bytes"`
+	DiskIOPercent  float64    `json:"disk_io_percent"`
 }
 
 type DiskUsage struct {

@@ -360,12 +360,14 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 // --- Container Stats ---
 
 type containerStats struct {
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemUsageMB  float64 `json:"mem_usage_mb"`
-	MemLimitMB  float64 `json:"mem_limit_mb"`
-	NetRxBytes  int64   `json:"net_rx_bytes"`
-	NetTxBytes  int64   `json:"net_tx_bytes"`
+	Name           string  `json:"name"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemUsageMB     float64 `json:"mem_usage_mb"`
+	MemLimitMB     float64 `json:"mem_limit_mb"`
+	NetRxBytes     int64   `json:"net_rx_bytes"`
+	NetTxBytes     int64   `json:"net_tx_bytes"`
+	BlockReadBytes  int64  `json:"block_read_bytes"`
+	BlockWriteBytes int64  `json:"block_write_bytes"`
 }
 
 type dockerStatsJSON struct {
@@ -373,6 +375,7 @@ type dockerStatsJSON struct {
 	CPUPerc  string `json:"CPUPerc"`
 	MemUsage string `json:"MemUsage"`
 	NetIO    string `json:"NetIO"`
+	BlockIO  string `json:"BlockIO"`
 }
 
 func handleStats(w http.ResponseWriter, r *http.Request) {
@@ -411,6 +414,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 		cs.CPUPercent = parsePercent(ds.CPUPerc)
 		cs.MemUsageMB, cs.MemLimitMB = parseMemUsage(ds.MemUsage)
 		cs.NetRxBytes, cs.NetTxBytes = parseNetIO(ds.NetIO)
+		cs.BlockReadBytes, cs.BlockWriteBytes = parseNetIO(ds.BlockIO) // same "X / Y" format
 		results = append(results, cs)
 	}
 
