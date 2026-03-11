@@ -71,7 +71,7 @@ All product data lives under `/srv/truffels/` on NVMe:
 
 The host provides only: boot, kernel, networking, Docker, systemd, journald, nftables, SSH, SPI/GPIO. Product logic must not live on the host. Memory cgroups must be enabled before Docker installation.
 
-## Current System State (as of 2026-03-10)
+## Current System State (as of 2026-03-11)
 
 - **Host:** Raspberry Pi 5 8GB, Raspberry Pi OS Lite 64-bit, booting from NVMe
 - **Docker:** 29.3.0 (official APT repo), daemon configured with live-restore and local log driver
@@ -79,16 +79,16 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Directory layout:** `/srv/truffels/` created per spec
 - **Networks:** `bitcoin-backend` (172.20.0.0/24), `truffels-edge` (172.21.0.0/24)
 - **Running containers (13):**
-  - `truffels-bitcoind` — Bitcoin Core 29.0 (btcpayserver/bitcoin)
-  - `truffels-electrs` — Electrum Rust Server v0.10.10 (getumbrel/electrs)
+  - `truffels-bitcoind` — Bitcoin Core 30.2 (btcpayserver/bitcoin)
+  - `truffels-electrs` — Electrum Rust Server v0.11.0 (getumbrel/electrs)
   - `truffels-ckpool` — ckpool v1.0.0 (custom build)
-  - `truffels-mempool-backend` — mempool.space backend v3.2.0
-  - `truffels-mempool-frontend` — mempool.space frontend v3.2.0
-  - `truffels-mempool-db` — MariaDB LTS
+  - `truffels-mempool-backend` — mempool.space backend v3.2.1
+  - `truffels-mempool-frontend` — mempool.space frontend v3.2.1
+  - `truffels-mempool-db` — MariaDB LTS (floating tag, digest-checked)
   - `truffels-ckstats` — ckpoolstats Next.js dashboard (custom build)
   - `truffels-ckstats-cron` — ckstats seed/update/cleanup cron
-  - `truffels-ckstats-db` — PostgreSQL 16 Alpine
-  - `truffels-proxy` — Caddy 2.9 Alpine reverse proxy
+  - `truffels-ckstats-db` — PostgreSQL 16.13 Alpine
+  - `truffels-proxy` — Caddy 2.11.2 Alpine reverse proxy
   - `truffels-agent` — Go privileged Docker mediator v0.1.0
   - `truffels-api` — Go control plane API v0.1.0
   - `truffels-web` — React/TS/Vite control plane UI v0.1.0 (nginx)
@@ -98,7 +98,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
-- **Updates:** Automatic version checking (Docker Hub / GitHub / Bitbucket) for 7 services (bitcoind, electrs, mempool, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
+- **Updates:** Automatic version checking (Docker Hub / Docker Digest / GitHub / Bitbucket) for 8 services (bitcoind, electrs, mempool, mempool-db, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
 - **Monitoring:** Resource trends (Recharts), container status table, health timeline, actionable errors — `/admin/monitoring`
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
 - **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 240+ tests total

@@ -33,12 +33,12 @@ The goal is not to build a random crypto homelab dashboard. The goal is to build
 
 Fully operational Bitcoin infrastructure running 13 Docker containers on Raspberry Pi 5:
 
-- **Bitcoin Core 29.0** — full node at chain tip (txindex=1, no pruning)
-- **electrs v0.10.10** — Electrum server
+- **Bitcoin Core 30.2** — full node at chain tip (txindex=1, no pruning)
+- **electrs v0.11.0** — Electrum server
 - **ckpool v1.0.0** — solo mining pool (stratum on port 3333)
-- **mempool.space v3.2.0** — block explorer (frontend + backend + MariaDB)
+- **mempool.space v3.2.1** — block explorer (frontend + backend + MariaDB)
 - **ckstats** — mining stats dashboard (Next.js + PostgreSQL + cron)
-- **Caddy 2.9** — reverse proxy (HTTP on port 80)
+- **Caddy 2.11.2** — reverse proxy (HTTP on port 80)
 - **truffels-agent** — privileged Docker mediator (Docker socket access)
 - **truffels-api** — Go control plane backend (REST API, alerts, metrics)
 - **truffels-web** — React admin UI (dark-mode, Tailwind)
