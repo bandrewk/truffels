@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"truffels-api/internal/model"
@@ -39,17 +40,60 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_init.sql", "migrations/002_auth.sql", "migrations/003_updates.sql", "migrations/004_monitoring.sql", "migrations/005_fan_metrics.sql", "migrations/006_container_metrics.sql"}
+	migrations := []string{
+		"migrations/001_init.sql",
+		"migrations/002_auth.sql",
+		"migrations/003_updates.sql",
+		"migrations/004_monitoring.sql",
+		"migrations/005_fan_metrics.sql",
+		"migrations/006_container_metrics.sql",
+		"migrations/007_host_io_metrics.sql",
+	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", m, err)
 		}
-		if _, err := s.db.Exec(string(data)); err != nil {
-			return fmt.Errorf("exec %s: %w", m, err)
+		// Execute each statement separately so ALTER TABLE "duplicate column"
+		// errors don't prevent subsequent statements from running.
+		for _, stmt := range splitStatements(string(data)) {
+			if _, err := s.db.Exec(stmt); err != nil {
+				// Tolerate "duplicate column" from ALTER TABLE on re-run
+				if strings.Contains(err.Error(), "duplicate column") {
+					continue
+				}
+				return fmt.Errorf("exec %s: %w", m, err)
+			}
 		}
 	}
 	return nil
+}
+
+// splitStatements splits SQL text into individual statements on semicolons,
+// skipping empty and comment-only lines.
+func splitStatements(sql string) []string {
+	var stmts []string
+	for _, s := range strings.Split(sql, ";") {
+		s = strings.TrimSpace(s)
+		// Skip empty and comment-only fragments
+		if s == "" {
+			continue
+		}
+		lines := strings.Split(s, "\n")
+		allComments := true
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "--") {
+				allComments = false
+				break
+			}
+		}
+		if allComments {
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+	return stmts
 }
 
 // GetSetting retrieves a value from admin_settings.

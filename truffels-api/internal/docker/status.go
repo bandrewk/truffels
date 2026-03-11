@@ -59,12 +59,14 @@ func InspectContainers(names []string) []model.ContainerState {
 
 // ContainerResourceStats holds per-container resource usage from docker stats.
 type ContainerResourceStats struct {
-	Name       string  `json:"name"`
-	CPUPercent float64 `json:"cpu_percent"`
-	MemUsageMB float64 `json:"mem_usage_mb"`
-	MemLimitMB float64 `json:"mem_limit_mb"`
-	NetRxBytes int64   `json:"net_rx_bytes"`
-	NetTxBytes int64   `json:"net_tx_bytes"`
+	Name            string  `json:"name"`
+	CPUPercent      float64 `json:"cpu_percent"`
+	MemUsageMB      float64 `json:"mem_usage_mb"`
+	MemLimitMB      float64 `json:"mem_limit_mb"`
+	NetRxBytes      int64   `json:"net_rx_bytes"`
+	NetTxBytes      int64   `json:"net_tx_bytes"`
+	BlockReadBytes  int64   `json:"block_read_bytes"`
+	BlockWriteBytes int64   `json:"block_write_bytes"`
 }
 
 // Stats returns resource usage for all allowed containers via the agent.

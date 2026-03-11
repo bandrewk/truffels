@@ -4,26 +4,33 @@ import "time"
 
 // MetricSnapshot is a single recorded point of host resource usage.
 type MetricSnapshot struct {
-	ID          int64     `json:"id"`
-	Timestamp   time.Time `json:"timestamp"`
-	CPUPercent  float64   `json:"cpu_percent"`
-	MemPercent  float64   `json:"mem_percent"`
-	TempC       float64   `json:"temp_c"`
-	DiskPercent float64   `json:"disk_percent"`
-	FanRPM      int       `json:"fan_rpm"`
-	FanPercent  int       `json:"fan_percent"`
+	ID             int64     `json:"id"`
+	Timestamp      time.Time `json:"timestamp"`
+	CPUPercent     float64   `json:"cpu_percent"`
+	MemPercent     float64   `json:"mem_percent"`
+	TempC          float64   `json:"temp_c"`
+	DiskPercent    float64   `json:"disk_percent"`
+	FanRPM         int       `json:"fan_rpm"`
+	FanPercent     int       `json:"fan_percent"`
+	NetRxBytes     int64     `json:"net_rx_bytes"`
+	NetTxBytes     int64     `json:"net_tx_bytes"`
+	DiskReadBytes  int64     `json:"disk_read_bytes"`
+	DiskWriteBytes int64     `json:"disk_write_bytes"`
+	DiskIOPercent  float64   `json:"disk_io_percent"`
 }
 
 // ContainerSnapshot is a single recorded point of per-container resource usage.
 type ContainerSnapshot struct {
-	ID         int64     `json:"id"`
-	Timestamp  time.Time `json:"timestamp"`
-	Container  string    `json:"container"`
-	CPUPercent float64   `json:"cpu_percent"`
-	MemUsageMB float64   `json:"mem_usage_mb"`
-	MemLimitMB float64   `json:"mem_limit_mb"`
-	NetRxBytes int64     `json:"net_rx_bytes"`
-	NetTxBytes int64     `json:"net_tx_bytes"`
+	ID              int64     `json:"id"`
+	Timestamp       time.Time `json:"timestamp"`
+	Container       string    `json:"container"`
+	CPUPercent      float64   `json:"cpu_percent"`
+	MemUsageMB      float64   `json:"mem_usage_mb"`
+	MemLimitMB      float64   `json:"mem_limit_mb"`
+	NetRxBytes      int64     `json:"net_rx_bytes"`
+	NetTxBytes      int64     `json:"net_tx_bytes"`
+	BlockReadBytes  int64     `json:"block_read_bytes"`
+	BlockWriteBytes int64     `json:"block_write_bytes"`
 }
 
 // ServiceEvent records a container state/health change or restart.
