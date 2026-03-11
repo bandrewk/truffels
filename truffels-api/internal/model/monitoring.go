@@ -10,6 +10,8 @@ type MetricSnapshot struct {
 	MemPercent  float64   `json:"mem_percent"`
 	TempC       float64   `json:"temp_c"`
 	DiskPercent float64   `json:"disk_percent"`
+	FanRPM      int       `json:"fan_rpm"`
+	FanPercent  int       `json:"fan_percent"`
 }
 
 // ServiceEvent records a container state/health change or restart.

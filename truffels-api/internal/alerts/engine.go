@@ -83,7 +83,7 @@ func (e *Engine) evaluate() {
 		if len(host.Disks) > 0 {
 			diskPercent = host.Disks[0].UsedPercent
 		}
-		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent); err != nil {
+		if err := e.store.InsertMetricSnapshot(host.CPUPercent, host.MemPercent, host.Temperature, diskPercent, host.FanRPM, host.FanPercent); err != nil {
 			slog.Error("insert metric snapshot", "err", err)
 		}
 	}

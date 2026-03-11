@@ -1,0 +1,2 @@
+ALTER TABLE metric_snapshots ADD COLUMN fan_rpm INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE metric_snapshots ADD COLUMN fan_percent INTEGER NOT NULL DEFAULT 0;

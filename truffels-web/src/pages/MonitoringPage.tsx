@@ -20,6 +20,7 @@ const CHART_COLORS = {
   cpu: '#f59e0b',
   mem: '#3b82f6',
   temp: '#f97316',
+  fan: '#06b6d4',
   disk: '#a855f7',
 } as const
 
@@ -256,16 +257,81 @@ export default function MonitoringPage() {
           peak={metrics.summary.mem_max}
           domain={[0, 100]}
         />
-        <MetricChart
-          data={metrics.history}
-          dataKey="temp_c"
-          color={CHART_COLORS.temp}
-          label="Temperature (C)"
-          unit="°C"
-          current={metrics.current.temperature_c}
-          avg={metrics.summary.temp_avg}
-          peak={metrics.summary.temp_max}
-        />
+        <Card>
+          <CardTitle>Temperature / Fan</CardTitle>
+          {metrics.history.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-gray-500 text-sm">Collecting data...</div>
+          ) : (
+            <>
+              <div className="h-40">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={metrics.history} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="timestamp"
+                      tickFormatter={formatTime}
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      yAxisId="temp"
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      yAxisId="fan"
+                      orientation="right"
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: '#1e1e2e', border: '1px solid #2e2e3e', borderRadius: 8, fontSize: 12 }}
+                      labelFormatter={formatTimestamp}
+                      formatter={(value: number, name: string) => {
+                        if (name === 'temp_c') return [`${value.toFixed(1)}°C`, 'Temp']
+                        if (name === 'fan_rpm') return [`${value} RPM`, 'Fan']
+                        return [value, name]
+                      }}
+                    />
+                    <Area
+                      yAxisId="temp"
+                      type="monotone"
+                      dataKey="temp_c"
+                      stroke={CHART_COLORS.temp}
+                      fill={CHART_COLORS.temp}
+                      fillOpacity={0.15}
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                    <Area
+                      yAxisId="fan"
+                      type="monotone"
+                      dataKey="fan_rpm"
+                      stroke={CHART_COLORS.fan}
+                      fill={CHART_COLORS.fan}
+                      fillOpacity={0.08}
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">
+                <span style={{ color: CHART_COLORS.temp }}>Temp:</span>
+                <span>Current: <span className="text-gray-200 font-mono">{metrics.current.temperature_c.toFixed(1)}°C</span></span>
+                <span>Avg: <span className="text-gray-200 font-mono">{metrics.summary.temp_avg.toFixed(1)}°C</span></span>
+                <span>Peak: <span className="text-gray-200 font-mono">{metrics.summary.temp_max.toFixed(1)}°C</span></span>
+                <span className="ml-2" style={{ color: CHART_COLORS.fan }}>Fan:</span>
+                <span>Current: <span className="text-gray-200 font-mono">{metrics.current.fan_rpm} RPM</span></span>
+              </div>
+            </>
+          )}
+        </Card>
         <MetricChart
           data={metrics.history}
           dataKey="disk_percent"

@@ -230,6 +230,8 @@ export interface MetricSnapshot {
   mem_percent: number
   temp_c: number
   disk_percent: number
+  fan_rpm: number
+  fan_percent: number
 }
 
 export interface MetricsSummary {
