@@ -14,15 +14,19 @@ var settingsDefaults = map[string]string{
 	"dep_handling_mode":       "flag_only",
 	"temp_warning":            "75",
 	"temp_critical":           "80",
+	"admission_disk_min_gb":   "10",
+	"admission_temp_max":      "80",
 }
 
 type settingsResponse struct {
-	RestartLoopCount      int    `json:"restart_loop_count"`
-	RestartLoopWindowMin  int    `json:"restart_loop_window_min"`
-	RestartLoopMaxRetries int    `json:"restart_loop_max_retries"`
-	DepHandlingMode       string `json:"dep_handling_mode"`
+	RestartLoopCount      int     `json:"restart_loop_count"`
+	RestartLoopWindowMin  int     `json:"restart_loop_window_min"`
+	RestartLoopMaxRetries int     `json:"restart_loop_max_retries"`
+	DepHandlingMode       string  `json:"dep_handling_mode"`
 	TempWarning           float64 `json:"temp_warning"`
 	TempCritical          float64 `json:"temp_critical"`
+	AdmissionDiskMinGB    float64 `json:"admission_disk_min_gb"`
+	AdmissionTempMax      float64 `json:"admission_temp_max"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +37,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		DepHandlingMode:       s.getSettingStr("dep_handling_mode", "flag_only"),
 		TempWarning:           s.getSettingFloat("temp_warning", 75),
 		TempCritical:          s.getSettingFloat("temp_critical", 80),
+		AdmissionDiskMinGB:    s.getSettingFloat("admission_disk_min_gb", 10),
+		AdmissionTempMax:      s.getSettingFloat("admission_temp_max", 80),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

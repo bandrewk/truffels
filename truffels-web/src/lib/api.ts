@@ -313,6 +313,8 @@ export interface Settings {
   dep_handling_mode: string
   temp_warning: number
   temp_critical: number
+  admission_disk_min_gb: number
+  admission_temp_max: number
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
@@ -349,6 +351,7 @@ export const api = {
   applyAllUpdates: () => post<{ status: string; queued: string[] }>('/updates/apply-all'),
   updatePreflight: (id: string) => get<PreflightResult>(`/updates/preflight/${id}`),
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
+  rollbackService: (id: string) => post<{ status: string }>(`/updates/rollback/${id}`),
   monitoring: (hours = 24) => get<MonitoringResponse>(`/monitoring?hours=${hours}`),
   serviceMonitoring: (id: string, hours = 24) => get<ServiceMonitoringResponse>(`/services/${id}/monitoring?hours=${hours}`),
   settings: () => get<Settings>('/settings'),

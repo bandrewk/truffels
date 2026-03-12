@@ -92,11 +92,15 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
   const [windowMin, setWindowMin] = useState(settings.restart_loop_window_min)
   const [maxRetries, setMaxRetries] = useState(settings.restart_loop_max_retries)
   const [depMode, setDepMode] = useState(settings.dep_handling_mode)
+  const [admissionDiskMinGB, setAdmissionDiskMinGB] = useState(settings.admission_disk_min_gb)
+  const [admissionTempMax, setAdmissionTempMax] = useState(settings.admission_temp_max)
 
   const changed = restartCount !== settings.restart_loop_count
     || windowMin !== settings.restart_loop_window_min
     || maxRetries !== settings.restart_loop_max_retries
     || depMode !== settings.dep_handling_mode
+    || admissionDiskMinGB !== settings.admission_disk_min_gb
+    || admissionTempMax !== settings.admission_temp_max
 
   return (
     <div className="space-y-6">
@@ -172,6 +176,41 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
         </div>
       </Card>
 
+      <Card>
+        <CardTitle>Admission Control</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Block manual service starts when system resources are stressed. Does not affect Docker restart policies.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Min free disk (GB)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={500} step={1}
+                value={admissionDiskMinGB}
+                onChange={(e) => setAdmissionDiskMinGB(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">GB</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Refuse service start if free disk is below this</p>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Max temperature</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={50} max={100} step={1}
+                value={admissionTempMax}
+                onChange={(e) => setAdmissionTempMax(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">&deg;C</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Refuse service start if CPU temp is at or above this</p>
+          </div>
+        </div>
+      </Card>
+
       <div className="flex justify-end">
         <button
           disabled={!changed || saving}
@@ -180,6 +219,8 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
             restart_loop_window_min: windowMin,
             restart_loop_max_retries: maxRetries,
             dep_handling_mode: depMode,
+            admission_disk_min_gb: admissionDiskMinGB,
+            admission_temp_max: admissionTempMax,
           })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >

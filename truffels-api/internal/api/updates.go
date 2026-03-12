@@ -110,6 +110,24 @@ func (s *Server) handleUpdatePreflight(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleRollbackService(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, ok := s.registry.Get(id); !ok {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	go func() {
+		if err := s.updateEngine.RollbackService(id); err != nil {
+			s.store.LogAudit("rollback_failed", id, err.Error(), r.RemoteAddr)
+		} else {
+			s.store.LogAudit("rollback_applied", id, "", r.RemoteAddr)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "rollback_started"})
+}
+
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	checks, _ := s.store.GetAllUpdateChecks()
 	pendingCount, _ := s.store.PendingUpdateCount()
