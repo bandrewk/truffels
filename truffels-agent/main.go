@@ -67,6 +67,8 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
+	mux.HandleFunc("POST /v1/system/shutdown", handleSystemShutdown)
+	mux.HandleFunc("POST /v1/system/restart", handleSystemRestart)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -534,6 +536,28 @@ func runCompose(composeDir string, args ...string) error {
 		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, stderr.String())
 	}
 	return nil
+}
+
+func handleSystemShutdown(w http.ResponseWriter, r *http.Request) {
+	slog.Warn("system shutdown requested")
+	cmd := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "/sbin/shutdown", "-h", "now")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Error("system shutdown failed", "err", err, "output", string(out))
+		writeJSON(w, 500, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
+	slog.Warn("system restart requested")
+	cmd := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "/sbin/reboot")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Error("system restart failed", "err", err, "output", string(out))
+		writeJSON(w, 500, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

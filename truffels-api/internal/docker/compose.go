@@ -136,6 +136,23 @@ func (c *ComposeClient) Build(serviceID string) error {
 	return nil
 }
 
+// SystemAction sends a shutdown or restart command to the agent.
+func (c *ComposeClient) SystemAction(action string) error {
+	body, _ := json.Marshal(map[string]string{"action": action})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/"+action, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent system %s: %w", action, err)
+	}
+	defer resp.Body.Close()
+
+	var ar agentResponse
+	json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent system %s: %s", action, ar.Error)
+	}
+	return nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)

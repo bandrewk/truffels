@@ -306,6 +306,28 @@ export interface MonitoringResponse {
   alerts: Alert[]
 }
 
+export interface Settings {
+  restart_loop_count: number
+  restart_loop_window_min: number
+  restart_loop_max_retries: number
+  dep_handling_mode: string
+  temp_warning: number
+  temp_critical: number
+}
+
+async function put<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   services: () => get<ServiceInstance[]>('/services'),
@@ -329,4 +351,8 @@ export const api = {
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),
   monitoring: (hours = 24) => get<MonitoringResponse>(`/monitoring?hours=${hours}`),
   serviceMonitoring: (id: string, hours = 24) => get<ServiceMonitoringResponse>(`/services/${id}/monitoring?hours=${hours}`),
+  settings: () => get<Settings>('/settings'),
+  updateSettings: (settings: Partial<Settings>) => put<{ status: string }>('/settings', settings),
+  systemRestart: (password: string) => post<{ status: string }>('/system/restart', { password }),
+  systemShutdown: (password: string) => post<{ status: string }>('/system/shutdown', { password }),
 }

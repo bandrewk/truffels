@@ -36,9 +36,10 @@ type ContainerState struct {
 }
 
 type ServiceInstance struct {
-	Template        ServiceTemplate  `json:"template"`
-	State           ServiceState     `json:"state"`
-	Enabled         bool             `json:"enabled"`
-	Containers      []ContainerState `json:"containers"`
-	LastHealthCheck time.Time        `json:"last_health_check"`
+	Template         ServiceTemplate  `json:"template"`
+	State            ServiceState     `json:"state"`
+	Enabled          bool             `json:"enabled"`
+	Containers       []ContainerState `json:"containers"`
+	LastHealthCheck  time.Time        `json:"last_health_check"`
+	DependencyIssues []string         `json:"dependency_issues,omitempty"`
 }

@@ -7,6 +7,7 @@ import ServiceDetailPage from './pages/ServiceDetailPage'
 import AlertsPage from './pages/AlertsPage'
 import UpdatesPage from './pages/UpdatesPage'
 import MonitoringPage from './pages/MonitoringPage'
+import SettingsPage from './pages/SettingsPage'
 import LoginPage from './pages/LoginPage'
 import SetupPage from './pages/SetupPage'
 
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="updates" element={<UpdatesPage />} />
         <Route path="monitoring" element={<MonitoringPage />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>
   )
