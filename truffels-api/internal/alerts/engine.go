@@ -211,52 +211,8 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		}
 
 		// Restart loop detection (windowed)
-		restartKey := name
-		prevCount, exists := e.lastRestartCounts[restartKey]
-		e.lastRestartCounts[restartKey] = cs.RestartCount
-
-		if exists && cs.RestartCount > prevCount {
-			// Record each restart increment
-			for i := 0; i < cs.RestartCount-prevCount; i++ {
-				e.restartHistory[restartKey] = append(e.restartHistory[restartKey], time.Now())
-			}
-		}
-
-		// Count restarts within the configured window
-		cutoff := time.Now().Add(-time.Duration(windowMin) * time.Minute)
-		var recent []time.Time
-		for _, t := range e.restartHistory[restartKey] {
-			if t.After(cutoff) {
-				recent = append(recent, t)
-			}
-		}
-		e.restartHistory[restartKey] = recent
-
-		if len(recent) >= threshold {
-			e.upsert("restart_loop", tmpl.ID, model.SeverityCritical,
-				"Container %s restarted %d times in %d minutes (threshold: %d)",
-				name, len(recent), windowMin, threshold)
-
-			// Auto-stop if max retries exceeded and not already stopped
-			if maxRetries > 0 && len(recent) >= maxRetries && !e.autoStopped[tmpl.ID] {
-				slog.Warn("auto-stopping service due to restart loop",
-					"service", tmpl.ID, "restarts", len(recent), "max", maxRetries)
-				if e.compose != nil {
-					if err := e.compose.Down(tmpl.ID); err != nil {
-						slog.Error("auto-stop failed", "service", tmpl.ID, "err", err)
-					} else {
-						e.autoStopped[tmpl.ID] = true
-						e.store.LogAudit("auto_stop", tmpl.ID,
-							fmt.Sprintf("Service %s auto-stopped: %d restarts in %d minutes exceeded max %d",
-								tmpl.ID, len(recent), windowMin, maxRetries), "alert-engine")
-					}
-				}
-			}
-		} else if len(recent) == 0 {
-			e.resolve("restart_loop", tmpl.ID)
-			// Clear auto-stopped flag when service is stable
-			delete(e.autoStopped, tmpl.ID)
-		}
+		e.recordRestartIncrements(name, cs.RestartCount)
+		e.evalRestartLoop(tmpl.ID, name, threshold, windowMin, maxRetries)
 
 		// ---- Monitoring: detect state/health changes and restarts ----
 		prev, hasPrev := e.prevStates[name]
@@ -367,6 +323,53 @@ func clampDelta(cur, prev int64) int64 {
 		return 0
 	}
 	return cur - prev
+}
+
+// recordRestartIncrements records new restart timestamps when the restart count increases.
+func (e *Engine) recordRestartIncrements(containerName string, currentCount int) {
+	prevCount, exists := e.lastRestartCounts[containerName]
+	e.lastRestartCounts[containerName] = currentCount
+	if exists && currentCount > prevCount {
+		for i := 0; i < currentCount-prevCount; i++ {
+			e.restartHistory[containerName] = append(e.restartHistory[containerName], time.Now())
+		}
+	}
+}
+
+// evalRestartLoop evaluates restart history for a container and fires/resolves alerts.
+func (e *Engine) evalRestartLoop(serviceID, containerName string, threshold, windowMin, maxRetries int) {
+	cutoff := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+	var recent []time.Time
+	for _, t := range e.restartHistory[containerName] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	e.restartHistory[containerName] = recent
+
+	if len(recent) >= threshold {
+		e.upsert("restart_loop", serviceID, model.SeverityCritical,
+			"Container %s restarted %d times in %d minutes (threshold: %d)",
+			containerName, len(recent), windowMin, threshold)
+
+		if maxRetries > 0 && len(recent) >= maxRetries && !e.autoStopped[serviceID] {
+			slog.Warn("auto-stopping service due to restart loop",
+				"service", serviceID, "restarts", len(recent), "max", maxRetries)
+			if e.compose != nil {
+				if err := e.compose.Down(serviceID); err != nil {
+					slog.Error("auto-stop failed", "service", serviceID, "err", err)
+				} else {
+					e.autoStopped[serviceID] = true
+					e.store.LogAudit("auto_stop", serviceID,
+						fmt.Sprintf("Service %s auto-stopped: %d restarts in %d minutes exceeded max %d",
+							serviceID, len(recent), windowMin, maxRetries), "alert-engine")
+				}
+			}
+		}
+	} else if len(recent) == 0 {
+		e.resolve("restart_loop", serviceID)
+		delete(e.autoStopped, serviceID)
+	}
 }
 
 func (e *Engine) getSettingStr(key, def string) string {
