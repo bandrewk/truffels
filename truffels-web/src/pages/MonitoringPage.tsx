@@ -193,13 +193,12 @@ export default function MonitoringPage() {
   const diskCurrent = metrics.current.disks?.[0]?.used_percent ?? 0
 
   // Compute disk avg/peak/min from history
-  let diskAvg = 0, diskMax = 0, diskMin = 100
+  let diskAvg = 0, diskMax = 0
   if (metrics.history.length > 0) {
     let sum = 0
     for (const s of metrics.history) {
       sum += s.disk_percent
       if (s.disk_percent > diskMax) diskMax = s.disk_percent
-      if (s.disk_percent < diskMin) diskMin = s.disk_percent
     }
     diskAvg = sum / metrics.history.length
   }
@@ -286,14 +285,6 @@ export default function MonitoringPage() {
                       tickLine={false}
                     />
                     <YAxis
-                      yAxisId="temp"
-                      tick={{ fill: '#6b7280', fontSize: 11 }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      yAxisId="fan"
-                      orientation="right"
                       domain={[0, 100]}
                       tick={{ fill: '#6b7280', fontSize: 11 }}
                       axisLine={false}
@@ -309,7 +300,6 @@ export default function MonitoringPage() {
                       }}
                     />
                     <Area
-                      yAxisId="temp"
                       type="monotone"
                       dataKey="temp_c"
                       stroke={CHART_COLORS.temp}
@@ -320,7 +310,6 @@ export default function MonitoringPage() {
                       isAnimationActive={false}
                     />
                     <Area
-                      yAxisId="fan"
                       type="monotone"
                       dataKey="fan_percent"
                       stroke={CHART_COLORS.fan}
@@ -353,7 +342,7 @@ export default function MonitoringPage() {
           current={diskCurrent}
           avg={diskAvg}
           peak={diskMax}
-          domain={[Math.max(0, Math.floor(diskMin / 5) * 5 - 5), Math.min(100, Math.ceil(diskMax / 5) * 5 + 5)]}
+          domain={[0, 100]}
         />
         <Card>
           <CardTitle>Network I/O (per minute)</CardTitle>
