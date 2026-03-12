@@ -20,6 +20,10 @@ type Collector struct {
 	lastCPU     cpuStat
 	lastCPUTime time.Time
 
+	// cached network I/O stats for delta calculation
+	lastNetRx int64
+	lastNetTx int64
+
 	// cached disk I/O stats for delta calculation
 	lastDiskIO     diskIOStat
 	lastDiskIOTime time.Time
@@ -41,8 +45,9 @@ func NewCollector(procPath, sysPath, diskPath string) *Collector {
 		sysPath:  sysPath,
 		diskPath: diskPath,
 	}
-	// Prime the CPU and disk I/O stats
+	// Prime the CPU, network, and disk I/O stats
 	c.lastCPU, _ = c.readCPUStat()
+	c.lastNetRx, c.lastNetTx = c.readNetIO()
 	c.lastDiskIO, _ = c.readDiskIOStat()
 	now := time.Now()
 	c.lastCPUTime = now
@@ -208,16 +213,15 @@ func (c *Collector) collectUptime() float64 {
 	return v
 }
 
-// collectNetIO reads cumulative rx/tx bytes from /proc/net/dev.
+// readNetIO reads cumulative rx/tx bytes from /proc/net/dev.
 // Returns total across all physical interfaces (excludes lo, docker, veth, br-).
-func (c *Collector) collectNetIO() (rxBytes, txBytes int64) {
+func (c *Collector) readNetIO() (rxBytes, txBytes int64) {
 	data, err := os.ReadFile(c.procPath + "/net/dev")
 	if err != nil {
 		return 0, 0
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		// Skip header lines and virtual interfaces
 		if !strings.Contains(line, ":") {
 			continue
 		}
@@ -235,6 +239,23 @@ func (c *Collector) collectNetIO() (rxBytes, txBytes int64) {
 		tx, _ := strconv.ParseInt(fields[8], 10, 64)
 		rxBytes += rx
 		txBytes += tx
+	}
+	return rxBytes, txBytes
+}
+
+// collectNetIO returns delta rx/tx bytes since last call.
+func (c *Collector) collectNetIO() (rxBytes, txBytes int64) {
+	curRx, curTx := c.readNetIO()
+	prevRx, prevTx := c.lastNetRx, c.lastNetTx
+	c.lastNetRx, c.lastNetTx = curRx, curTx
+
+	rxBytes = curRx - prevRx
+	txBytes = curTx - prevTx
+	if rxBytes < 0 {
+		rxBytes = 0
+	}
+	if txBytes < 0 {
+		txBytes = 0
 	}
 	return rxBytes, txBytes
 }
@@ -266,7 +287,7 @@ func (c *Collector) readDiskIOStat() (diskIOStat, error) {
 	return diskIOStat{}, fmt.Errorf("disk device not found in diskstats")
 }
 
-// collectDiskIO returns cumulative read/write bytes and I/O utilization %.
+// collectDiskIO returns delta read/write bytes and I/O utilization %.
 func (c *Collector) collectDiskIO() (readBytes, writeBytes int64, ioPercent float64) {
 	cur, err := c.readDiskIOStat()
 	if err != nil {
@@ -278,9 +299,15 @@ func (c *Collector) collectDiskIO() (readBytes, writeBytes int64, ioPercent floa
 	c.lastDiskIO = cur
 	c.lastDiskIOTime = time.Now()
 
-	// Cumulative bytes (sector = 512 bytes)
-	readBytes = cur.sectorsRead * 512
-	writeBytes = cur.sectorsWrite * 512
+	// Delta bytes (sector = 512 bytes)
+	readBytes = (cur.sectorsRead - prev.sectorsRead) * 512
+	writeBytes = (cur.sectorsWrite - prev.sectorsWrite) * 512
+	if readBytes < 0 {
+		readBytes = 0
+	}
+	if writeBytes < 0 {
+		writeBytes = 0
+	}
 
 	// I/O utilization: delta ioMs / delta wall time
 	if elapsed.Milliseconds() > 0 {
