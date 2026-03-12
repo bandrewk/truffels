@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -90,6 +91,26 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		if err := s.registry.ValidateDependencies(id, isRunning); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
+		}
+		// Admission control: check system resources
+		if s.collector != nil {
+			host := s.collector.Collect()
+
+			maxTemp := s.getSettingFloat("admission_temp_max", 80)
+			if host.Temperature >= maxTemp {
+				writeError(w, http.StatusConflict, fmt.Sprintf(
+					"admission control: CPU temperature too high (%.1f°C, max %.0f°C)", host.Temperature, maxTemp))
+				return
+			}
+
+			minDiskGB := s.getSettingFloat("admission_disk_min_gb", 10)
+			for _, disk := range host.Disks {
+				if disk.AvailGB < minDiskGB {
+					writeError(w, http.StatusConflict, fmt.Sprintf(
+						"admission control: insufficient disk space on %s (%.1f GB free, minimum %.0f GB)", disk.Path, disk.AvailGB, minDiskGB))
+					return
+				}
+			}
 		}
 		if err := s.compose.Up(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())

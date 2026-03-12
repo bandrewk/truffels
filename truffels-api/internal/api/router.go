@@ -92,6 +92,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/updates/apply-all", s.handleApplyAllUpdates)
 			r.Get("/updates/logs", s.handleUpdateLogs)
 			r.Get("/updates/status", s.handleUpdateStatus)
+			r.Post("/updates/rollback/{id}", s.handleRollbackService)
 		})
 	})
 

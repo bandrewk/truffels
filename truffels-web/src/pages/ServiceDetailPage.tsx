@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { api, ServiceInstance, UpdateCheck, ContainerSnapshot } from '@/lib/api'
+import { api, ServiceInstance, UpdateCheck, UpdateLog, ContainerSnapshot } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -122,7 +122,7 @@ export default function ServiceDetailPage() {
         ))}
       </div>
 
-      {tab === 'overview' && <OverviewTab svc={svc} updateCheck={updateStatus?.checks?.find(c => c.service_id === id)} />}
+      {tab === 'overview' && <OverviewTab svc={svc} updateCheck={updateStatus?.checks?.find(c => c.service_id === id)} serviceId={id!} />}
       {tab === 'monitor' && <MonitorTab id={id!} />}
       {tab === 'logs' && <LogsTab id={id!} />}
       {tab === 'config' && <ConfigTab id={id!} />}
@@ -319,7 +319,33 @@ function ElectrsStatsCard() {
   )
 }
 
-function OverviewTab({ svc, updateCheck }: { svc: ServiceInstance; updateCheck?: UpdateCheck | null }) {
+function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; updateCheck?: UpdateCheck | null; serviceId: string }) {
+  const [rollbackConfirm, setRollbackConfirm] = useState(false)
+  const [rollbackLoading, setRollbackLoading] = useState(false)
+  const [rollbackMsg, setRollbackMsg] = useState('')
+
+  const logsFetcher = useCallback(() => api.updateLogs(serviceId), [serviceId])
+  const { data: updateLogs } = useApi(logsFetcher, 30000)
+
+  // Find previous version from last successful update log
+  const lastDoneLog = updateLogs?.find((l: UpdateLog) => l.status === 'done')
+  const canRollback = !svc.template.floating_tag && !!lastDoneLog?.from_version
+    && lastDoneLog.from_version !== updateCheck?.current_version
+
+  const doRollback = async () => {
+    setRollbackLoading(true)
+    setRollbackMsg('')
+    try {
+      await api.rollbackService(serviceId)
+      setRollbackMsg('Rollback started')
+      setRollbackConfirm(false)
+    } catch (e: any) {
+      setRollbackMsg(`Error: ${e.message}`)
+    } finally {
+      setRollbackLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
@@ -371,7 +397,7 @@ function OverviewTab({ svc, updateCheck }: { svc: ServiceInstance; updateCheck?:
           {updateCheck && (
             <>
               <dt className="text-gray-500">Version</dt>
-              <dd className="text-gray-300 font-mono">{updateCheck.current_version || '—'}</dd>
+              <dd className="text-gray-300 font-mono">{updateCheck.current_version || '\u2014'}</dd>
               <dt className="text-gray-500">Update</dt>
               <dd>
                 {updateCheck.has_update ? (
@@ -384,6 +410,45 @@ function OverviewTab({ svc, updateCheck }: { svc: ServiceInstance; updateCheck?:
                   </span>
                 )}
               </dd>
+              {canRollback && (
+                <>
+                  <dt className="text-gray-500">Rollback</dt>
+                  <dd>
+                    {rollbackConfirm ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-yellow-400">
+                          Rollback to {lastDoneLog!.from_version}?
+                        </span>
+                        <button
+                          onClick={doRollback}
+                          disabled={rollbackLoading}
+                          className="px-2 py-0.5 bg-yellow-600 hover:bg-yellow-700 text-white text-xs font-medium rounded disabled:opacity-50"
+                        >
+                          {rollbackLoading ? 'Rolling back...' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => setRollbackConfirm(false)}
+                          className="px-2 py-0.5 text-xs text-gray-400 hover:text-gray-200"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setRollbackConfirm(true); setRollbackMsg('') }}
+                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-600/20 text-yellow-400 border border-yellow-600/30 hover:bg-yellow-600/30 transition-colors"
+                      >
+                        Rollback to {lastDoneLog!.from_version}
+                      </button>
+                    )}
+                    {rollbackMsg && (
+                      <p className={`text-xs mt-1 ${rollbackMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                        {rollbackMsg}
+                      </p>
+                    )}
+                  </dd>
+                </>
+              )}
             </>
           )}
         </dl>

@@ -447,6 +447,113 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	return nil
 }
 
+// RollbackService manually rolls back a service to its previous version.
+func (e *Engine) RollbackService(serviceID string) error {
+	tmpl, ok := e.registry.Get(serviceID)
+	if !ok {
+		return &UpdateError{Msg: "unknown service"}
+	}
+	if tmpl.UpdateSource == nil {
+		return &UpdateError{Msg: "service has no update source"}
+	}
+	if tmpl.FloatingTag {
+		return &UpdateError{Msg: "rollback not available for floating-tag services"}
+	}
+
+	e.mu.Lock()
+	if e.updating[serviceID] {
+		e.mu.Unlock()
+		return &UpdateError{Msg: "update already in progress"}
+	}
+	e.updating[serviceID] = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.updating, serviceID)
+		e.mu.Unlock()
+	}()
+
+	// Find the last successful update to get the previous version
+	logs, _ := e.store.GetUpdateLogs(serviceID, 10)
+	var prevVersion string
+	for _, l := range logs {
+		if l.Status == model.UpdateDone {
+			prevVersion = l.FromVersion
+			break
+		}
+	}
+	if prevVersion == "" {
+		return &UpdateError{Msg: "no previous version found to rollback to"}
+	}
+
+	check, _ := e.store.GetLatestUpdateCheck(serviceID)
+	currentVersion := ""
+	if check != nil {
+		currentVersion = check.CurrentVersion
+	}
+	if currentVersion == prevVersion {
+		return &UpdateError{Msg: "already at the previous version"}
+	}
+
+	src := tmpl.UpdateSource
+
+	log := &model.UpdateLog{
+		ServiceID:   serviceID,
+		FromVersion: currentVersion,
+		ToVersion:   prevVersion,
+		Status:      model.UpdatePending,
+	}
+	logID, err := e.store.CreateUpdateLog(log)
+	if err != nil {
+		return &UpdateError{Msg: "cannot create rollback log: " + err.Error()}
+	}
+
+	// Pull old version
+	e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
+	if src.NeedsBuild {
+		e.store.UpdateLogStatus(logID, model.UpdateFailed, "rollback not supported for custom-built services", "")
+		return &UpdateError{Msg: "rollback not supported for custom-built services"}
+	}
+	for _, img := range src.Images {
+		if _, err := e.compose.Pull(img + ":" + prevVersion); err != nil {
+			e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+			return &UpdateError{Msg: "pull failed: " + err.Error()}
+		}
+	}
+	// Rewrite compose tags
+	composePath := tmpl.ComposeDir + "/docker-compose.yml"
+	if err := updateComposeImageTags(composePath, src.Images, currentVersion, prevVersion); err != nil {
+		e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+	}
+
+	// Restart
+	e.store.UpdateLogStatus(logID, model.UpdateRestarting, "", currentVersion)
+	e.compose.Down(serviceID)
+	if err := e.compose.Up(serviceID); err != nil {
+		e.store.UpdateLogStatus(logID, model.UpdateFailed, "start failed: "+err.Error(), "")
+		return &UpdateError{Msg: "start failed after rollback: " + err.Error()}
+	}
+
+	// Health check
+	time.Sleep(e.healthWait)
+	if !e.checkHealth(tmpl) {
+		e.store.UpdateLogStatus(logID, model.UpdateFailed, "unhealthy after rollback", "")
+		return &UpdateError{Msg: "service unhealthy after rollback"}
+	}
+
+	e.store.UpdateLogStatus(logID, model.UpdateDone, "", "")
+	e.store.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      serviceID,
+		CurrentVersion: prevVersion,
+		LatestVersion:  currentVersion,
+		HasUpdate:      true,
+	})
+
+	slog.Info("rollback complete", "service", serviceID, "from", currentVersion, "to", prevVersion)
+	return nil
+}
+
 func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, currentVersion, newVersion string) {
 	if !src.NeedsBuild {
 		// Revert compose file to old version
