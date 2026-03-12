@@ -867,3 +867,216 @@ func TestAlertsHandler_All(t *testing.T) {
 		t.Fatalf("expected 2 total alerts, got %d", len(alerts))
 	}
 }
+
+// --- Settings ---
+
+func TestGetSettings_Defaults(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/settings", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	// Verify defaults
+	if resp["restart_loop_count"] != float64(5) {
+		t.Fatalf("expected restart_loop_count=5, got %v", resp["restart_loop_count"])
+	}
+	if resp["restart_loop_window_min"] != float64(10) {
+		t.Fatalf("expected restart_loop_window_min=10, got %v", resp["restart_loop_window_min"])
+	}
+	if resp["restart_loop_max_retries"] != float64(0) {
+		t.Fatalf("expected restart_loop_max_retries=0, got %v", resp["restart_loop_max_retries"])
+	}
+	if resp["dep_handling_mode"] != "flag_only" {
+		t.Fatalf("expected dep_handling_mode=flag_only, got %v", resp["dep_handling_mode"])
+	}
+	if resp["temp_warning"] != float64(75) {
+		t.Fatalf("expected temp_warning=75, got %v", resp["temp_warning"])
+	}
+	if resp["temp_critical"] != float64(80) {
+		t.Fatalf("expected temp_critical=80, got %v", resp["temp_critical"])
+	}
+}
+
+func TestUpdateSettings_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"restart_loop_count":10,"temp_warning":70}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify persisted
+	val, _ := st.GetSetting("restart_loop_count")
+	if val != "10" {
+		t.Fatalf("expected restart_loop_count=10, got %q", val)
+	}
+	val, _ = st.GetSetting("temp_warning")
+	if val != "70" {
+		t.Fatalf("expected temp_warning=70, got %q", val)
+	}
+}
+
+func TestUpdateSettings_UnknownKey(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"nonexistent_key":"value"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for unknown key, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateSettings_InvalidJSON(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings", "not json")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestUpdateSettings_FloatValue(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"temp_critical":85.5}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	val, _ := st.GetSetting("temp_critical")
+	if val != "85.5" {
+		t.Fatalf("expected 85.5, got %q", val)
+	}
+}
+
+func TestUpdateSettings_StringValue(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"dep_handling_mode":"flag_and_stop"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	val, _ := st.GetSetting("dep_handling_mode")
+	if val != "flag_and_stop" {
+		t.Fatalf("expected flag_and_stop, got %q", val)
+	}
+}
+
+func TestUpdateSettings_AuditLogged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"temp_warning":65}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	entries, _ := st.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.Action == "settings_updated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected audit log entry for settings_updated")
+	}
+}
+
+func TestGetSettings_AfterUpdate(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	// Update first
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"restart_loop_count":15,"dep_handling_mode":"flag_and_stop","temp_critical":90}`)
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("update failed: %d", w.Code)
+	}
+
+	// Read back
+	w = httptest.NewRecorder()
+	req = authedReq(t, srv, "GET", "/api/truffels/settings", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp["restart_loop_count"] != float64(15) {
+		t.Fatalf("expected 15, got %v", resp["restart_loop_count"])
+	}
+	if resp["dep_handling_mode"] != "flag_and_stop" {
+		t.Fatalf("expected flag_and_stop, got %v", resp["dep_handling_mode"])
+	}
+	if resp["temp_critical"] != float64(90) {
+		t.Fatalf("expected 90, got %v", resp["temp_critical"])
+	}
+	// Unchanged values should still be defaults
+	if resp["temp_warning"] != float64(75) {
+		t.Fatalf("expected unchanged temp_warning=75, got %v", resp["temp_warning"])
+	}
+}
+
+func TestSettings_RequiresAuth(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	// GET without auth — middleware returns 403
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/truffels/settings", nil)
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Fatalf("expected 403 for unauthenticated GET, got %d", w.Code)
+	}
+
+	// PUT without auth
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("PUT", "/api/truffels/settings", strings.NewReader(`{"temp_warning":60}`))
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Fatalf("expected 403 for unauthenticated PUT, got %d", w.Code)
+	}
+}
