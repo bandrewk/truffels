@@ -159,7 +159,7 @@ func TestSprintf(t *testing.T) {
 
 func TestEngine_StartStop(t *testing.T) {
 	s := newTestStore(t)
-	e := NewEngine(s, nil, nil)
+	e := NewEngine(s, nil, nil, nil)
 	e.Start()
 	e.Stop()
 	// Should not panic or hang

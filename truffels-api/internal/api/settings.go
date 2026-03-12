@@ -1,0 +1,156 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+)
+
+// settingsDefaults are the default values for all configurable settings.
+var settingsDefaults = map[string]string{
+	"restart_loop_count":      "5",
+	"restart_loop_window_min": "10",
+	"restart_loop_max_retries": "0",
+	"dep_handling_mode":       "flag_only",
+	"temp_warning":            "75",
+	"temp_critical":           "80",
+}
+
+type settingsResponse struct {
+	RestartLoopCount      int    `json:"restart_loop_count"`
+	RestartLoopWindowMin  int    `json:"restart_loop_window_min"`
+	RestartLoopMaxRetries int    `json:"restart_loop_max_retries"`
+	DepHandlingMode       string `json:"dep_handling_mode"`
+	TempWarning           float64 `json:"temp_warning"`
+	TempCritical          float64 `json:"temp_critical"`
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	resp := settingsResponse{
+		RestartLoopCount:      s.getSettingInt("restart_loop_count", 5),
+		RestartLoopWindowMin:  s.getSettingInt("restart_loop_window_min", 10),
+		RestartLoopMaxRetries: s.getSettingInt("restart_loop_max_retries", 0),
+		DepHandlingMode:       s.getSettingStr("dep_handling_mode", "flag_only"),
+		TempWarning:           s.getSettingFloat("temp_warning", 75),
+		TempCritical:          s.getSettingFloat("temp_critical", 80),
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	for key, raw := range body {
+		if _, ok := settingsDefaults[key]; !ok {
+			writeError(w, http.StatusBadRequest, "unknown setting: "+key)
+			return
+		}
+
+		var val string
+		// Try as string first, then number
+		if err := json.Unmarshal(raw, &val); err != nil {
+			var num float64
+			if err := json.Unmarshal(raw, &num); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid value for "+key)
+				return
+			}
+			if num == float64(int(num)) {
+				val = strconv.Itoa(int(num))
+			} else {
+				val = strconv.FormatFloat(num, 'f', -1, 64)
+			}
+		}
+
+		if err := s.store.SetSetting(key, val); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	s.store.LogAudit("settings_updated", "", "Settings updated", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleSystemShutdown(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	ok, err := s.auth.CheckPassword(body.Password)
+	if err != nil || !ok {
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+
+	s.store.LogAudit("system_shutdown", "", "System shutdown requested via UI", r.RemoteAddr)
+
+	if err := s.compose.SystemAction("shutdown"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	ok, err := s.auth.CheckPassword(body.Password)
+	if err != nil || !ok {
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+
+	s.store.LogAudit("system_restart", "", "System restart requested via UI", r.RemoteAddr)
+
+	if err := s.compose.SystemAction("restart"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getSettingStr(key, def string) string {
+	val, err := s.store.GetSetting(key)
+	if err != nil || val == "" {
+		return def
+	}
+	return val
+}
+
+func (s *Server) getSettingInt(key string, def int) int {
+	val, err := s.store.GetSetting(key)
+	if err != nil || val == "" {
+		return def
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func (s *Server) getSettingFloat(key string, def float64) float64 {
+	val, err := s.store.GetSetting(key)
+	if err != nil || val == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return def
+	}
+	return f
+}

@@ -3,6 +3,7 @@ package alerts
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"truffels-api/internal/docker"
@@ -16,10 +17,17 @@ type Engine struct {
 	store     *store.Store
 	registry  *service.Registry
 	collector *metrics.Collector
+	compose   *docker.ComposeClient
 	stopCh    chan struct{}
 
 	// Track restart counts for restart-loop detection
 	lastRestartCounts map[string]int
+
+	// Track restart timestamps for windowed restart-loop detection
+	restartHistory map[string][]time.Time
+
+	// Track services that were auto-stopped to avoid repeated stops
+	autoStopped map[string]bool
 
 	// Monitoring: cached previous container states for change detection
 	prevStates map[string]model.ContainerState
@@ -31,13 +39,16 @@ type Engine struct {
 	prevContainerStats map[string]docker.ContainerResourceStats
 }
 
-func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector) *Engine {
+func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compose *docker.ComposeClient) *Engine {
 	return &Engine{
 		store:              s,
 		registry:           r,
 		collector:          c,
+		compose:            compose,
 		stopCh:             make(chan struct{}),
 		lastRestartCounts:  make(map[string]int),
+		restartHistory:     make(map[string][]time.Time),
+		autoStopped:        make(map[string]bool),
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 	}
@@ -77,7 +88,7 @@ func (e *Engine) evaluate() {
 		e.checkDisk(disk)
 	}
 
-	// Temperature alerts
+	// Temperature alerts (configurable thresholds)
 	e.checkTemp(host.Temperature)
 
 	// ---- Monitoring: record metric snapshot every other tick (60s) ----
@@ -126,6 +137,9 @@ func (e *Engine) evaluate() {
 		e.checkService(tmpl)
 	}
 
+	// Dependency health checks
+	e.checkDependencyHealth()
+
 	// ---- Monitoring: prune old data every 100th tick (~50 minutes) ----
 	if e.snapshotTick%100 == 0 {
 		if err := e.store.PruneMetricSnapshots(time.Now().Add(-48 * time.Hour)); err != nil {
@@ -159,18 +173,25 @@ func (e *Engine) checkTemp(tempC float64) {
 	alertType := "high_temp"
 	serviceID := ""
 
-	if tempC >= 80 {
+	critical := e.getSettingFloat("temp_critical", 80)
+	warning := e.getSettingFloat("temp_warning", 75)
+
+	if tempC >= critical {
 		e.upsert(alertType, serviceID, model.SeverityCritical,
-			"CPU temperature critical: %.1f°C", tempC)
-	} else if tempC >= 75 {
+			"CPU temperature critical: %.1f°C (threshold: %.0f°C)", tempC, critical)
+	} else if tempC >= warning {
 		e.upsert(alertType, serviceID, model.SeverityWarning,
-			"CPU temperature high: %.1f°C", tempC)
+			"CPU temperature high: %.1f°C (threshold: %.0f°C)", tempC, warning)
 	} else {
 		e.resolve(alertType, serviceID)
 	}
 }
 
 func (e *Engine) checkService(tmpl model.ServiceTemplate) {
+	threshold := e.getSettingInt("restart_loop_count", 5)
+	windowMin := e.getSettingInt("restart_loop_window_min", 10)
+	maxRetries := e.getSettingInt("restart_loop_max_retries", 0)
+
 	for _, name := range tmpl.ContainerNames {
 		cs, err := docker.InspectContainer(name)
 		if err != nil {
@@ -189,15 +210,52 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			e.resolve(alertType, tmpl.ID)
 		}
 
-		// Restart loop detection
+		// Restart loop detection (windowed)
 		restartKey := name
 		prevCount, exists := e.lastRestartCounts[restartKey]
 		e.lastRestartCounts[restartKey] = cs.RestartCount
-		if exists && cs.RestartCount-prevCount >= 3 {
+
+		if exists && cs.RestartCount > prevCount {
+			// Record each restart increment
+			for i := 0; i < cs.RestartCount-prevCount; i++ {
+				e.restartHistory[restartKey] = append(e.restartHistory[restartKey], time.Now())
+			}
+		}
+
+		// Count restarts within the configured window
+		cutoff := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+		var recent []time.Time
+		for _, t := range e.restartHistory[restartKey] {
+			if t.After(cutoff) {
+				recent = append(recent, t)
+			}
+		}
+		e.restartHistory[restartKey] = recent
+
+		if len(recent) >= threshold {
 			e.upsert("restart_loop", tmpl.ID, model.SeverityCritical,
-				"Container %s restarted %d times recently", name, cs.RestartCount-prevCount)
-		} else if exists && cs.RestartCount == prevCount {
+				"Container %s restarted %d times in %d minutes (threshold: %d)",
+				name, len(recent), windowMin, threshold)
+
+			// Auto-stop if max retries exceeded and not already stopped
+			if maxRetries > 0 && len(recent) >= maxRetries && !e.autoStopped[tmpl.ID] {
+				slog.Warn("auto-stopping service due to restart loop",
+					"service", tmpl.ID, "restarts", len(recent), "max", maxRetries)
+				if e.compose != nil {
+					if err := e.compose.Down(tmpl.ID); err != nil {
+						slog.Error("auto-stop failed", "service", tmpl.ID, "err", err)
+					} else {
+						e.autoStopped[tmpl.ID] = true
+						e.store.LogAudit("auto_stop", tmpl.ID,
+							fmt.Sprintf("Service %s auto-stopped: %d restarts in %d minutes exceeded max %d",
+								tmpl.ID, len(recent), windowMin, maxRetries), "alert-engine")
+					}
+				}
+			}
+		} else if len(recent) == 0 {
 			e.resolve("restart_loop", tmpl.ID)
+			// Clear auto-stopped flag when service is stable
+			delete(e.autoStopped, tmpl.ID)
 		}
 
 		// ---- Monitoring: detect state/health changes and restarts ----
@@ -224,6 +282,57 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			}
 		}
 		e.prevStates[name] = cs
+	}
+}
+
+func (e *Engine) checkDependencyHealth() {
+	mode := e.getSettingStr("dep_handling_mode", "flag_only")
+
+	for _, tmpl := range e.registry.All() {
+		if len(tmpl.Dependencies) == 0 {
+			continue
+		}
+
+		for _, depID := range tmpl.Dependencies {
+			depTmpl, ok := e.registry.Get(depID)
+			if !ok {
+				continue
+			}
+
+			upstreamDown := false
+			for _, name := range depTmpl.ContainerNames {
+				cs, err := docker.InspectContainer(name)
+				if err != nil {
+					continue
+				}
+				if cs.Health == "unhealthy" || cs.Status == "exited" || cs.Status == "restarting" || cs.Status == "not_found" {
+					upstreamDown = true
+					break
+				}
+			}
+
+			alertType := "upstream_unhealthy"
+			if upstreamDown {
+				e.upsert(alertType, tmpl.ID, model.SeverityWarning,
+					"Upstream dependency %s is unhealthy — %s may be serving stale data",
+					depID, tmpl.DisplayName)
+
+				if mode == "flag_and_stop" && e.compose != nil && !e.autoStopped[tmpl.ID+"_dep"] {
+					slog.Warn("auto-stopping dependent service",
+						"service", tmpl.ID, "upstream", depID)
+					if err := e.compose.Down(tmpl.ID); err != nil {
+						slog.Error("auto-stop dependent failed", "service", tmpl.ID, "err", err)
+					} else {
+						e.autoStopped[tmpl.ID+"_dep"] = true
+						e.store.LogAudit("auto_stop_dependency", tmpl.ID,
+							fmt.Sprintf("Service %s auto-stopped: upstream %s is unhealthy", tmpl.ID, depID), "alert-engine")
+					}
+				}
+			} else {
+				e.resolve(alertType, tmpl.ID)
+				delete(e.autoStopped, tmpl.ID+"_dep")
+			}
+		}
 	}
 }
 
@@ -258,4 +367,36 @@ func clampDelta(cur, prev int64) int64 {
 		return 0
 	}
 	return cur - prev
+}
+
+func (e *Engine) getSettingStr(key, def string) string {
+	val, err := e.store.GetSetting(key)
+	if err != nil || val == "" {
+		return def
+	}
+	return val
+}
+
+func (e *Engine) getSettingInt(key string, def int) int {
+	val := e.getSettingStr(key, "")
+	if val == "" {
+		return def
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func (e *Engine) getSettingFloat(key string, def float64) float64 {
+	val := e.getSettingStr(key, "")
+	if val == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }

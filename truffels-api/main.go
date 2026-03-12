@@ -52,7 +52,7 @@ func main() {
 	collector := metrics.NewCollector(cfg.HostProc, cfg.HostSys, cfg.DataRoot)
 
 	// Alert engine
-	alertEngine := alerts.NewEngine(st, registry, collector)
+	alertEngine := alerts.NewEngine(st, registry, collector, compose)
 	alertEngine.Start()
 	defer alertEngine.Stop()
 

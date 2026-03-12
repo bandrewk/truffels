@@ -80,6 +80,11 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/monitoring", s.handleMonitoring)
 
+			r.Get("/settings", s.handleGetSettings)
+			r.Put("/settings", s.handleUpdateSettings)
+			r.Post("/system/shutdown", s.handleSystemShutdown)
+			r.Post("/system/restart", s.handleSystemRestart)
+
 			r.Get("/updates", s.handleGetUpdates)
 			r.Post("/updates/check", s.handleCheckUpdates)
 			r.Get("/updates/preflight/{id}", s.handleUpdatePreflight)

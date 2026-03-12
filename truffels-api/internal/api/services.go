@@ -18,12 +18,14 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 	for _, tmpl := range s.registry.All() {
 		containers := docker.InspectContainers(tmpl.ContainerNames)
 		enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
-		services = append(services, model.ServiceInstance{
+		svc := model.ServiceInstance{
 			Template:   tmpl,
 			State:      deriveState(containers),
 			Enabled:    enabled,
 			Containers: containers,
-		})
+		}
+		svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+		services = append(services, svc)
 	}
 	writeJSON(w, http.StatusOK, services)
 }
@@ -39,12 +41,14 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	containers := docker.InspectContainers(tmpl.ContainerNames)
 	enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
 
-	writeJSON(w, http.StatusOK, model.ServiceInstance{
+	svc := model.ServiceInstance{
 		Template:   tmpl,
 		State:      deriveState(containers),
 		Enabled:    enabled,
 		Containers: containers,
-	})
+	}
+	svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+	writeJSON(w, http.StatusOK, svc)
 }
 
 type actionRequest struct {
@@ -279,6 +283,28 @@ func (s *Server) configRoot() string {
 		return v
 	}
 	return "/srv/truffels/config"
+}
+
+// checkDependencyIssues returns a list of unhealthy upstream dependencies.
+func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate) []string {
+	var issues []string
+	for _, depID := range tmpl.Dependencies {
+		depTmpl, ok := s.registry.Get(depID)
+		if !ok {
+			continue
+		}
+		for _, name := range depTmpl.ContainerNames {
+			cs, err := docker.InspectContainer(name)
+			if err != nil {
+				continue
+			}
+			if cs.Health == "unhealthy" || cs.Status == "exited" || cs.Status == "restarting" || cs.Status == "not_found" {
+				issues = append(issues, depID+" is "+cs.Status)
+				break
+			}
+		}
+	}
+	return issues
 }
 
 func simpleDiff(old, new string) string {
