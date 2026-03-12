@@ -63,7 +63,14 @@ func (c *Client) call(method string, params ...interface{}) (json.RawMessage, er
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("rpc call %s: %w", method, err)
+		// Retry once on EOF — stale keep-alive connection
+		req, _ = http.NewRequest("POST", c.url, bytes.NewReader(body))
+		req.SetBasicAuth(c.user, c.pass)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("rpc call %s: %w", method, err)
+		}
 	}
 	defer resp.Body.Close()
 
