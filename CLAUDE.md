@@ -103,6 +103,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Settings:** `/admin/settings` — 3 tabs: Service Handling (restart loop detection: N restarts in M minutes, max retries before auto-stop; dependent service handling: flag-only or flag-and-stop), Alerts (configurable temp warning/critical thresholds), Danger Zone (system shutdown/restart with password confirmation via agent nsenter)
 - **Alerting:** Restart loop detection (windowed, configurable), dependency health checks (upstream unhealthy → flag or auto-stop dependents), disk/temp alerts with configurable thresholds
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 310+ tests total
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 330+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
