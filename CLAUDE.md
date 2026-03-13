@@ -107,6 +107,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Pruning support:** electrs and mempool blocked from starting on pruned Bitcoin Core nodes (live RPC check); ckpool works with pruning. DependencyIssues shows warning for pruning-incompatible services.
 - **Rollback:** Manual rollback to previous version via service detail page or `POST /updates/rollback/{id}`. Finds last successful update, pulls old image, rewrites compose tags, restarts + health check. Not available for floating-tag or custom-built services.
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services). Managed services support enable/disable — disabled services show purple "disabled" badge and cannot be started.
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), golangci-lint (errcheck), tsc --noEmit, coverage reporting, 424 tests total
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), golangci-lint (errcheck), tsc --noEmit, coverage reporting, 430 tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
