@@ -5,6 +5,7 @@ const stateColors: Record<string, string> = {
   degraded: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   unhealthy: 'bg-red-500/20 text-red-400 border-red-500/30',
   unknown: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  disabled: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
   exited: 'bg-red-500/20 text-red-400 border-red-500/30',
   warning: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   critical: 'bg-red-500/20 text-red-400 border-red-500/30',

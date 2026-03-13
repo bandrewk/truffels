@@ -102,6 +102,23 @@ export default function ServiceDetailPage() {
               <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
             )}
             <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
+            {svc.enabled ? (
+              <button
+                onClick={() => doAction('disable')}
+                disabled={actionLoading}
+                className="px-3 py-1.5 rounded text-sm font-medium text-purple-400 border border-purple-500/30 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+              >
+                Disable
+              </button>
+            ) : (
+              <button
+                onClick={() => doAction('enable')}
+                disabled={actionLoading}
+                className="px-3 py-1.5 rounded text-sm font-medium text-green-400 border border-green-500/30 hover:bg-green-500/10 transition-colors disabled:opacity-50"
+              >
+                Enable
+              </button>
+            )}
           </>
         )}
         {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
