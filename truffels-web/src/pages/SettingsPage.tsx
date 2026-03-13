@@ -421,7 +421,7 @@ function SystemLogsTab() {
         >
           {boots.length > 0 ? boots.map((b) => (
             <option key={b.index} value={b.index}>
-              {b.index === 0 ? 'Current boot' : `Boot ${b.index}`} — {b.first}
+              {b.index === 0 ? 'Current' : `Boot ${b.index}`} ({b.first})
             </option>
           )) : (
             <option value={0}>Current boot</option>
