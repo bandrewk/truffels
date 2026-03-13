@@ -23,7 +23,7 @@ func newTestServerWithEngine(t *testing.T) (*Server, *store.Store, *updates.Engi
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	reg := service.NewRegistry("/srv/truffels/compose")
 	a := auth.New(st)
@@ -58,13 +58,13 @@ func TestGetUpdates_Empty(t *testing.T) {
 func TestGetUpdates_WithData(t *testing.T) {
 	srv, st, _ := newTestServerWithEngine(t)
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "29.0",
 		LatestVersion:  "29.1",
 		HasUpdate:      true,
 	})
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "v0.10.10",
 		LatestVersion:  "v0.10.10",
@@ -80,7 +80,7 @@ func TestGetUpdates_WithData(t *testing.T) {
 	}
 
 	var checks []model.UpdateCheck
-	json.Unmarshal(w.Body.Bytes(), &checks)
+	_ = json.Unmarshal(w.Body.Bytes(), &checks)
 	if len(checks) != 2 {
 		t.Fatalf("expected 2 checks, got %d", len(checks))
 	}
@@ -111,7 +111,7 @@ func TestUpdateStatus_Empty(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 
 	// pending_count should be 0
 	if int(body["pending_count"].(float64)) != 0 {
@@ -150,7 +150,7 @@ func TestUpdateStatus_Empty(t *testing.T) {
 func TestUpdateStatus_WithPending(t *testing.T) {
 	srv, st, _ := newTestServerWithEngine(t)
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "29.0",
 		LatestVersion:  "29.1",
@@ -166,7 +166,7 @@ func TestUpdateStatus_WithPending(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 
 	if int(body["pending_count"].(float64)) != 1 {
 		t.Fatalf("expected 1 pending, got %v", body["pending_count"])
@@ -192,7 +192,7 @@ func TestCheckUpdates(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "check_triggered" {
 		t.Fatalf("expected check_triggered, got %q", body["status"])
 	}
@@ -224,7 +224,7 @@ func TestApplyUpdate_ValidService(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "update_started" {
 		t.Fatalf("expected update_started, got %q", body["status"])
 	}
@@ -244,7 +244,7 @@ func TestApplyAllUpdates_NoUpdates(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "no_updates" {
 		t.Fatalf("expected no_updates, got %v", body["status"])
 	}
@@ -257,20 +257,20 @@ func TestApplyAllUpdates_NoUpdates(t *testing.T) {
 func TestApplyAllUpdates_WithUpdates(t *testing.T) {
 	srv, st, _ := newTestServerWithEngine(t)
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "29.0",
 		LatestVersion:  "29.1",
 		HasUpdate:      true,
 	})
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "v0.10.10",
 		LatestVersion:  "v0.10.11",
 		HasUpdate:      true,
 	})
 	// This one has an error — should NOT be queued
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool",
 		CurrentVersion: "v3.2.0",
 		LatestVersion:  "v3.3.0",
@@ -287,7 +287,7 @@ func TestApplyAllUpdates_WithUpdates(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "updates_started" {
 		t.Fatalf("expected updates_started, got %v", body["status"])
 	}
@@ -319,7 +319,7 @@ func TestUpdateLogs_Empty(t *testing.T) {
 	}
 
 	var logs []model.UpdateLog
-	json.Unmarshal(w.Body.Bytes(), &logs)
+	_ = json.Unmarshal(w.Body.Bytes(), &logs)
 	if len(logs) != 0 {
 		t.Fatalf("expected 0 logs, got %d", len(logs))
 	}
@@ -328,13 +328,13 @@ func TestUpdateLogs_Empty(t *testing.T) {
 func TestUpdateLogs_WithData(t *testing.T) {
 	srv, st, _ := newTestServerWithEngine(t)
 
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "bitcoind",
 		FromVersion: "29.0",
 		ToVersion:   "29.1",
 		Status:      model.UpdateDone,
 	})
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "electrs",
 		FromVersion: "v0.10.10",
 		ToVersion:   "v0.10.11",
@@ -350,7 +350,7 @@ func TestUpdateLogs_WithData(t *testing.T) {
 	}
 
 	var logs []model.UpdateLog
-	json.Unmarshal(w.Body.Bytes(), &logs)
+	_ = json.Unmarshal(w.Body.Bytes(), &logs)
 	if len(logs) != 2 {
 		t.Fatalf("expected 2 logs, got %d", len(logs))
 	}
@@ -359,13 +359,13 @@ func TestUpdateLogs_WithData(t *testing.T) {
 func TestUpdateLogs_FilterByService(t *testing.T) {
 	srv, st, _ := newTestServerWithEngine(t)
 
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "bitcoind",
 		FromVersion: "29.0",
 		ToVersion:   "29.1",
 		Status:      model.UpdateDone,
 	})
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "electrs",
 		FromVersion: "v0.10.10",
 		ToVersion:   "v0.10.11",
@@ -381,7 +381,7 @@ func TestUpdateLogs_FilterByService(t *testing.T) {
 	}
 
 	var logs []model.UpdateLog
-	json.Unmarshal(w.Body.Bytes(), &logs)
+	_ = json.Unmarshal(w.Body.Bytes(), &logs)
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log for bitcoind, got %d", len(logs))
 	}
@@ -394,7 +394,7 @@ func TestUpdateLogs_FilterByService(t *testing.T) {
 
 func TestUpdatesEndpoints_RequireAuth(t *testing.T) {
 	srv, _, _ := newTestServerWithEngine(t)
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	endpoints := []struct {
 		method string

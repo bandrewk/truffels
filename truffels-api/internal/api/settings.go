@@ -77,7 +77,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.store.LogAudit("settings_updated", "", "Settings updated", r.RemoteAddr)
+	_ = s.store.LogAudit("settings_updated", "", "Settings updated", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -96,7 +96,7 @@ func (s *Server) handleSystemShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.store.LogAudit("system_shutdown", "", "System shutdown requested via UI", r.RemoteAddr)
+	_ = s.store.LogAudit("system_shutdown", "", "System shutdown requested via UI", r.RemoteAddr)
 
 	if err := s.compose.SystemAction("shutdown"); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -120,7 +120,7 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.store.LogAudit("system_restart", "", "System restart requested via UI", r.RemoteAddr)
+	_ = s.store.LogAudit("system_restart", "", "System restart requested via UI", r.RemoteAddr)
 
 	if err := s.compose.SystemAction("restart"); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

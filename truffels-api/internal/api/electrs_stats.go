@@ -20,7 +20,7 @@ func (s *Server) handleElectrsStats(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "electrs unreachable: "+err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

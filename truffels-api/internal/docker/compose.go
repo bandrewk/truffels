@@ -67,7 +67,7 @@ func (c *ComposeClient) Logs(serviceID string, tail int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("agent logs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
@@ -87,7 +87,7 @@ func (c *ComposeClient) Pull(image string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("agent pull: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
@@ -105,7 +105,7 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent image inspect: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		var ar agentResponse
@@ -130,7 +130,7 @@ func (c *ComposeClient) Build(serviceID string) error {
 	if err != nil {
 		return fmt.Errorf("agent build: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
@@ -147,7 +147,7 @@ func (c *ComposeClient) SystemAction(action string) error {
 	if err != nil {
 		return fmt.Errorf("agent system %s: %w", action, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
@@ -165,7 +165,7 @@ func (c *ComposeClient) composeAction(path, serviceID string) error {
 	if err != nil {
 		return fmt.Errorf("agent %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)

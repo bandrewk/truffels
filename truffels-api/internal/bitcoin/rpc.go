@@ -72,7 +72,7 @@ func (c *Client) call(method string, params ...interface{}) (json.RawMessage, er
 			return nil, fmt.Errorf("rpc call %s: %w", method, err)
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var rpcResp rpcResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {

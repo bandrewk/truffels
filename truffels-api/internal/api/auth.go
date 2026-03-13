@@ -72,7 +72,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.store.LogAudit("login_failed", "", "", ip)
+		_ = s.store.LogAudit("login_failed", "", "", ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid password"})
 		return
 	}
@@ -85,7 +85,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, cookie)
-	s.store.LogAudit("login", "", "", ip)
+	_ = s.store.LogAudit("login", "", "", ip)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -118,13 +118,13 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, cookie)
-	s.store.LogAudit("setup", "", "initial password set", r.RemoteAddr)
+	_ = s.store.LogAudit("setup", "", "initial password set", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, s.auth.ClearCookie())
-	s.store.LogAudit("logout", "", "", r.RemoteAddr)
+	_ = s.store.LogAudit("logout", "", "", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

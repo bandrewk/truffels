@@ -178,7 +178,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !changed {
-			s.store.LogAudit("service_pull_restart", id, "already up to date", r.RemoteAddr)
+			_ = s.store.LogAudit("service_pull_restart", id, "already up to date", r.RemoteAddr)
 			writeJSON(w, http.StatusOK, map[string]string{"status": "already_up_to_date", "action": "pull-restart"})
 			return
 		}
@@ -189,8 +189,8 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "enable":
-		s.store.SetServiceEnabled(id, true)
-		s.store.LogAudit("service_enable", id, "", r.RemoteAddr)
+		_ = s.store.SetServiceEnabled(id, true)
+		_ = s.store.LogAudit("service_enable", id, "", r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": "enable"})
 		return
 
@@ -198,10 +198,10 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		// Stop the service first if running
 		containers := docker.InspectContainers(tmpl.ContainerNames)
 		if deriveState(containers) == model.StateRunning {
-			s.compose.Stop(id)
+			_ = s.compose.Stop(id)
 		}
-		s.store.SetServiceEnabled(id, false)
-		s.store.LogAudit("service_disable", id, "", r.RemoteAddr)
+		_ = s.store.SetServiceEnabled(id, false)
+		_ = s.store.LogAudit("service_disable", id, "", r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": "disable"})
 		return
 
@@ -210,7 +210,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.store.LogAudit("service_"+req.Action, id, "", r.RemoteAddr)
+	_ = s.store.LogAudit("service_"+req.Action, id, "", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": req.Action})
 }
 
@@ -308,9 +308,9 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create revision + audit
-	s.store.LogAudit("config_update", id, "", r.RemoteAddr)
+	_ = s.store.LogAudit("config_update", id, "", r.RemoteAddr)
 	diff := simpleDiff(oldConfig, req.Config)
-	s.store.CreateConfigRevision(&model.ConfigRevision{
+	_ = s.store.CreateConfigRevision(&model.ConfigRevision{
 		ServiceID:        id,
 		Actor:            "admin",
 		Diff:             diff,

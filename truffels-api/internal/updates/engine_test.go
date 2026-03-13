@@ -326,7 +326,7 @@ func TestRollbackService_Success(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   backend:
     image: mempool/backend:v3.2.1
   frontend:
@@ -347,7 +347,7 @@ func TestRollbackService_Success(t *testing.T) {
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
 	// Seed a completed update log (so there is a previous version to roll back to)
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "mempool",
 		FromVersion: "v3.2.0",
 		ToVersion:   "v3.2.1",
@@ -355,7 +355,7 @@ func TestRollbackService_Success(t *testing.T) {
 	})
 
 	// Seed current update check showing current version
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool",
 		CurrentVersion: "v3.2.1",
 		LatestVersion:  "v3.2.1",
@@ -425,7 +425,7 @@ func TestRollbackService_AlreadyAtPreviousVersion(t *testing.T) {
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
 	// Seed a completed update log
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "electrs",
 		FromVersion: "v0.10.9",
 		ToVersion:   "v0.11.0",
@@ -433,7 +433,7 @@ func TestRollbackService_AlreadyAtPreviousVersion(t *testing.T) {
 	})
 
 	// Current version is already at the previous version
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "v0.10.9",
 		LatestVersion:  "v0.11.0",
@@ -468,13 +468,13 @@ func TestRollbackService_CustomBuildBlocked(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "ckpool",
 		FromVersion: "abc123",
 		ToVersion:   "def456",
 		Status:      model.UpdateDone,
 	})
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "ckpool",
 		CurrentVersion: "def456",
 		LatestVersion:  "def456",
@@ -496,7 +496,7 @@ func TestRollbackService_PullFails(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   server:
     image: getumbrel/electrs:v0.11.0
 `), 0644)
@@ -514,13 +514,13 @@ func TestRollbackService_PullFails(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.CreateUpdateLog(&model.UpdateLog{
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
 		ServiceID:   "electrs",
 		FromVersion: "v0.10.9",
 		ToVersion:   "v0.11.0",
 		Status:      model.UpdateDone,
 	})
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "v0.11.0",
 		LatestVersion:  "v0.11.0",
@@ -598,7 +598,7 @@ func TestRunPreflight_NoUpdateAvailable(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   bitcoind:
     image: btcpayserver/bitcoin:30.2
 `), 0644)
@@ -617,7 +617,7 @@ func TestRunPreflight_NoUpdateAvailable(t *testing.T) {
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
 	// No update available
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.2",
 		LatestVersion:  "30.2",
@@ -648,7 +648,7 @@ func TestRunPreflight_AlreadyUpdating(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   bitcoind:
     image: btcpayserver/bitcoin:30.0
 `), 0644)
@@ -666,7 +666,7 @@ func TestRunPreflight_AlreadyUpdating(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.0",
 		LatestVersion:  "30.2",
@@ -715,7 +715,7 @@ func TestRunPreflight_ComposeFileNotAccessible(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.0",
 		LatestVersion:  "30.2",
@@ -746,7 +746,7 @@ func TestRunPreflight_DependencyUnhealthy(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   electrs:
     image: getumbrel/electrs:v0.10.9
 `), 0644)
@@ -772,7 +772,7 @@ func TestRunPreflight_DependencyUnhealthy(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{bitcoindTmpl, electrsTmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "v0.10.9",
 		LatestVersion:  "v0.11.0",
@@ -804,7 +804,7 @@ func TestRunPreflight_DependentWarning(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   bitcoind:
     image: btcpayserver/bitcoin:30.0
 `), 0644)
@@ -830,7 +830,7 @@ func TestRunPreflight_DependentWarning(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{bitcoindTmpl, electrsTmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.0",
 		LatestVersion:  "30.2",
@@ -865,7 +865,7 @@ func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   bitcoind:
     image: btcpayserver/bitcoin:30.0
 `), 0644)
@@ -883,7 +883,7 @@ func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.0",
 		LatestVersion:  "30.2",

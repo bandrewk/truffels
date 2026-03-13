@@ -78,7 +78,7 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		<-sigCh
 		slog.Info("shutting down")
-		srv.Close()
+		_ = srv.Close()
 	}()
 
 	slog.Info("starting truffels-agent", "listen", listen)

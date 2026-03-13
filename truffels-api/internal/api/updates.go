@@ -24,7 +24,7 @@ func (s *Server) handleGetUpdates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	s.updateEngine.TriggerCheck()
-	s.store.LogAudit("update_check", "", "manual trigger", r.RemoteAddr)
+	_ = s.store.LogAudit("update_check", "", "manual trigger", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "check_triggered"})
 }
 
@@ -38,9 +38,9 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	// Run update in background
 	go func() {
 		if err := s.updateEngine.ApplyUpdate(id); err != nil {
-			s.store.LogAudit("update_failed", id, err.Error(), r.RemoteAddr)
+			_ = s.store.LogAudit("update_failed", id, err.Error(), r.RemoteAddr)
 		} else {
-			s.store.LogAudit("update_applied", id, "", r.RemoteAddr)
+			_ = s.store.LogAudit("update_applied", id, "", r.RemoteAddr)
 		}
 	}()
 
@@ -73,14 +73,14 @@ func (s *Server) handleApplyAllUpdates(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for _, id := range queued {
 			if err := s.updateEngine.ApplyUpdate(id); err != nil {
-				s.store.LogAudit("update_failed", id, err.Error(), "")
+				_ = s.store.LogAudit("update_failed", id, err.Error(), "")
 			} else {
-				s.store.LogAudit("update_applied", id, "", "")
+				_ = s.store.LogAudit("update_applied", id, "", "")
 			}
 		}
 	}()
 
-	s.store.LogAudit("update_all", "", "", r.RemoteAddr)
+	_ = s.store.LogAudit("update_all", "", "", r.RemoteAddr)
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"status": "updates_started",
 		"queued": queued,
@@ -119,9 +119,9 @@ func (s *Server) handleRollbackService(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		if err := s.updateEngine.RollbackService(id); err != nil {
-			s.store.LogAudit("rollback_failed", id, err.Error(), r.RemoteAddr)
+			_ = s.store.LogAudit("rollback_failed", id, err.Error(), r.RemoteAddr)
 		} else {
-			s.store.LogAudit("rollback_applied", id, "", r.RemoteAddr)
+			_ = s.store.LogAudit("rollback_applied", id, "", r.RemoteAddr)
 		}
 	}()
 

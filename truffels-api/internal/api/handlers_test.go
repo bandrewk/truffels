@@ -22,7 +22,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	reg := service.NewRegistry("/srv/truffels/compose")
 	a := auth.New(st)
@@ -35,7 +35,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 func authenticatedRequest(t *testing.T, srv *Server, method, path string, body string) *http.Request {
 	t.Helper()
 	// Set up auth first
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 	cookie, err := srv.auth.CreateSession()
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -63,7 +63,7 @@ func TestHandleHealth(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "ok" {
 		t.Fatalf("expected ok, got %q", body["status"])
 	}
@@ -84,7 +84,7 @@ func TestAuthStatus_NotSetup(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var body map[string]bool
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["setup"] {
 		t.Fatal("expected setup=false")
 	}
@@ -132,7 +132,7 @@ func TestAuthSetup_TooShort(t *testing.T) {
 func TestAuthSetup_AlreadyConfigured(t *testing.T) {
 	srv, _ := newTestServer(t)
 	// Setup first time
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/truffels/auth/setup",
@@ -146,7 +146,7 @@ func TestAuthSetup_AlreadyConfigured(t *testing.T) {
 
 func TestAuthLogin_Success(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/truffels/auth/login",
@@ -160,7 +160,7 @@ func TestAuthLogin_Success(t *testing.T) {
 
 func TestAuthLogin_WrongPassword(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/truffels/auth/login",
@@ -186,7 +186,7 @@ func TestAuthLogin_EmptyPassword(t *testing.T) {
 
 func TestAuthLogin_RateLimit(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	// Reset rate limiter for this test
 	loginLimiter.Lock()
@@ -248,7 +248,7 @@ func TestAuthMiddleware_NotSetup(t *testing.T) {
 
 func TestAuthMiddleware_Unauthorized(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/truffels/services", nil)
@@ -408,7 +408,7 @@ func TestSplitLines(t *testing.T) {
 
 func TestHandleAuditLog(t *testing.T) {
 	srv, st := newTestServer(t)
-	st.LogAudit("test_action", "target", "detail", "127.0.0.1")
+	_ = st.LogAudit("test_action", "target", "detail", "127.0.0.1")
 
 	w := httptest.NewRecorder()
 	req := authenticatedRequest(t, srv, "GET", "/api/truffels/audit", "")
@@ -419,7 +419,7 @@ func TestHandleAuditLog(t *testing.T) {
 	}
 
 	var entries []map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &entries)
+	_ = json.Unmarshal(w.Body.Bytes(), &entries)
 	// At least the test_action + setup audit from authenticatedRequest
 	if len(entries) < 1 {
 		t.Fatal("expected at least 1 audit entry")
@@ -456,7 +456,7 @@ func TestSystemRestart_CorrectPassword(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "ok" {
 		t.Fatalf("expected status ok, got %q", body["status"])
 	}
@@ -476,7 +476,7 @@ func TestSystemShutdown_CorrectPassword(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "ok" {
 		t.Fatalf("expected status ok, got %q", body["status"])
 	}
