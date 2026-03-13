@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"truffels-api/internal/auth"
 	"truffels-api/internal/docker"
+	"truffels-api/internal/metrics"
 	"truffels-api/internal/model"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
@@ -1078,5 +1080,428 @@ func TestSettings_RequiresAuth(t *testing.T) {
 	srv.Router().ServeHTTP(w, req)
 	if w.Code != 403 {
 		t.Fatalf("expected 403 for unauthenticated PUT, got %d", w.Code)
+	}
+}
+
+// --- Service Action: Enable ---
+
+func TestServiceAction_Enable_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	// Disable the service first so we can test enabling it
+	st.EnsureService("bitcoind")
+	st.SetServiceEnabled("bitcoind", false)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"enable"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["action"] != "enable" {
+		t.Fatalf("expected action=enable, got %q", body["action"])
+	}
+}
+
+func TestServiceAction_Enable_AuditLogged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	st.EnsureService("electrs")
+	st.SetServiceEnabled("electrs", false)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
+		`{"action":"enable"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, _ := st.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.Action == "service_enable" && e.Target == "electrs" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected audit log entry for service_enable")
+	}
+}
+
+// --- Service Action: Disable ---
+
+func TestServiceAction_Disable_RunningService(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	st.EnsureService("bitcoind")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"disable"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify compose stop was called because service was running
+	if agentState.lastAction != "stop" {
+		t.Fatalf("expected compose stop for running service, got %q", agentState.lastAction)
+	}
+}
+
+func TestServiceAction_Disable_StoppedService(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+		},
+	}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	st.EnsureService("bitcoind")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"disable"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Compose stop should NOT have been called since service was already stopped
+	if agentState.lastAction == "stop" {
+		t.Fatal("expected no compose stop for already-stopped service")
+	}
+}
+
+func TestServiceAction_Disable_AuditLogged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	st.EnsureService("ckstats")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckstats/action",
+		`{"action":"disable"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, _ := st.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.Action == "service_disable" && e.Target == "ckstats" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected audit log entry for service_disable")
+	}
+}
+
+// --- Service Action: Start — Admission Control ---
+
+// newTestServerWithCollector creates a server with a mock agent and a real metrics.Collector
+// backed by fake proc/sys directories for controlled temperature and disk readings.
+func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMilliC int) (*Server, *store.Store, *httptest.Server) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.New(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	mockSrv := newMockAgent(t, agentState)
+	t.Cleanup(mockSrv.Close)
+
+	reg := service.NewRegistry("/srv/truffels/compose")
+	a := auth.New(st)
+	compose := docker.NewComposeClient(mockSrv.URL)
+	docker.NewAgentInspector(mockSrv.URL)
+
+	// Create fake /proc and /sys trees for the collector
+	procDir := filepath.Join(dir, "proc")
+	sysDir := filepath.Join(dir, "sys")
+	diskDir := dir // use temp dir itself — will have plenty of space
+
+	os.MkdirAll(filepath.Join(procDir, "net"), 0755)
+	os.MkdirAll(filepath.Join(sysDir, "class/thermal/thermal_zone0"), 0755)
+
+	// Write minimal /proc/stat
+	os.WriteFile(filepath.Join(procDir, "stat"),
+		[]byte("cpu  100 0 50 800 10 5 3 0 0 0\n"), 0644)
+	// Write minimal /proc/meminfo
+	os.WriteFile(filepath.Join(procDir, "meminfo"),
+		[]byte("MemTotal:        8000000 kB\nMemAvailable:    4000000 kB\n"), 0644)
+	// Write temperature (millidegrees C)
+	os.WriteFile(filepath.Join(sysDir, "class/thermal/thermal_zone0/temp"),
+		[]byte(fmt.Sprintf("%d\n", tempMilliC)), 0644)
+	// Write minimal /proc/uptime
+	os.WriteFile(filepath.Join(procDir, "uptime"), []byte("3600.00 7200.00\n"), 0644)
+	// Write minimal /proc/net/dev
+	os.WriteFile(filepath.Join(procDir, "net/dev"),
+		[]byte("Inter-|   Receive\n face |bytes\n    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n  wlan0: 1000 0 0 0 0 0 0 0 2000 0 0 0 0 0 0 0\n"), 0644)
+	// Write minimal /proc/diskstats (no matching device — that's fine, returns 0)
+	os.WriteFile(filepath.Join(procDir, "diskstats"), []byte(""), 0644)
+
+	coll := metrics.NewCollector(procDir, sysDir, diskDir)
+	srv := NewServer(reg, st, compose, coll, a, nil, nil)
+	return srv, st, mockSrv
+}
+
+func TestServiceAction_Start_AdmissionTempTooHigh(t *testing.T) {
+	// Temperature = 85°C (85000 millidegrees), default max = 80°C
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithCollector(t, agentState, 85000)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 for high temp, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "temperature") {
+		t.Fatalf("expected temperature error, got %q", body["error"])
+	}
+}
+
+func TestServiceAction_Start_AdmissionDiskLow(t *testing.T) {
+	// Temperature = 50°C (safe), but set disk minimum very high so it always fails
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithCollector(t, agentState, 50000)
+
+	// Set admission_disk_min_gb to something absurdly high (99999 GB)
+	st.SetSetting("admission_disk_min_gb", "99999")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 for low disk, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "disk") {
+		t.Fatalf("expected disk space error, got %q", body["error"])
+	}
+}
+
+func TestServiceAction_Start_AdmissionPasses(t *testing.T) {
+	// Temperature = 50°C (safe), default disk min = 10 GB (temp dir has plenty)
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithCollector(t, agentState, 50000)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if agentState.lastAction != "up" {
+		t.Fatalf("expected compose up, got %q", agentState.lastAction)
+	}
+}
+
+// --- Service Action: Start — Disabled Service ---
+
+func TestServiceAction_Start_DisabledService(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	st.EnsureService("bitcoind")
+	st.SetServiceEnabled("bitcoind", false)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 for disabled service, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "disabled") {
+		t.Fatalf("expected disabled error, got %q", body["error"])
+	}
+}
+
+// --- Service Action: Pull-Restart ---
+
+// newMockAgentWithPull creates a mock agent that also handles /v1/image/inspect and /v1/image/pull.
+func newMockAgentWithPull(t *testing.T, state *mockAgentState, pullOutput string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/image/inspect":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"image":  "btcpayserver/bitcoin:30.2",
+				"digest": "sha256:abc123",
+				"tags":   []string{"30.2"},
+			})
+
+		case r.URL.Path == "/v1/image/pull":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok",
+				"output": pullOutput,
+			})
+
+		case strings.HasPrefix(r.URL.Path, "/v1/compose/"):
+			var req struct {
+				ServiceID string `json:"service_id"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			action := strings.TrimPrefix(r.URL.Path, "/v1/compose/")
+			state.lastAction = action
+			state.lastServiceID = req.ServiceID
+
+			if state.composeErr != "" {
+				w.WriteHeader(500)
+				json.NewEncoder(w).Encode(map[string]string{"error": state.composeErr})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case r.URL.Path == "/v1/inspect":
+			var req struct {
+				Containers []string `json:"containers"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+
+			var states []model.ContainerState
+			for _, name := range req.Containers {
+				if cs, ok := state.containerStates[name]; ok {
+					states = append(states, cs)
+				} else {
+					states = append(states, model.ContainerState{
+						Name: name, Status: "running", Health: "healthy",
+					})
+				}
+			}
+			json.NewEncoder(w).Encode(states)
+		}
+	}))
+}
+
+func newTestServerWithPullAgent(t *testing.T, agentState *mockAgentState, pullOutput string) (*Server, *store.Store, *httptest.Server) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.New(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	mockSrv := newMockAgentWithPull(t, agentState, pullOutput)
+	t.Cleanup(mockSrv.Close)
+
+	reg := service.NewRegistry("/srv/truffels/compose")
+	a := auth.New(st)
+	compose := docker.NewComposeClient(mockSrv.URL)
+	docker.NewAgentInspector(mockSrv.URL)
+
+	srv := NewServer(reg, st, compose, nil, a, nil, nil)
+	return srv, st, mockSrv
+}
+
+func TestServiceAction_PullRestart_ImageChanged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithPullAgent(t, agentState, "Pulling image... Done")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"pull-restart"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["action"] != "pull-restart" {
+		t.Fatalf("expected action=pull-restart, got %q", body["action"])
+	}
+	// Image changed, so compose up should have been called
+	if agentState.lastAction != "up" {
+		t.Fatalf("expected compose up after image change, got %q", agentState.lastAction)
+	}
+}
+
+func TestServiceAction_PullRestart_AlreadyUpToDate(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithPullAgent(t, agentState, "Image is up to date for btcpayserver/bitcoin:30.2")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"pull-restart"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "already_up_to_date" {
+		t.Fatalf("expected already_up_to_date status, got %q", body["status"])
+	}
+	// Compose up should NOT have been called
+	if agentState.lastAction == "up" {
+		t.Fatal("expected no compose up when image is already up to date")
+	}
+}
+
+func TestServiceAction_PullRestart_AuditLogged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithPullAgent(t, agentState, "Pulling image... Done")
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
+		`{"action":"pull-restart"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, _ := st.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.Action == "service_pull-restart" && e.Target == "bitcoind" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected audit log entry for service_pull-restart")
 	}
 }
