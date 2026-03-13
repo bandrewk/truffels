@@ -267,7 +267,7 @@ func inspectContainer(name string) containerState {
 		StartedAt:    ir.State.StartedAt,
 		Image:        ir.Config.Image,
 	}
-	if ir.State.Health != nil {
+	if ir.State.Health != nil && ir.State.Status == "running" {
 		cs.Health = ir.State.Health.Status
 	}
 	return cs
