@@ -704,6 +704,30 @@ func TestHandleSystemJournal_LinesClamp(t *testing.T) {
 
 // --- handleSystemTuningGet ---
 
+// --- handleSystemInfo ---
+
+func TestHandleSystemInfo_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/v1/system/info", nil)
+
+	handleSystemInfo(w, r)
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var resp systemInfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	// cpu_cores should be 0 in CI (nsenter fails), but struct should decode
+	if resp.CPUCores < 0 {
+		t.Fatal("cpu_cores should not be negative")
+	}
+}
+
+// --- handleSystemTuningGet ---
+
 func TestHandleSystemTuningGet_ReturnsJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/v1/system/tuning", nil)

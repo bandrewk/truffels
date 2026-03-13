@@ -33,6 +33,16 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/v1/system/info" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"hostname": "truffels", "os": "Debian 13", "kernel": "6.12.62",
+				"model": "Raspberry Pi 5", "cpu_cores": 4,
+				"mem_total": "8063 MB", "mem_free": "4000 MB", "uptime": "1d 2h",
+				"networks": []map[string]string{
+					{"name": "wlan0", "ip": "192.168.0.196/16", "mac": "aa:bb:cc:dd:ee:ff"},
+				},
+			})
+
 		case r.URL.Path == "/v1/system/journal" && r.Method == "POST":
 			_ = json.NewEncoder(w).Encode(map[string]string{"logs": "Mar 13 10:00:00 host kernel: test log line"})
 
@@ -1520,6 +1530,54 @@ func TestServiceAction_PullRestart_AuditLogged(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected audit log entry for service_pull-restart")
+	}
+}
+
+// --- System Info ---
+
+func TestSystemInfo_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/info", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Hostname string `json:"hostname"`
+		Model    string `json:"model"`
+		CPUCores int    `json:"cpu_cores"`
+		Networks []struct {
+			Name string `json:"name"`
+			IP   string `json:"ip"`
+		} `json:"networks"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body.Hostname != "truffels" {
+		t.Fatalf("expected hostname=truffels, got %q", body.Hostname)
+	}
+	if body.CPUCores != 4 {
+		t.Fatalf("expected 4 cores, got %d", body.CPUCores)
+	}
+	if len(body.Networks) != 1 || body.Networks[0].Name != "wlan0" {
+		t.Fatalf("unexpected networks: %+v", body.Networks)
+	}
+}
+
+func TestSystemInfo_RequiresAuth(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	_ = srv.auth.SetPassword("testpassword")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/truffels/system/info", nil)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
 

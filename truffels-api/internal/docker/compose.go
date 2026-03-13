@@ -174,6 +174,40 @@ type SystemTuningInfo struct {
 	Boots             []BootEntry `json:"boots"`
 }
 
+// NetworkIfInfo represents a network interface.
+type NetworkIfInfo struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	MAC  string `json:"mac"`
+}
+
+// SystemInfo represents host system information.
+type SystemInfo struct {
+	Hostname string          `json:"hostname"`
+	OS       string          `json:"os"`
+	Kernel   string          `json:"kernel"`
+	Model    string          `json:"model"`
+	CPUCores int             `json:"cpu_cores"`
+	MemTotal string          `json:"mem_total"`
+	MemFree  string          `json:"mem_free"`
+	Uptime   string          `json:"uptime"`
+	Networks []NetworkIfInfo `json:"networks"`
+}
+
+// SystemInfoGet fetches host system info via the agent.
+func (c *ComposeClient) SystemInfoGet() (*SystemInfo, error) {
+	resp, err := c.httpClient.Get(c.agentURL + "/v1/system/info")
+	if err != nil {
+		return nil, fmt.Errorf("agent system info: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var info SystemInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("agent system info decode: %w", err)
+	}
+	return &info, nil
+}
+
 // SystemJournal fetches journalctl output via the agent.
 func (c *ComposeClient) SystemJournal(lines int, priority, unit, since string, boot int) (string, error) {
 	body, _ := json.Marshal(map[string]interface{}{

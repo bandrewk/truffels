@@ -10,9 +10,10 @@ import {
   severityAtOrAbove,
 } from '@/lib/logUtils'
 
-type Tab = 'services' | 'alerts' | 'logs' | 'tuning' | 'danger'
+type Tab = 'info' | 'services' | 'alerts' | 'logs' | 'tuning' | 'danger'
 
 const TABS: { key: Tab; label: string }[] = [
+  { key: 'info', label: 'Info' },
   { key: 'services', label: 'Service Handling' },
   { key: 'alerts', label: 'Alerts' },
   { key: 'logs', label: 'System Logs' },
@@ -21,7 +22,7 @@ const TABS: { key: Tab; label: string }[] = [
 ]
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<Tab>('services')
+  const [tab, setTab] = useState<Tab>('info')
   const fetcher = useCallback(() => api.settings(), [])
   const { data: settings, error, loading, refresh } = useApi(fetcher)
   const [saving, setSaving] = useState(false)
@@ -59,6 +60,7 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {tab === 'info' && <SystemInfoTab />}
       {tab === 'services' && (
         <ServiceHandlingTab
           settings={settings}
@@ -313,6 +315,62 @@ const UNIT_OPTIONS = [
   { value: 'nftables', label: 'nftables' },
   { value: 'ssh', label: 'SSH' },
 ] as const
+
+function SystemInfoTab() {
+  const fetcher = useCallback(() => api.systemInfo(), [])
+  const { data, error, loading } = useApi(fetcher)
+
+  if (loading) return <div className="text-gray-400">Loading...</div>
+  if (error) return <div className="text-red-400">Error: {error}</div>
+  if (!data) return null
+
+  const Row = ({ label, value }: { label: string; value: string | number }) => (
+    <div className="flex justify-between py-1.5 border-b border-border-subtle last:border-0">
+      <span className="text-gray-500 text-sm">{label}</span>
+      <span className="text-gray-300 text-sm font-mono">{value}</span>
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardTitle>Hardware</CardTitle>
+        <div className="divide-y divide-border-subtle">
+          <Row label="Model" value={data.model} />
+          <Row label="CPU Cores" value={data.cpu_cores} />
+          <Row label="Memory Total" value={data.mem_total} />
+          <Row label="Memory Available" value={data.mem_free} />
+        </div>
+      </Card>
+      <Card>
+        <CardTitle>System</CardTitle>
+        <div className="divide-y divide-border-subtle">
+          <Row label="Hostname" value={data.hostname} />
+          <Row label="OS" value={data.os} />
+          <Row label="Kernel" value={data.kernel} />
+          <Row label="Uptime" value={data.uptime} />
+        </div>
+      </Card>
+      {data.networks.length > 0 && (
+        <Card>
+          <CardTitle>Network</CardTitle>
+          <div className="space-y-3">
+            {data.networks.map((net) => (
+              <div key={net.name} className="divide-y divide-border-subtle">
+                <div className="flex justify-between py-1.5">
+                  <span className="text-gray-500 text-sm">Interface</span>
+                  <span className="text-accent text-sm font-mono">{net.name}</span>
+                </div>
+                <Row label="IP" value={net.ip} />
+                <Row label="MAC" value={net.mac} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
 
 const LINE_OPTIONS = [50, 100, 200, 500] as const
 
