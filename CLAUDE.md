@@ -105,6 +105,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Admission control:** Blocks manual service starts when disk free < threshold or CPU temp >= threshold (configurable via Settings, default 10GB/80°C). Does not affect Docker restart policies.
 - **Rollback:** Manual rollback to previous version via service detail page or `POST /updates/rollback/{id}`. Finds last successful update, pulls old image, rewrites compose tags, restarts + health check. Not available for floating-tag or custom-built services.
 - **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services). Managed services support enable/disable — disabled services show purple "disabled" badge and cannot be started.
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 330+ tests total
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), golangci-lint (errcheck), tsc --noEmit, coverage reporting, 367 tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
