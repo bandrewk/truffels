@@ -554,7 +554,7 @@ func runCompose(composeDir string, args ...string) error {
 
 func handleSystemShutdown(w http.ResponseWriter, r *http.Request) {
 	slog.Warn("system shutdown requested")
-	cmd := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "/sbin/shutdown", "-h", "now")
+	cmd := exec.Command("nsenter", "-t", "1", "-m", "--", "/sbin/shutdown", "-h", "now")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Error("system shutdown failed", "err", err, "output", string(out))
 		writeJSON(w, 500, map[string]string{"status": "error", "error": err.Error()})
@@ -565,7 +565,7 @@ func handleSystemShutdown(w http.ResponseWriter, r *http.Request) {
 
 func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 	slog.Warn("system restart requested")
-	cmd := exec.Command("nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "/sbin/reboot")
+	cmd := exec.Command("nsenter", "-t", "1", "-m", "--", "/sbin/reboot")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Error("system restart failed", "err", err, "output", string(out))
 		writeJSON(w, 500, map[string]string{"status": "error", "error": err.Error()})
