@@ -307,6 +307,15 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 	return result, nil
 }
 
+func (e *Engine) alertUpdateFailed(serviceID, msg string) {
+	_ = e.store.UpsertAlert(&model.Alert{
+		Type:      "update_failed",
+		Severity:  model.SeverityCritical,
+		ServiceID: serviceID,
+		Message:   msg,
+	})
+}
+
 // ApplyUpdate performs the update for a single service with automatic rollback on health failure.
 func (e *Engine) ApplyUpdate(serviceID string) error {
 	tmpl, ok := e.registry.Get(serviceID)
@@ -368,6 +377,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 			pullRef := img + ":" + src.TagFilter
 			if _, err := e.compose.Pull(pullRef); err != nil {
 				_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+				e.alertUpdateFailed(serviceID, "pull failed: "+err.Error())
 				return &UpdateError{Msg: "pull failed: " + err.Error()}
 			}
 		}
@@ -376,6 +386,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
 		if err := e.compose.Build(serviceID); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
 			return &UpdateError{Msg: "build failed: " + err.Error()}
 		}
 	} else {
@@ -384,6 +395,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 			newImage := img + ":" + check.LatestVersion
 			if _, err := e.compose.Pull(newImage); err != nil {
 				_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+				e.alertUpdateFailed(serviceID, "pull failed ("+img+"): "+err.Error())
 				return &UpdateError{Msg: "pull failed (" + img + "): " + err.Error()}
 			}
 		}
@@ -394,6 +406,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		composePath := tmpl.ComposeDir + "/docker-compose.yml"
 		if err := updateComposeImageTags(composePath, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
 			return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
 		}
 	}
@@ -403,17 +416,20 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 
 	if err := e.compose.Down(serviceID); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "stop failed: "+err.Error(), check.CurrentVersion)
+		e.alertUpdateFailed(serviceID, "stop failed: "+err.Error())
 		return &UpdateError{Msg: "stop failed: " + err.Error()}
 	}
 	if err := e.compose.Up(serviceID); err != nil {
 		if tmpl.FloatingTag {
 			// No rollback possible for floating tags — old image is overwritten
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "start failed (no rollback for floating tag): "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "start failed (no rollback for floating tag): "+err.Error())
 			return &UpdateError{Msg: "start failed: " + err.Error()}
 		}
 		slog.Error("update: start failed, rolling back", "service", serviceID, "err", err)
 		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "start failed: "+err.Error(), check.CurrentVersion)
+		e.alertUpdateFailed(serviceID, "start failed, rolled back to "+check.CurrentVersion)
 		return &UpdateError{Msg: "start failed, rolled back: " + err.Error()}
 	}
 
@@ -424,16 +440,19 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	if !healthy {
 		if tmpl.FloatingTag {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "unhealthy after update (no rollback for floating tag)", "")
+			e.alertUpdateFailed(serviceID, "unhealthy after update (no rollback for floating tag)")
 			return &UpdateError{Msg: "service unhealthy after update, no rollback available for floating tag"}
 		}
 		slog.Error("update: service unhealthy after update, rolling back", "service", serviceID)
 		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "unhealthy after update", check.CurrentVersion)
+		e.alertUpdateFailed(serviceID, "unhealthy after update, rolled back to "+check.CurrentVersion)
 		return &UpdateError{Msg: "service unhealthy after update, rolled back"}
 	}
 
 	// Success
 	_ = e.store.UpdateLogStatus(logID, model.UpdateDone, "", "")
+	_ = e.store.ResolveAlerts("update_failed", serviceID)
 	slog.Info("update complete", "service", serviceID, "version", check.LatestVersion)
 
 	// Update the check to reflect no pending update
@@ -517,6 +536,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 	for _, img := range src.Images {
 		if _, err := e.compose.Pull(img + ":" + prevVersion); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "rollback pull failed: "+err.Error())
 			return &UpdateError{Msg: "pull failed: " + err.Error()}
 		}
 	}
@@ -524,6 +544,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 	composePath := tmpl.ComposeDir + "/docker-compose.yml"
 	if err := updateComposeImageTags(composePath, src.Images, currentVersion, prevVersion); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "rollback compose rewrite failed: "+err.Error())
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
 	}
 
@@ -532,6 +553,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 	_ = e.compose.Down(serviceID)
 	if err := e.compose.Up(serviceID); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "start failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "rollback start failed: "+err.Error())
 		return &UpdateError{Msg: "start failed after rollback: " + err.Error()}
 	}
 
@@ -539,10 +561,12 @@ func (e *Engine) RollbackService(serviceID string) error {
 	time.Sleep(e.healthWait)
 	if !e.checkHealth(tmpl) {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "unhealthy after rollback", "")
+		e.alertUpdateFailed(serviceID, "unhealthy after rollback to "+prevVersion)
 		return &UpdateError{Msg: "service unhealthy after rollback"}
 	}
 
 	_ = e.store.UpdateLogStatus(logID, model.UpdateDone, "", "")
+	_ = e.store.ResolveAlerts("update_failed", serviceID)
 	_ = e.store.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      serviceID,
 		CurrentVersion: prevVersion,
