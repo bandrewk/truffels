@@ -80,7 +80,7 @@ func TestCheckLatestVersion_DockerHub_PicksFirstStableTag(t *testing.T) {
 		{"v1.9.0"},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
 	}))
 	defer srv.Close()
 	defer withMockClient(srv)()
@@ -148,7 +148,7 @@ func TestCheckLatestVersion_DockerHub_FiltersUnstableTags(t *testing.T) {
 		{"v1.5.0"},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
 	}))
 	defer srv.Close()
 
@@ -177,7 +177,7 @@ func TestCheckLatestVersion_DockerHub_NoSuitableTags(t *testing.T) {
 		{"edge"},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
 	}))
 	defer srv.Close()
 
@@ -215,7 +215,7 @@ func TestCheckLatestVersion_DockerHub_NoImages(t *testing.T) {
 func TestCheckLatestVersion_GitHub_CommitSHA(t *testing.T) {
 	fullSHA := "abcdef1234567890abcdef1234567890abcdef12"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"sha": fullSHA})
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": fullSHA})
 	}))
 	defer srv.Close()
 
@@ -269,7 +269,7 @@ func TestCheckLatestVersion_Bitbucket_CommitHash(t *testing.T) {
 				{"hash": fullHash},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -321,7 +321,7 @@ func TestCheckLatestVersion_DockerDigest_Success(t *testing.T) {
 		requestCount++
 		if strings.Contains(r.URL.Path, "/token") || strings.Contains(r.URL.RawQuery, "token") {
 			// Token endpoint
-			json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
 			return
 		}
 		// Manifest HEAD endpoint
@@ -366,7 +366,7 @@ func TestCheckLatestVersion_DockerDigest_NoImages(t *testing.T) {
 func TestCheckLatestVersion_DockerDigest_DefaultTag(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/token") || strings.Contains(r.URL.RawQuery, "token") {
-			json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
 			return
 		}
 		// Verify we're requesting "latest" tag

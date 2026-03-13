@@ -39,7 +39,7 @@ func main() {
 
 	// Ensure all services exist in DB
 	for _, tmpl := range registry.All() {
-		st.EnsureService(tmpl.ID)
+		_ = st.EnsureService(tmpl.ID)
 	}
 
 	// Agent client (Docker operations go through truffels-agent)
@@ -80,7 +80,7 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-sigCh
 		slog.Info("shutting down", "signal", sig)
-		httpServer.Close()
+		_ = httpServer.Close()
 	}()
 
 	slog.Info("starting truffels-api", "listen", cfg.Listen)
@@ -109,7 +109,7 @@ func initBitcoinRPC(secretsRoot string) *bitcoin.Client {
 		slog.Warn("cannot open rpc.env, bitcoin stats disabled", "err", err)
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var user, pass string
 	scanner := bufio.NewScanner(f)

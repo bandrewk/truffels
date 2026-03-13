@@ -37,29 +37,29 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 			var req struct {
 				ServiceID string `json:"service_id"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 			action := strings.TrimPrefix(r.URL.Path, "/v1/compose/")
 			state.lastAction = action
 			state.lastServiceID = req.ServiceID
 
 			if state.composeErr != "" {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": state.composeErr})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": state.composeErr})
 				return
 			}
 
 			// For logs endpoint, return logs field
 			if action == "logs" {
-				json.NewEncoder(w).Encode(map[string]string{"status": "ok", "logs": "test log output"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "logs": "test log output"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case r.URL.Path == "/v1/inspect":
 			var req struct {
 				Containers []string `json:"containers"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 
 			var states []model.ContainerState
 			for _, name := range req.Containers {
@@ -71,7 +71,7 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 					})
 				}
 			}
-			json.NewEncoder(w).Encode(states)
+			_ = json.NewEncoder(w).Encode(states)
 		}
 	}))
 }
@@ -84,7 +84,7 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
@@ -102,7 +102,7 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 
 func authedReq(t *testing.T, srv *Server, method, path, body string) *http.Request {
 	t.Helper()
-	srv.auth.SetPassword("testpassword")
+	_ = srv.auth.SetPassword("testpassword")
 	cookie, err := srv.auth.CreateSession()
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -163,7 +163,7 @@ func TestServiceAction_Start_DependencyNotRunning(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !strings.Contains(body["error"], "bitcoind") {
 		t.Fatalf("expected error about bitcoind dependency, got %q", body["error"])
 	}
@@ -267,7 +267,7 @@ func TestServiceAction_Stop_DependentRunning(t *testing.T) {
 		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !strings.Contains(body["error"], "depends on this service") {
 		t.Fatalf("expected dependent-running error, got %q", body["error"])
 	}
@@ -430,7 +430,7 @@ func TestServiceLogs_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["logs"] != "test log output" {
 		t.Fatalf("expected test log output, got %q", body["logs"])
 	}
@@ -490,7 +490,7 @@ func TestListServices(t *testing.T) {
 	}
 
 	var services []model.ServiceInstance
-	json.Unmarshal(w.Body.Bytes(), &services)
+	_ = json.Unmarshal(w.Body.Bytes(), &services)
 	if len(services) != 11 {
 		t.Fatalf("expected 11 services, got %d", len(services))
 	}
@@ -509,7 +509,7 @@ func TestGetService_Found(t *testing.T) {
 	}
 
 	var svc model.ServiceInstance
-	json.Unmarshal(w.Body.Bytes(), &svc)
+	_ = json.Unmarshal(w.Body.Bytes(), &svc)
 	if svc.Template.ID != "bitcoind" {
 		t.Fatalf("expected bitcoind, got %q", svc.Template.ID)
 	}
@@ -544,7 +544,7 @@ func TestGetConfig_NoConfigPath(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["config"] != nil {
 		t.Fatalf("expected nil config, got %v", body["config"])
 	}
@@ -563,8 +563,8 @@ func TestGetConfig_WithConfigFile(t *testing.T) {
 
 	// Create the bitcoin config file
 	btcDir := filepath.Join(dir, "bitcoin")
-	os.MkdirAll(btcDir, 0755)
-	os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("server=1\ntxindex=1\n"), 0644)
+	_ = os.MkdirAll(btcDir, 0755)
+	_ = os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("server=1\ntxindex=1\n"), 0644)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "GET", "/api/truffels/services/bitcoind/config", "")
@@ -575,7 +575,7 @@ func TestGetConfig_WithConfigFile(t *testing.T) {
 	}
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["config"] != "server=1\ntxindex=1\n" {
 		t.Fatalf("unexpected config: %v", body["config"])
 	}
@@ -604,8 +604,8 @@ func TestUpdateConfig_Success(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TRUFFELS_CONFIG_ROOT", dir)
 	btcDir := filepath.Join(dir, "bitcoin")
-	os.MkdirAll(btcDir, 0755)
-	os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("server=1\n"), 0644)
+	_ = os.MkdirAll(btcDir, 0755)
+	_ = os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("server=1\n"), 0644)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/config",
@@ -639,8 +639,8 @@ func TestUpdateConfig_WithRestart(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TRUFFELS_CONFIG_ROOT", dir)
 	btcDir := filepath.Join(dir, "bitcoin")
-	os.MkdirAll(btcDir, 0755)
-	os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("old"), 0644)
+	_ = os.MkdirAll(btcDir, 0755)
+	_ = os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("old"), 0644)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/config",
@@ -662,8 +662,8 @@ func TestUpdateConfig_RestartFails(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TRUFFELS_CONFIG_ROOT", dir)
 	btcDir := filepath.Join(dir, "bitcoin")
-	os.MkdirAll(btcDir, 0755)
-	os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("old"), 0644)
+	_ = os.MkdirAll(btcDir, 0755)
+	_ = os.WriteFile(filepath.Join(btcDir, "bitcoin.conf"), []byte("old"), 0644)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/config",
@@ -675,7 +675,7 @@ func TestUpdateConfig_RestartFails(t *testing.T) {
 		t.Fatalf("expected 200 (config saved), got %d: %s", w.Code, w.Body.String())
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "config_saved" {
 		t.Fatalf("expected config_saved status, got %q", body["status"])
 	}
@@ -736,8 +736,8 @@ func TestCkpoolStats_Success(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TRUFFELS_DATA_ROOT", dir)
 	poolDir := filepath.Join(dir, "ckpool", "logs", "pool")
-	os.MkdirAll(poolDir, 0755)
-	os.WriteFile(filepath.Join(poolDir, "pool.status"), []byte(
+	_ = os.MkdirAll(poolDir, 0755)
+	_ = os.WriteFile(filepath.Join(poolDir, "pool.status"), []byte(
 		`{"runtime":3600,"lastupdate":1710000000,"Users":1,"Workers":2,"Idle":0}
 {"hashrate1m":"1.92M","hashrate5m":"1.85M","hashrate15m":"1.80M","hashrate1hr":"1.75M","hashrate6hr":"1.70M","hashrate1d":"1.65M","hashrate7d":"1.60M"}
 {"diff":65536,"accepted":1000,"rejected":5,"bestshare":123456789,"SPS1m":0.5,"SPS5m":0.45,"SPS15m":0.4,"SPS1h":0.35}
@@ -752,7 +752,7 @@ func TestCkpoolStats_Success(t *testing.T) {
 	}
 
 	var stats CkpoolStats
-	json.Unmarshal(w.Body.Bytes(), &stats)
+	_ = json.Unmarshal(w.Body.Bytes(), &stats)
 	if stats.Status.Workers != 2 {
 		t.Fatalf("expected 2 workers, got %d", stats.Status.Workers)
 	}
@@ -786,9 +786,9 @@ func TestCkpoolStats_IncompleteFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TRUFFELS_DATA_ROOT", dir)
 	poolDir := filepath.Join(dir, "ckpool", "logs", "pool")
-	os.MkdirAll(poolDir, 0755)
+	_ = os.MkdirAll(poolDir, 0755)
 	// Only 1 line instead of 3
-	os.WriteFile(filepath.Join(poolDir, "pool.status"), []byte("{}\n"), 0644)
+	_ = os.WriteFile(filepath.Join(poolDir, "pool.status"), []byte("{}\n"), 0644)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "GET", "/api/truffels/services/ckpool/stats", "")
@@ -822,13 +822,13 @@ func TestAlertsHandler_ActiveOnly(t *testing.T) {
 	agentState := &mockAgentState{}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.UpsertAlert(&model.Alert{
+	_ = st.UpsertAlert(&model.Alert{
 		Type: "disk_full", Severity: model.SeverityWarning, Message: "90%",
 	})
-	st.UpsertAlert(&model.Alert{
+	_ = st.UpsertAlert(&model.Alert{
 		Type: "high_temp", Severity: model.SeverityWarning, Message: "76C",
 	})
-	st.ResolveAlerts("high_temp", "")
+	_ = st.ResolveAlerts("high_temp", "")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "GET", "/api/truffels/alerts", "")
@@ -838,7 +838,7 @@ func TestAlertsHandler_ActiveOnly(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var alerts []model.Alert
-	json.Unmarshal(w.Body.Bytes(), &alerts)
+	_ = json.Unmarshal(w.Body.Bytes(), &alerts)
 	if len(alerts) != 1 {
 		t.Fatalf("expected 1 active alert, got %d", len(alerts))
 	}
@@ -848,13 +848,13 @@ func TestAlertsHandler_All(t *testing.T) {
 	agentState := &mockAgentState{}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.UpsertAlert(&model.Alert{
+	_ = st.UpsertAlert(&model.Alert{
 		Type: "disk_full", Severity: model.SeverityWarning, Message: "90%",
 	})
-	st.UpsertAlert(&model.Alert{
+	_ = st.UpsertAlert(&model.Alert{
 		Type: "high_temp", Severity: model.SeverityWarning, Message: "76C",
 	})
-	st.ResolveAlerts("high_temp", "")
+	_ = st.ResolveAlerts("high_temp", "")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "GET", "/api/truffels/alerts?all=true", "")
@@ -864,7 +864,7 @@ func TestAlertsHandler_All(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var alerts []model.Alert
-	json.Unmarshal(w.Body.Bytes(), &alerts)
+	_ = json.Unmarshal(w.Body.Bytes(), &alerts)
 	if len(alerts) != 2 {
 		t.Fatalf("expected 2 total alerts, got %d", len(alerts))
 	}
@@ -885,7 +885,7 @@ func TestGetSettings_Defaults(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 	// Verify defaults
 	if resp["restart_loop_count"] != float64(5) {
@@ -1045,7 +1045,7 @@ func TestGetSettings_AfterUpdate(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 	if resp["restart_loop_count"] != float64(15) {
 		t.Fatalf("expected 15, got %v", resp["restart_loop_count"])
@@ -1090,8 +1090,8 @@ func TestServiceAction_Enable_Success(t *testing.T) {
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
 	// Disable the service first so we can test enabling it
-	st.EnsureService("bitcoind")
-	st.SetServiceEnabled("bitcoind", false)
+	_ = st.EnsureService("bitcoind")
+	_ = st.SetServiceEnabled("bitcoind", false)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
@@ -1103,7 +1103,7 @@ func TestServiceAction_Enable_Success(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["action"] != "enable" {
 		t.Fatalf("expected action=enable, got %q", body["action"])
 	}
@@ -1113,8 +1113,8 @@ func TestServiceAction_Enable_AuditLogged(t *testing.T) {
 	agentState := &mockAgentState{}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.EnsureService("electrs")
-	st.SetServiceEnabled("electrs", false)
+	_ = st.EnsureService("electrs")
+	_ = st.SetServiceEnabled("electrs", false)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
@@ -1147,7 +1147,7 @@ func TestServiceAction_Disable_RunningService(t *testing.T) {
 	}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.EnsureService("bitcoind")
+	_ = st.EnsureService("bitcoind")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
@@ -1172,7 +1172,7 @@ func TestServiceAction_Disable_StoppedService(t *testing.T) {
 	}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.EnsureService("bitcoind")
+	_ = st.EnsureService("bitcoind")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
@@ -1193,7 +1193,7 @@ func TestServiceAction_Disable_AuditLogged(t *testing.T) {
 	agentState := &mockAgentState{}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.EnsureService("ckstats")
+	_ = st.EnsureService("ckstats")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/ckstats/action",
@@ -1227,7 +1227,7 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
@@ -1242,25 +1242,25 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	sysDir := filepath.Join(dir, "sys")
 	diskDir := dir // use temp dir itself — will have plenty of space
 
-	os.MkdirAll(filepath.Join(procDir, "net"), 0755)
-	os.MkdirAll(filepath.Join(sysDir, "class/thermal/thermal_zone0"), 0755)
+	_ = os.MkdirAll(filepath.Join(procDir, "net"), 0755)
+	_ = os.MkdirAll(filepath.Join(sysDir, "class/thermal/thermal_zone0"), 0755)
 
 	// Write minimal /proc/stat
-	os.WriteFile(filepath.Join(procDir, "stat"),
+	_ = os.WriteFile(filepath.Join(procDir, "stat"),
 		[]byte("cpu  100 0 50 800 10 5 3 0 0 0\n"), 0644)
 	// Write minimal /proc/meminfo
-	os.WriteFile(filepath.Join(procDir, "meminfo"),
+	_ = os.WriteFile(filepath.Join(procDir, "meminfo"),
 		[]byte("MemTotal:        8000000 kB\nMemAvailable:    4000000 kB\n"), 0644)
 	// Write temperature (millidegrees C)
-	os.WriteFile(filepath.Join(sysDir, "class/thermal/thermal_zone0/temp"),
+	_ = os.WriteFile(filepath.Join(sysDir, "class/thermal/thermal_zone0/temp"),
 		[]byte(fmt.Sprintf("%d\n", tempMilliC)), 0644)
 	// Write minimal /proc/uptime
-	os.WriteFile(filepath.Join(procDir, "uptime"), []byte("3600.00 7200.00\n"), 0644)
+	_ = os.WriteFile(filepath.Join(procDir, "uptime"), []byte("3600.00 7200.00\n"), 0644)
 	// Write minimal /proc/net/dev
-	os.WriteFile(filepath.Join(procDir, "net/dev"),
+	_ = os.WriteFile(filepath.Join(procDir, "net/dev"),
 		[]byte("Inter-|   Receive\n face |bytes\n    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n  wlan0: 1000 0 0 0 0 0 0 0 2000 0 0 0 0 0 0 0\n"), 0644)
 	// Write minimal /proc/diskstats (no matching device — that's fine, returns 0)
-	os.WriteFile(filepath.Join(procDir, "diskstats"), []byte(""), 0644)
+	_ = os.WriteFile(filepath.Join(procDir, "diskstats"), []byte(""), 0644)
 
 	coll := metrics.NewCollector(procDir, sysDir, diskDir)
 	srv := NewServer(reg, st, compose, coll, a, nil, nil)
@@ -1282,7 +1282,7 @@ func TestServiceAction_Start_AdmissionTempTooHigh(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !strings.Contains(body["error"], "temperature") {
 		t.Fatalf("expected temperature error, got %q", body["error"])
 	}
@@ -1294,7 +1294,7 @@ func TestServiceAction_Start_AdmissionDiskLow(t *testing.T) {
 	srv, st, _ := newTestServerWithCollector(t, agentState, 50000)
 
 	// Set admission_disk_min_gb to something absurdly high (99999 GB)
-	st.SetSetting("admission_disk_min_gb", "99999")
+	_ = st.SetSetting("admission_disk_min_gb", "99999")
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
@@ -1306,7 +1306,7 @@ func TestServiceAction_Start_AdmissionDiskLow(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !strings.Contains(body["error"], "disk") {
 		t.Fatalf("expected disk space error, got %q", body["error"])
 	}
@@ -1336,8 +1336,8 @@ func TestServiceAction_Start_DisabledService(t *testing.T) {
 	agentState := &mockAgentState{}
 	srv, st, _ := newTestServerWithAgent(t, agentState)
 
-	st.EnsureService("bitcoind")
-	st.SetServiceEnabled("bitcoind", false)
+	_ = st.EnsureService("bitcoind")
+	_ = st.SetServiceEnabled("bitcoind", false)
 
 	w := httptest.NewRecorder()
 	req := authedReq(t, srv, "POST", "/api/truffels/services/bitcoind/action",
@@ -1349,7 +1349,7 @@ func TestServiceAction_Start_DisabledService(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !strings.Contains(body["error"], "disabled") {
 		t.Fatalf("expected disabled error, got %q", body["error"])
 	}
@@ -1363,14 +1363,14 @@ func newMockAgentWithPull(t *testing.T, state *mockAgentState, pullOutput string
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/image/inspect":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"image":  "btcpayserver/bitcoin:30.2",
 				"digest": "sha256:abc123",
 				"tags":   []string{"30.2"},
 			})
 
 		case r.URL.Path == "/v1/image/pull":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "ok",
 				"output": pullOutput,
 			})
@@ -1379,23 +1379,23 @@ func newMockAgentWithPull(t *testing.T, state *mockAgentState, pullOutput string
 			var req struct {
 				ServiceID string `json:"service_id"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 			action := strings.TrimPrefix(r.URL.Path, "/v1/compose/")
 			state.lastAction = action
 			state.lastServiceID = req.ServiceID
 
 			if state.composeErr != "" {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": state.composeErr})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": state.composeErr})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case r.URL.Path == "/v1/inspect":
 			var req struct {
 				Containers []string `json:"containers"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 
 			var states []model.ContainerState
 			for _, name := range req.Containers {
@@ -1407,7 +1407,7 @@ func newMockAgentWithPull(t *testing.T, state *mockAgentState, pullOutput string
 					})
 				}
 			}
-			json.NewEncoder(w).Encode(states)
+			_ = json.NewEncoder(w).Encode(states)
 		}
 	}))
 }
@@ -1419,7 +1419,7 @@ func newTestServerWithPullAgent(t *testing.T, agentState *mockAgentState, pullOu
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	mockSrv := newMockAgentWithPull(t, agentState, pullOutput)
 	t.Cleanup(mockSrv.Close)
@@ -1447,7 +1447,7 @@ func TestServiceAction_PullRestart_ImageChanged(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["action"] != "pull-restart" {
 		t.Fatalf("expected action=pull-restart, got %q", body["action"])
 	}
@@ -1471,7 +1471,7 @@ func TestServiceAction_PullRestart_AlreadyUpToDate(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "already_up_to_date" {
 		t.Fatalf("expected already_up_to_date status, got %q", body["status"])
 	}

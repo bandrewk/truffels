@@ -13,9 +13,9 @@ func (s *Store) UpsertUpdateCheck(c *model.UpdateCheck) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	tx.Exec(`DELETE FROM update_checks WHERE service_id = ?`, c.ServiceID)
+	_, _ = tx.Exec(`DELETE FROM update_checks WHERE service_id = ?`, c.ServiceID)
 	_, err = tx.Exec(
 		`INSERT INTO update_checks (service_id, current_version, latest_version, has_update, error)
 		 VALUES (?, ?, ?, ?, ?)`,

@@ -34,48 +34,48 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 		case "/v1/image/pull":
 			if opts.pullFail {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": "pull failed"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "pull failed"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": "pulled"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": "pulled"})
 
 		case "/v1/compose/up":
 			if opts.upFail {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": "start failed"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "start failed"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/compose/down":
 			if opts.downFail {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": "stop failed"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "stop failed"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/compose/build":
 			if opts.buildFail {
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/image/inspect":
 			info := docker.ImageInfo{
 				Image:  "mariadb:lts",
 				Digest: "sha256:olddigest123",
 			}
-			json.NewEncoder(w).Encode(info)
+			_ = json.NewEncoder(w).Encode(info)
 
 		case "/v1/inspect":
 			// AgentInspector.Inspect decodes as []model.ContainerState
 			var req struct {
 				Containers []string `json:"containers"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 			var states []map[string]interface{}
 			for _, name := range req.Containers {
 				health := "healthy"
@@ -86,7 +86,7 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 					"name": name, "status": "running", "health": health,
 				})
 			}
-			json.NewEncoder(w).Encode(states)
+			_ = json.NewEncoder(w).Encode(states)
 
 		default:
 			w.WriteHeader(404)
@@ -102,7 +102,7 @@ func newTestEngine(t *testing.T, agent *httptest.Server, templates []model.Servi
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	reg := service.NewTestRegistry(templates)
 	compose := docker.NewComposeClient(agent.URL)
@@ -121,7 +121,7 @@ func TestApplyUpdate_FloatingTag_Success(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   mempool-db:
     image: mariadb:lts
 `), 0644)
@@ -142,7 +142,7 @@ func TestApplyUpdate_FloatingTag_Success(t *testing.T) {
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
 	// Seed an update check
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:olddigest123",
 		LatestVersion:  "sha256:newdigest456",
@@ -188,7 +188,7 @@ func TestApplyUpdate_FloatingTag_PullFails(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   mempool-db:
     image: mariadb:lts
 `), 0644)
@@ -208,7 +208,7 @@ func TestApplyUpdate_FloatingTag_PullFails(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:olddigest123",
 		LatestVersion:  "sha256:newdigest456",
@@ -239,7 +239,7 @@ func TestApplyUpdate_FloatingTag_StartFails_NoRollback(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   mempool-db:
     image: mariadb:lts
 `), 0644)
@@ -259,7 +259,7 @@ func TestApplyUpdate_FloatingTag_StartFails_NoRollback(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:olddigest123",
 		LatestVersion:  "sha256:newdigest456",
@@ -293,7 +293,7 @@ func TestApplyUpdate_FloatingTag_Unhealthy_NoRollback(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   mempool-db:
     image: mariadb:lts
 `), 0644)
@@ -313,7 +313,7 @@ func TestApplyUpdate_FloatingTag_Unhealthy_NoRollback(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:old",
 		LatestVersion:  "sha256:new",
@@ -349,7 +349,7 @@ func TestApplyUpdate_FloatingTag_SkipsComposeRewrite(t *testing.T) {
     image: mariadb:lts
     restart: unless-stopped
 `
-	os.WriteFile(composePath, []byte(original), 0644)
+	_ = os.WriteFile(composePath, []byte(original), 0644)
 
 	tmpl := model.ServiceTemplate{
 		ID:             "mempool-db",
@@ -366,14 +366,14 @@ func TestApplyUpdate_FloatingTag_SkipsComposeRewrite(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:olddigest",
 		LatestVersion:  "sha256:newdigest",
 		HasUpdate:      true,
 	})
 
-	eng.ApplyUpdate("mempool-db")
+	_ = eng.ApplyUpdate("mempool-db")
 
 	// Compose file must be byte-identical to original
 	data, _ := os.ReadFile(composePath)
@@ -390,7 +390,7 @@ func TestApplyUpdate_Standard_Success(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   backend:
     image: mempool/backend:v3.2.0
   frontend:
@@ -410,7 +410,7 @@ func TestApplyUpdate_Standard_Success(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool",
 		CurrentVersion: "v3.2.0",
 		LatestVersion:  "v3.2.1",
@@ -442,28 +442,28 @@ func TestApplyUpdate_Standard_StartFails_Rollback(t *testing.T) {
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/image/pull":
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": "pulled"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": "pulled"})
 		case "/v1/compose/up":
 			upCalls++
 			if upCalls == 1 {
 				// First up fails (update)
 				w.WriteHeader(500)
-				json.NewEncoder(w).Encode(map[string]string{"error": "start failed"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "start failed"})
 				return
 			}
 			// Second up succeeds (rollback)
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case "/v1/compose/down":
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		default:
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
 	}))
 	defer agent.Close()
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   backend:
     image: mempool/backend:v3.2.0
 `), 0644)
@@ -481,7 +481,7 @@ func TestApplyUpdate_Standard_StartFails_Rollback(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool",
 		CurrentVersion: "v3.2.0",
 		LatestVersion:  "v3.2.1",
@@ -564,7 +564,7 @@ func TestApplyUpdate_NoUpdateAvailable(t *testing.T) {
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
 	// No update check seeded, or check shows no update
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.2",
 		LatestVersion:  "30.2",
@@ -596,7 +596,7 @@ func TestApplyUpdate_AlreadyUpdating(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "30.0",
 		LatestVersion:  "30.2",
@@ -628,7 +628,7 @@ func TestApplyUpdate_BuildService(t *testing.T) {
     build: .
     image: truffels/ckpool:v1.0.0
 `
-	os.WriteFile(composePath, []byte(original), 0644)
+	_ = os.WriteFile(composePath, []byte(original), 0644)
 
 	tmpl := model.ServiceTemplate{
 		ID:             "ckpool",
@@ -645,7 +645,7 @@ func TestApplyUpdate_BuildService(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "ckpool",
 		CurrentVersion: "abc123def456",
 		LatestVersion:  "def789abc012",
@@ -679,7 +679,7 @@ func TestApplyUpdate_CreatesConfigSnapshot(t *testing.T) {
 
 	composeDir := t.TempDir()
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	os.WriteFile(composePath, []byte(`services:
+	_ = os.WriteFile(composePath, []byte(`services:
   db:
     image: mariadb:lts
 `), 0644)
@@ -698,14 +698,14 @@ func TestApplyUpdate_CreatesConfigSnapshot(t *testing.T) {
 
 	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
 
-	st.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool-db",
 		CurrentVersion: "sha256:old",
 		LatestVersion:  "sha256:new",
 		HasUpdate:      true,
 	})
 
-	eng.ApplyUpdate("mempool-db")
+	_ = eng.ApplyUpdate("mempool-db")
 
 	// Verify a config revision snapshot was created
 	revisions, _ := st.GetConfigRevisions("mempool-db", 10)

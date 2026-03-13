@@ -17,7 +17,7 @@ func newTestAuth(t *testing.T) *Auth {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return New(s)
 }
 

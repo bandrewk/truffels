@@ -83,7 +83,7 @@ func (ai *AgentInspector) stats() ([]ContainerResourceStats, error) {
 		slog.Error("agent stats", "err", err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("agent stats: HTTP %d", resp.StatusCode)
@@ -107,7 +107,7 @@ func (ai *AgentInspector) Inspect(names []string) []model.ContainerState {
 		}
 		return states
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var states []model.ContainerState
 	if err := json.NewDecoder(resp.Body).Decode(&states); err != nil {

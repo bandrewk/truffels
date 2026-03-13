@@ -17,7 +17,7 @@ func newTestStore(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -282,7 +282,7 @@ func TestRestartLoop_CustomThresholds(t *testing.T) {
 	e, s := newTestEngine(t)
 
 	// Set custom threshold via store: alert after 3 restarts
-	s.SetSetting("restart_loop_count", "3")
+	_ = s.SetSetting("restart_loop_count", "3")
 
 	now := time.Now()
 	e.restartHistory["test-container"] = []time.Time{
@@ -370,8 +370,8 @@ func TestCheckTemp_CustomThresholds(t *testing.T) {
 	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
 
 	// Set custom thresholds: warning=60, critical=70
-	s.SetSetting("temp_warning", "60")
-	s.SetSetting("temp_critical", "70")
+	_ = s.SetSetting("temp_warning", "60")
+	_ = s.SetSetting("temp_critical", "70")
 
 	// 65C should be warning with custom thresholds (but not with defaults)
 	e.checkTemp(65.0)
@@ -388,8 +388,8 @@ func TestCheckTemp_CustomCritical(t *testing.T) {
 	s := newTestStore(t)
 	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
 
-	s.SetSetting("temp_warning", "60")
-	s.SetSetting("temp_critical", "70")
+	_ = s.SetSetting("temp_warning", "60")
+	_ = s.SetSetting("temp_critical", "70")
 
 	e.checkTemp(72.0)
 	alerts, _ := s.GetActiveAlerts()

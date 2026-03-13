@@ -20,7 +20,7 @@ const (
 )
 
 func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
-	os.MkdirAll(backupDir, 0750)
+	_ = os.MkdirAll(backupDir, 0750)
 
 	ts := time.Now().Format("20060102-150405")
 	filename := fmt.Sprintf("truffels-backup-%s.tar.gz", ts)
@@ -47,7 +47,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("tar", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Error("backup failed", "err", err, "output", string(out))
-		s.store.UpsertAlert(&model.Alert{
+		_ = s.store.UpsertAlert(&model.Alert{
 			Type:     "backup_failed",
 			Severity: model.SeverityWarning,
 			Message:  "Backup export failed: " + err.Error(),
@@ -60,9 +60,9 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	pruneBackups()
 
 	// Resolve any previous backup_failed alerts on success
-	s.store.ResolveAlerts("backup_failed", "")
+	_ = s.store.ResolveAlerts("backup_failed", "")
 
-	s.store.LogAudit("backup_export", filename, "", r.RemoteAddr)
+	_ = s.store.LogAudit("backup_export", filename, "", r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":   "ok",
@@ -138,6 +138,6 @@ func pruneBackups() {
 	})
 
 	for i := 0; i < len(tarballs)-maxBackups; i++ {
-		os.Remove(filepath.Join(backupDir, tarballs[i].Name()))
+		_ = os.Remove(filepath.Join(backupDir, tarballs[i].Name()))
 	}
 }

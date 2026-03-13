@@ -52,7 +52,7 @@ func checkDockerHub(image string, tagFilter string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("dockerhub request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("dockerhub: HTTP %d", resp.StatusCode)
@@ -159,7 +159,7 @@ func checkGitHub(repo, branch string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("github request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("github: HTTP %d for %s", resp.StatusCode, repo)
@@ -187,7 +187,7 @@ func checkBitbucket(repo, branch string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("bitbucket request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("bitbucket: HTTP %d for %s", resp.StatusCode, repo)

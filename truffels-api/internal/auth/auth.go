@@ -90,7 +90,7 @@ func (a *Auth) CreateSession() (*http.Cookie, error) {
 	expiry := time.Now().Add(sessionMaxAge * time.Second).Unix()
 	payload := fmt.Sprintf("admin|%d", expiry)
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
+	_, _ = mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	token := payload + "|" + sig
 
@@ -125,7 +125,7 @@ func (a *Auth) ValidateSession(r *http.Request) bool {
 	}
 	payload := parts[0] + "|" + parts[1]
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
+	_, _ = mac.Write([]byte(payload))
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(parts[2]), []byte(expected))
 }

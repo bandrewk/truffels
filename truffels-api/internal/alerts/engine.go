@@ -280,7 +280,7 @@ func (e *Engine) checkDependencyHealth() {
 						slog.Error("auto-stop dependent failed", "service", tmpl.ID, "err", err)
 					} else {
 						e.autoStopped[tmpl.ID+"_dep"] = true
-						e.store.LogAudit("auto_stop_dependency", tmpl.ID,
+						_ = e.store.LogAudit("auto_stop_dependency", tmpl.ID,
 							fmt.Sprintf("Service %s auto-stopped: upstream %s is unhealthy", tmpl.ID, depID), "alert-engine")
 					}
 				}
@@ -360,7 +360,7 @@ func (e *Engine) evalRestartLoop(serviceID, containerName string, threshold, win
 					slog.Error("auto-stop failed", "service", serviceID, "err", err)
 				} else {
 					e.autoStopped[serviceID] = true
-					e.store.LogAudit("auto_stop", serviceID,
+					_ = e.store.LogAudit("auto_stop", serviceID,
 						fmt.Sprintf("Service %s auto-stopped: %d restarts in %d minutes exceeded max %d",
 							serviceID, len(recent), windowMin, maxRetries), "alert-engine")
 				}

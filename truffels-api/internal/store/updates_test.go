@@ -44,14 +44,14 @@ func TestUpsertUpdateCheck_InsertNew(t *testing.T) {
 
 func TestUpsertUpdateCheck_ReplacesExisting(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "0.10.9",
 		LatestVersion:  "0.10.10",
 		HasUpdate:      true,
 	})
 	// Upsert again with new data
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "0.10.10",
 		LatestVersion:  "0.10.10",
@@ -73,7 +73,7 @@ func TestUpsertUpdateCheck_ReplacesExisting(t *testing.T) {
 func TestUpsertUpdateCheck_OnlyOneRowPerService(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 5; i++ {
-		s.UpsertUpdateCheck(&model.UpdateCheck{
+		_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 			ServiceID:      "bitcoind",
 			CurrentVersion: "29.0",
 			LatestVersion:  "29.0",
@@ -93,7 +93,7 @@ func TestUpsertUpdateCheck_OnlyOneRowPerService(t *testing.T) {
 
 func TestGetLatestUpdateCheck_Found(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "ckpool",
 		CurrentVersion: "1.0.0",
 		LatestVersion:  "1.0.1",
@@ -132,7 +132,7 @@ func TestGetAllUpdateChecks_MultipleServices(t *testing.T) {
 	s := newTestStore(t)
 	services := []string{"bitcoind", "electrs", "mempool"}
 	for _, svc := range services {
-		s.UpsertUpdateCheck(&model.UpdateCheck{
+		_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 			ServiceID:      svc,
 			CurrentVersion: "1.0",
 			LatestVersion:  "1.1",
@@ -216,13 +216,13 @@ func TestCreateUpdateLog_AndRetrieve(t *testing.T) {
 
 func TestGetUpdateLogs_FilterByService(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateUpdateLog(&model.UpdateLog{
+	_, _ = s.CreateUpdateLog(&model.UpdateLog{
 		ServiceID: "bitcoind", FromVersion: "29.0", ToVersion: "29.1", Status: model.UpdatePending,
 	})
-	s.CreateUpdateLog(&model.UpdateLog{
+	_, _ = s.CreateUpdateLog(&model.UpdateLog{
 		ServiceID: "electrs", FromVersion: "0.10.9", ToVersion: "0.10.10", Status: model.UpdatePending,
 	})
-	s.CreateUpdateLog(&model.UpdateLog{
+	_, _ = s.CreateUpdateLog(&model.UpdateLog{
 		ServiceID: "bitcoind", FromVersion: "29.1", ToVersion: "29.2", Status: model.UpdatePending,
 	})
 
@@ -253,7 +253,7 @@ func TestGetUpdateLogs_FilterByService(t *testing.T) {
 func TestGetUpdateLogs_Limit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {
-		s.CreateUpdateLog(&model.UpdateLog{
+		_, _ = s.CreateUpdateLog(&model.UpdateLog{
 			ServiceID: "bitcoind", FromVersion: "1.0", ToVersion: "1.1", Status: model.UpdatePending,
 		})
 	}
@@ -349,7 +349,7 @@ func TestPendingUpdateCount_CountsOnlyUpdatesWithoutError(t *testing.T) {
 	}
 
 	// Service with update available
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "bitcoind",
 		CurrentVersion: "29.0",
 		LatestVersion:  "29.1",
@@ -362,7 +362,7 @@ func TestPendingUpdateCount_CountsOnlyUpdatesWithoutError(t *testing.T) {
 	}
 
 	// Service with no update
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "electrs",
 		CurrentVersion: "0.10.10",
 		LatestVersion:  "0.10.10",
@@ -375,7 +375,7 @@ func TestPendingUpdateCount_CountsOnlyUpdatesWithoutError(t *testing.T) {
 	}
 
 	// Service with update but also an error (should not count)
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "mempool",
 		CurrentVersion: "3.2.0",
 		LatestVersion:  "3.3.0",
@@ -388,7 +388,7 @@ func TestPendingUpdateCount_CountsOnlyUpdatesWithoutError(t *testing.T) {
 	}
 
 	// Another service with a clean update
-	s.UpsertUpdateCheck(&model.UpdateCheck{
+	_ = s.UpsertUpdateCheck(&model.UpdateCheck{
 		ServiceID:      "ckpool",
 		CurrentVersion: "1.0.0",
 		LatestVersion:  "1.0.1",
