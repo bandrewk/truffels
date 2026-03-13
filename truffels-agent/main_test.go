@@ -306,3 +306,280 @@ func TestEnvOr(t *testing.T) {
 		t.Fatalf("expected custom, got %q", got)
 	}
 }
+
+// --- handleSystemRestart / handleSystemShutdown ---
+
+func TestHandleSystemShutdown_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/shutdown", nil)
+
+	handleSystemShutdown(w, r)
+
+	// nsenter will fail in test environment, expect 500
+	if w.Code != 500 {
+		// If it somehow returns 200, that's fine too (means nsenter succeeded)
+		if w.Code != 200 {
+			t.Fatalf("expected 500 or 200, got %d", w.Code)
+		}
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["status"] == "" {
+		t.Fatal("expected 'status' field in response")
+	}
+}
+
+func TestHandleSystemRestart_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/restart", nil)
+
+	handleSystemRestart(w, r)
+
+	// nsenter will fail in test environment, expect 500
+	if w.Code != 500 {
+		if w.Code != 200 {
+			t.Fatalf("expected 500 or 200, got %d", w.Code)
+		}
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["status"] == "" {
+		t.Fatal("expected 'status' field in response")
+	}
+}
+
+// --- handleComposeStop ---
+
+func TestHandleComposeStop_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "hacker"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/stop", bytes.NewReader(body))
+
+	handleComposeStop(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeStop_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/stop", bytes.NewReader([]byte("{bad")))
+
+	handleComposeStop(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleComposeUp ---
+
+func TestHandleComposeUp_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "malicious"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/up", bytes.NewReader(body))
+
+	handleComposeUp(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeUp_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/up", bytes.NewReader([]byte("nope")))
+
+	handleComposeUp(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleComposeDown ---
+
+func TestHandleComposeDown_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "evil"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/down", bytes.NewReader(body))
+
+	handleComposeDown(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeDown_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/down", bytes.NewReader([]byte("[")))
+
+	handleComposeDown(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleComposeRestart ---
+
+func TestHandleComposeRestart_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "unknown"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/restart", bytes.NewReader(body))
+
+	handleComposeRestart(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeRestart_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/restart", bytes.NewReader([]byte("}{}")))
+
+	handleComposeRestart(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleImagePull ---
+
+func TestHandleImagePull_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader([]byte("not-json")))
+
+	handleImagePull(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["error"] != "invalid request" {
+		t.Fatalf("expected 'invalid request' error, got %q", body["error"])
+	}
+}
+
+func TestHandleImagePull_EmptyImage(t *testing.T) {
+	reqBody, _ := json.Marshal(imagePullRequest{Image: ""})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+	handleImagePull(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["error"] != "image required" {
+		t.Fatalf("expected 'image required' error, got %q", body["error"])
+	}
+}
+
+// --- handleImageInspect ---
+
+func TestHandleImageInspect_DeniedContainer(t *testing.T) {
+	reqBody, _ := json.Marshal(imageInspectRequest{Container: "not-allowed"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect", bytes.NewReader(reqBody))
+
+	handleImageInspect(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["error"] != "container not allowed" {
+		t.Fatalf("expected 'container not allowed' error, got %q", body["error"])
+	}
+}
+
+func TestHandleImageInspect_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect", bytes.NewReader([]byte("{bad}")))
+
+	handleImageInspect(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleStats ---
+
+func TestHandleStats_ReturnsJSONArray(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/v1/stats", nil)
+
+	handleStats(w, r)
+
+	// docker stats will fail in test environment (no docker), expect 500
+	// But if docker is available, expect 200 with JSON array
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+
+	if w.Code == 200 {
+		var stats []containerStats
+		if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+			t.Fatalf("expected valid JSON array, got error: %v", err)
+		}
+	} else if w.Code == 500 {
+		// Expected when docker is not available — verify error is valid JSON
+		var body map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("expected valid JSON error, got: %v", err)
+		}
+		if body["error"] == "" {
+			t.Fatal("expected 'error' field in 500 response")
+		}
+	} else {
+		t.Fatalf("expected 200 or 500, got %d", w.Code)
+	}
+}
+
+// --- handleComposeBuild ---
+
+func TestHandleComposeBuild_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "rogue"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/build", bytes.NewReader(body))
+
+	handleComposeBuild(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeBuild_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/build", bytes.NewReader([]byte("garbage")))
+
+	handleComposeBuild(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}

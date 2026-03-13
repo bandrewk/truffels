@@ -202,3 +202,99 @@ func TestInspectContainers_AgentError(t *testing.T) {
 		t.Fatalf("expected unknown fallback, got %q", states[0].Status)
 	}
 }
+
+// --- Stop ---
+
+func TestComposeClient_Stop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/compose/stop" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		var req agentServiceReq
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.ServiceID != "electrs" {
+			t.Fatalf("expected electrs, got %q", req.ServiceID)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	if err := client.Stop("electrs"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+func TestComposeClient_Stop_AgentError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": "stop failed"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.Stop("electrs")
+	if err == nil {
+		t.Fatal("expected error from agent")
+	}
+}
+
+// --- SystemAction ---
+
+func TestComposeClient_SystemAction_Restart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/system/restart" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	if err := client.SystemAction("restart"); err != nil {
+		t.Fatalf("system restart: %v", err)
+	}
+}
+
+func TestComposeClient_SystemAction_Shutdown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/system/shutdown" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	if err := client.SystemAction("shutdown"); err != nil {
+		t.Fatalf("system shutdown: %v", err)
+	}
+}
+
+func TestComposeClient_SystemAction_AgentError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": "permission denied"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.SystemAction("restart")
+	if err == nil {
+		t.Fatal("expected error from agent")
+	}
+}
+
+func TestComposeClient_SystemAction_AgentUnreachable(t *testing.T) {
+	client := NewComposeClient("http://127.0.0.1:1")
+	err := client.SystemAction("shutdown")
+	if err == nil {
+		t.Fatal("expected error for unreachable agent")
+	}
+}

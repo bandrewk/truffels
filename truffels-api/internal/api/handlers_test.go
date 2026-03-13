@@ -426,6 +426,136 @@ func TestHandleAuditLog(t *testing.T) {
 	}
 }
 
+// --- System Restart / Shutdown ---
+
+func TestSystemRestart_WrongPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/restart",
+		`{"password":"wrongpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemRestart_CorrectPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/restart",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+}
+
+func TestSystemShutdown_CorrectPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/shutdown",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+}
+
+func TestSystemRestart_NoPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/restart", `{}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	// Empty password fails auth check → 401
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemRestart_AuditLog(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/restart",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, err := st.GetAuditLog(50)
+	if err != nil {
+		t.Fatalf("get audit log: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "system_restart" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected system_restart audit entry")
+	}
+}
+
+func TestSystemShutdown_AuditLog(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/shutdown",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, err := st.GetAuditLog(50)
+	if err != nil {
+		t.Fatalf("get audit log: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "system_shutdown" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected system_shutdown audit entry")
+	}
+}
+
 // --- Backup Download path traversal ---
 
 func TestBackupDownload_PathTraversal(t *testing.T) {
