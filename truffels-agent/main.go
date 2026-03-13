@@ -50,6 +50,8 @@ var allowedContainers = map[string]bool{
 
 var composeRoot string
 
+var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -74,6 +76,8 @@ func main() {
 	mux.HandleFunc("GET /v1/system/info", handleSystemInfo)
 	mux.HandleFunc("GET /v1/system/tuning", handleSystemTuningGet)
 	mux.HandleFunc("POST /v1/system/tuning", handleSystemTuningSet)
+	mux.HandleFunc("POST /v1/git/checkout", handleGitCheckout)
+	mux.HandleFunc("POST /v1/compose/up-detached", handleComposeUpDetached)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -141,7 +145,7 @@ type inspectResult struct {
 // --- Handlers ---
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]string{"status": "ok"})
+	writeJSON(w, 200, map[string]string{"status": "ok", "version": version})
 }
 
 func handleComposeUp(w http.ResponseWriter, r *http.Request) {
@@ -500,11 +504,22 @@ func parseNetIO(s string) (int64, int64) {
 	return int64(parseBytes(parts[0])), int64(parseBytes(parts[1]))
 }
 
+type buildRequest struct {
+	ServiceID string            `json:"service_id"`
+	BuildArgs map[string]string `json:"build_args,omitempty"`
+}
+
 func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
-	var req serviceRequest
-	if !decodeAndValidate(w, r, &req) {
+	var req buildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
 		return
 	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return
+	}
+	slog.Info("agent action", "action", "build", "service", req.ServiceID)
 
 	dir := composeDir(req.ServiceID)
 	slog.Info("building service", "service", req.ServiceID, "dir", dir)
@@ -512,8 +527,11 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-f",
-		dir+"/docker-compose.yml", "build", "--no-cache")
+	args := []string{"compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
+	for k, v := range req.BuildArgs {
+		args = append(args, "--build-arg", k+"="+v)
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -962,6 +980,122 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("system tuning applied", "action", req.Action, "value", req.Value)
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// allowedRepoDir is the mounted project repo path inside the container.
+const allowedRepoDir = "/repo"
+
+type gitCheckoutRequest struct {
+	RepoDir string `json:"repo_dir"`
+	Tag     string `json:"tag"`
+}
+
+func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
+	var req gitCheckoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	// Validate repo_dir is the allowed path
+	if req.RepoDir != allowedRepoDir {
+		writeJSON(w, 403, map[string]string{"error": "repo_dir not allowed"})
+		return
+	}
+	if req.Tag == "" {
+		writeJSON(w, 400, map[string]string{"error": "tag required"})
+		return
+	}
+	// Validate tag format (must start with v and contain only semver chars)
+	if !isValidTag(req.Tag) {
+		writeJSON(w, 400, map[string]string{"error": "invalid tag format"})
+		return
+	}
+
+	slog.Info("git checkout", "repo", req.RepoDir, "tag", req.Tag)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Fetch tags
+	fetchCmd := exec.CommandContext(ctx, "git", "-C", req.RepoDir, "fetch", "--tags")
+	var fetchOut bytes.Buffer
+	fetchCmd.Stdout = &fetchOut
+	fetchCmd.Stderr = &fetchOut
+	if err := fetchCmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "git fetch failed: " + err.Error(), "output": fetchOut.String()})
+		return
+	}
+
+	// Checkout tag
+	checkoutCmd := exec.CommandContext(ctx, "git", "-C", req.RepoDir, "checkout", req.Tag)
+	var checkoutOut bytes.Buffer
+	checkoutCmd.Stdout = &checkoutOut
+	checkoutCmd.Stderr = &checkoutOut
+	if err := checkoutCmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "git checkout failed: " + err.Error(), "output": checkoutOut.String()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": fetchOut.String() + checkoutOut.String()})
+}
+
+func isValidTag(tag string) bool {
+	if len(tag) < 2 || tag[0] != 'v' {
+		return false
+	}
+	for _, c := range tag[1:] {
+		if c != '.' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+type composeUpDetachedRequest struct {
+	ServiceID string `json:"service_id"`
+}
+
+func handleComposeUpDetached(w http.ResponseWriter, r *http.Request) {
+	var req composeUpDetachedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return
+	}
+
+	dir := composeDir(req.ServiceID)
+	composePath := dir + "/docker-compose.yml"
+	slog.Warn("detached compose up requested", "service", req.ServiceID, "compose", composePath)
+
+	// Write a self-update script that runs on the host via nsenter.
+	// The sleep ensures the HTTP response is sent before the agent container is replaced.
+	script := fmt.Sprintf(`#!/bin/sh
+sleep 2
+docker compose -f %s up -d --remove-orphans
+`, composePath)
+
+	scriptPath := "/tmp/truffels-self-update.sh"
+	// Write script via nsenter into host filesystem
+	writeCmd := exec.Command("nsenter", "-t", "1", "-m", "--",
+		"sh", "-c", fmt.Sprintf("cat > %s << 'SCRIPT'\n%sSCRIPT\nchmod +x %s", scriptPath, script, scriptPath))
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "write script failed: " + err.Error(), "output": string(out)})
+		return
+	}
+
+	// Execute detached via nsenter (runs on host, survives container replacement)
+	execCmd := exec.Command("nsenter", "-t", "1", "-m", "-p", "--",
+		"sh", "-c", fmt.Sprintf("nohup %s > /tmp/truffels-self-update.log 2>&1 &", scriptPath))
+	if out, err := execCmd.CombinedOutput(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "exec script failed: " + err.Error(), "output": string(out)})
+		return
+	}
+
+	writeJSON(w, 202, map[string]string{"status": "accepted", "message": "detached compose up scheduled"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

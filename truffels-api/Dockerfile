@@ -4,9 +4,12 @@ FROM golang:1.24-bookworm AS builder
 WORKDIR /src
 COPY . .
 RUN go mod tidy && go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /truffels-api .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /truffels-api .
 
 FROM debian:bookworm-slim
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="${VERSION}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*

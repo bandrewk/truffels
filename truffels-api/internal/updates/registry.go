@@ -33,6 +33,8 @@ func CheckLatestVersion(src *model.UpdateSource) (string, error) {
 		return checkGitHub(src.Repo, src.Branch)
 	case model.SourceBitbucket:
 		return checkBitbucket(src.Repo, src.Branch)
+	case model.SourceGitHubRelease:
+		return checkGitHubRelease(src.Repo)
 	default:
 		return "", fmt.Errorf("unknown source type: %s", src.Type)
 	}
@@ -213,6 +215,40 @@ func checkBitbucket(repo, branch string) (string, error) {
 	return hash, nil
 }
 
+// checkGitHubRelease returns the latest release tag name from GitHub.
+func checkGitHubRelease(repo string) (string, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github release request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == 404 {
+		return "", fmt.Errorf("github release: no releases found for %s", repo)
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("github release: HTTP %d for %s", resp.StatusCode, repo)
+	}
+
+	var result struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("github release decode: %w", err)
+	}
+
+	if result.TagName == "" {
+		return "", fmt.Errorf("github release: empty tag_name for %s", repo)
+	}
+
+	return result.TagName, nil
+}
+
 // matchTagFilter checks if a tag matches the filter pattern.
 //
 // Patterns:
@@ -278,6 +314,16 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 	case model.SourceGitHub, model.SourceBitbucket:
 		// For custom builds, current version is stored in update_checks
 		return ""
+	case model.SourceGitHubRelease:
+		// Current version is the image tag (e.g. "truffels/agent:v0.2.0" → "v0.2.0")
+		name := imageName
+		if atIdx := strings.Index(name, "@"); atIdx >= 0 {
+			name = name[:atIdx]
+		}
+		if idx := strings.LastIndex(name, ":"); idx >= 0 {
+			return name[idx+1:]
+		}
+		return "unknown"
 	default:
 		return "unknown"
 	}

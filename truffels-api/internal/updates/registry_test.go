@@ -396,3 +396,101 @@ func TestCheckLatestVersion_DockerDigest_DefaultTag(t *testing.T) {
 		t.Errorf("expected sha256:test, got %s", got)
 	}
 }
+
+// ---------- GitHub Release ----------
+
+func TestCheckGitHubRelease_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/releases/latest" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.3.0"})
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := checkGitHubRelease("owner/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v0.3.0" {
+		t.Errorf("expected v0.3.0, got %s", got)
+	}
+}
+
+func TestCheckGitHubRelease_NoReleases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	_, err := checkGitHubRelease("owner/repo")
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	if !strings.Contains(err.Error(), "no releases found") {
+		t.Errorf("expected 'no releases found' in error, got: %s", err)
+	}
+}
+
+func TestCheckGitHubRelease_EmptyTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": ""})
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	_, err := checkGitHubRelease("owner/repo")
+	if err == nil {
+		t.Fatal("expected error for empty tag")
+	}
+}
+
+func TestCheckLatestVersion_GitHubRelease(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.2.0"})
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type: model.SourceGitHubRelease,
+		Repo: "bandrewk/Project-Truffels",
+	}
+	got, err := CheckLatestVersion(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v0.2.0" {
+		t.Errorf("expected v0.2.0, got %s", got)
+	}
+}
+
+func TestExtractCurrentVersion_GitHubRelease(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceGitHubRelease}
+	got := ExtractCurrentVersion(src, "truffels/agent:v0.2.0")
+	if got != "v0.2.0" {
+		t.Errorf("expected v0.2.0, got %s", got)
+	}
+}
+
+func TestExtractCurrentVersion_GitHubRelease_NoTag(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceGitHubRelease}
+	got := ExtractCurrentVersion(src, "truffels/agent")
+	if got != "unknown" {
+		t.Errorf("expected unknown, got %s", got)
+	}
+}

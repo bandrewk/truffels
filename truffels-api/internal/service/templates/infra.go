@@ -60,7 +60,13 @@ var TruffelsAgent = model.ServiceTemplate{
 	Dependencies:   nil,
 	MemoryLimit:    "128M",
 	Port:           "9090 (internal)",
-	ReadOnly:       true,
+	ReadOnly:       false,
+	UpdateSource: &model.UpdateSource{
+		Type:       model.SourceGitHubRelease,
+		Repo:       "bandrewk/Project-Truffels",
+		Images:     []string{"truffels/agent"},
+		NeedsBuild: true,
+	},
 }
 
 var TruffelsAPI = model.ServiceTemplate{
@@ -72,7 +78,13 @@ var TruffelsAPI = model.ServiceTemplate{
 	Dependencies:   nil,
 	MemoryLimit:    "256M",
 	Port:           "8080 (internal)",
-	ReadOnly:       true,
+	ReadOnly:       false,
+	UpdateSource: &model.UpdateSource{
+		Type:       model.SourceGitHubRelease,
+		Repo:       "bandrewk/Project-Truffels",
+		Images:     []string{"truffels/api"},
+		NeedsBuild: true,
+	},
 }
 
 var TruffelsWeb = model.ServiceTemplate{
@@ -84,5 +96,11 @@ var TruffelsWeb = model.ServiceTemplate{
 	Dependencies:   nil,
 	MemoryLimit:    "64M",
 	Port:           "8080 (internal)",
-	ReadOnly:       true,
+	ReadOnly:       false,
+	UpdateSource: &model.UpdateSource{
+		Type:       model.SourceGitHubRelease,
+		Repo:       "bandrewk/Project-Truffels",
+		Images:     []string{"truffels/web"},
+		NeedsBuild: true,
+	},
 }

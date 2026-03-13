@@ -869,6 +869,8 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.2.0}"
+TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-/home/truffel/Project-Truffels}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-/home/truffel/Project-Truffels/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-/home/truffel/Project-Truffels/truffels-web}"
 TRUFFELS_AGENT_SRC="${TRUFFELS_AGENT_SRC:-/home/truffel/Project-Truffels/truffels-agent}"
@@ -879,7 +881,9 @@ services:
     build:
       context: $TRUFFELS_AGENT_SRC
       dockerfile: $TRUFFELS_AGENT_SRC/Dockerfile
-    image: truffels/agent:v0.1.0
+      args:
+        VERSION: $TRUFFELS_VERSION
+    image: truffels/agent:$TRUFFELS_VERSION
     container_name: truffels-agent
     pid: "host"
     cap_add:
@@ -893,6 +897,7 @@ services:
       - /srv/truffels/compose:/srv/truffels/compose:ro
       - /srv/truffels/config:/srv/truffels/config:ro
       - /srv/truffels/secrets:/srv/truffels/secrets:ro
+      - $TRUFFELS_REPO_SRC:/repo:rw
     environment:
       TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
       TRUFFELS_AGENT_LISTEN: ":9090"
@@ -911,7 +916,9 @@ services:
     build:
       context: $TRUFFELS_API_SRC
       dockerfile: $TRUFFELS_API_SRC/Dockerfile
-    image: truffels/api:v0.1.0
+      args:
+        VERSION: $TRUFFELS_VERSION
+    image: truffels/api:$TRUFFELS_VERSION
     container_name: truffels-api
     user: "1000:1000"
     restart: unless-stopped
@@ -960,7 +967,9 @@ services:
     build:
       context: $TRUFFELS_WEB_SRC
       dockerfile: $TRUFFELS_WEB_SRC/Dockerfile
-    image: truffels/web:v0.1.0
+      args:
+        VERSION: $TRUFFELS_VERSION
+    image: truffels/web:$TRUFFELS_VERSION
     container_name: truffels-web
     restart: unless-stopped
     cap_drop:

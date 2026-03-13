@@ -25,9 +25,10 @@ type Server struct {
 	auth         *auth.Auth
 	btcRPC       *bitcoin.Client
 	updateEngine *updates.Engine
+	Version      string
 }
 
-func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine) *Server {
+func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine, version string) *Server {
 	return &Server{
 		registry:     reg,
 		store:        st,
@@ -36,6 +37,7 @@ func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClien
 		auth:         a,
 		btcRPC:       btc,
 		updateEngine: ue,
+		Version:      version,
 	}
 }
 

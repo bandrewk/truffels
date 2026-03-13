@@ -125,7 +125,7 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 	// Set the global agent inspector to use our mock
 	docker.NewAgentInspector(mockSrv.URL)
 
-	srv := NewServer(reg, st, compose, nil, a, nil, nil)
+	srv := NewServer(reg, st, compose, nil, a, nil, nil, "test")
 	return srv, st, mockSrv
 }
 
@@ -1376,7 +1376,7 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	_ = os.WriteFile(filepath.Join(procDir, "diskstats"), []byte(""), 0644)
 
 	coll := metrics.NewCollector(procDir, sysDir, diskDir)
-	srv := NewServer(reg, st, compose, coll, a, nil, nil)
+	srv := NewServer(reg, st, compose, coll, a, nil, nil, "test")
 	return srv, st, mockSrv
 }
 
@@ -1542,7 +1542,7 @@ func newTestServerWithPullAgent(t *testing.T, agentState *mockAgentState, pullOu
 	compose := docker.NewComposeClient(mockSrv.URL)
 	docker.NewAgentInspector(mockSrv.URL)
 
-	srv := NewServer(reg, st, compose, nil, a, nil, nil)
+	srv := NewServer(reg, st, compose, nil, a, nil, nil, "test")
 	return srv, st, mockSrv
 }
 

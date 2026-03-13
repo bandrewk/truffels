@@ -21,6 +21,8 @@ import (
 	"truffels-api/internal/updates"
 )
 
+var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -68,7 +70,7 @@ func main() {
 	btcRPC := initBitcoinRPC(cfg.SecretsRoot)
 
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine)
+	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine, version)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),
