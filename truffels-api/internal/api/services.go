@@ -200,6 +200,14 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+		// Pruning compatibility check
+		if tmpl.RequiresUnpruned && s.btcRPC != nil {
+			if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.Pruned {
+				writeError(w, http.StatusConflict,
+					fmt.Sprintf("%s requires an unpruned Bitcoin Core node", tmpl.DisplayName))
+				return
+			}
+		}
 		// Admission control: check system resources
 		if s.collector != nil {
 			host := s.collector.Collect()
@@ -435,6 +443,11 @@ func (s *Server) configRoot() string {
 // checkDependencyIssues returns a list of unhealthy upstream dependencies.
 func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate) []string {
 	var issues []string
+	if tmpl.RequiresUnpruned && s.btcRPC != nil {
+		if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.Pruned {
+			issues = append(issues, "requires unpruned Bitcoin Core")
+		}
+	}
 	for _, depID := range tmpl.Dependencies {
 		depTmpl, ok := s.registry.Get(depID)
 		if !ok {
