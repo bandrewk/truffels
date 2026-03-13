@@ -71,6 +71,7 @@ func main() {
 	mux.HandleFunc("POST /v1/system/shutdown", handleSystemShutdown)
 	mux.HandleFunc("POST /v1/system/restart", handleSystemRestart)
 	mux.HandleFunc("POST /v1/system/journal", handleSystemJournal)
+	mux.HandleFunc("GET /v1/system/info", handleSystemInfo)
 	mux.HandleFunc("GET /v1/system/tuning", handleSystemTuningGet)
 	mux.HandleFunc("POST /v1/system/tuning", handleSystemTuningSet)
 
@@ -579,6 +580,132 @@ func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// --- System Info ---
+
+type systemInfoResponse struct {
+	Hostname string           `json:"hostname"`
+	OS       string           `json:"os"`
+	Kernel   string           `json:"kernel"`
+	Model    string           `json:"model"`
+	CPUCores int              `json:"cpu_cores"`
+	MemTotal string           `json:"mem_total"`
+	MemFree  string           `json:"mem_free"`
+	Uptime   string           `json:"uptime"`
+	Networks []networkIfInfo  `json:"networks"`
+}
+
+type networkIfInfo struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	MAC  string `json:"mac"`
+}
+
+func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// nsrun enters mount namespace (filesystem access)
+	nsrun := func(args ...string) string {
+		a := append([]string{"-t", "1", "-m", "--"}, args...)
+		cmd := exec.CommandContext(ctx, "nsenter", a...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		_ = cmd.Run()
+		return strings.TrimSpace(out.String())
+	}
+
+	// nsrunAll enters mount + UTS + network namespaces
+	nsrunAll := func(args ...string) string {
+		a := append([]string{"-t", "1", "-m", "-u", "-n", "--"}, args...)
+		cmd := exec.CommandContext(ctx, "nsenter", a...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		_ = cmd.Run()
+		return strings.TrimSpace(out.String())
+	}
+
+	// Hostname (needs UTS namespace)
+	hostname := nsrunAll("hostname")
+
+	// OS pretty name from /etc/os-release
+	osRelease := nsrun("sh", "-c", "grep ^PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'")
+
+	// Kernel
+	kernel := nsrun("uname", "-r")
+
+	// Device model (strip null byte from device tree)
+	model := strings.ReplaceAll(nsrun("cat", "/sys/firmware/devicetree/base/model"), "\x00", "")
+
+	// CPU cores
+	cpuStr := nsrun("nproc")
+	cpuCores, _ := strconv.Atoi(cpuStr)
+
+	// Memory: total and available from /proc/meminfo
+	memTotal := nsrun("sh", "-c", "awk '/^MemTotal:/{printf \"%.0f MB\", $2/1024}' /proc/meminfo")
+	memFree := nsrun("sh", "-c", "awk '/^MemAvailable:/{printf \"%.0f MB\", $2/1024}' /proc/meminfo")
+
+	// Uptime
+	uptimeRaw := nsrun("cat", "/proc/uptime")
+	var uptime string
+	if fields := strings.Fields(uptimeRaw); len(fields) > 0 {
+		if secs, err := strconv.ParseFloat(fields[0], 64); err == nil {
+			d := int(secs) / 86400
+			h := (int(secs) % 86400) / 3600
+			m := (int(secs) % 3600) / 60
+			if d > 0 {
+				uptime = fmt.Sprintf("%dd %dh %dm", d, h, m)
+			} else if h > 0 {
+				uptime = fmt.Sprintf("%dh %dm", h, m)
+			} else {
+				uptime = fmt.Sprintf("%dm", m)
+			}
+		}
+	}
+
+	// Network interfaces — needs network namespace (skip lo and docker/veth)
+	ipOut := nsrunAll("sh", "-c", "ip -o addr show | awk '{print $2, $4, $NF}'")
+	var networks []networkIfInfo
+	seen := map[string]bool{}
+	for _, line := range strings.Split(ipOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		iface := fields[0]
+		if iface == "lo" || strings.HasPrefix(iface, "veth") || strings.HasPrefix(iface, "br-") || strings.HasPrefix(iface, "docker") {
+			continue
+		}
+		addr := fields[1]
+		// Skip IPv6 link-local
+		if strings.Contains(addr, ":") {
+			continue
+		}
+		if seen[iface] {
+			continue
+		}
+		seen[iface] = true
+		// Get MAC — needs network namespace for host interfaces
+		mac := nsrunAll("sh", "-c", fmt.Sprintf("cat /sys/class/net/%s/address", iface))
+		networks = append(networks, networkIfInfo{
+			Name: iface,
+			IP:   addr,
+			MAC:  mac,
+		})
+	}
+
+	writeJSON(w, 200, systemInfoResponse{
+		Hostname: hostname,
+		OS:       osRelease,
+		Kernel:   kernel,
+		Model:    model,
+		CPUCores: cpuCores,
+		MemTotal: memTotal,
+		MemFree:  memFree,
+		Uptime:   uptime,
+		Networks: networks,
+	})
 }
 
 // --- System Journal & Tuning ---

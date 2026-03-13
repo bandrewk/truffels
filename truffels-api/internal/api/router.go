@@ -82,6 +82,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/settings", s.handleGetSettings)
 			r.Put("/settings", s.handleUpdateSettings)
+			r.Get("/system/info", s.handleSystemInfo)
 			r.Post("/system/shutdown", s.handleSystemShutdown)
 			r.Post("/system/restart", s.handleSystemRestart)
 			r.Get("/system/journal", s.handleSystemJournal)

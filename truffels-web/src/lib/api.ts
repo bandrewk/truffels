@@ -320,6 +320,24 @@ export interface BootEntry {
   last: string
 }
 
+export interface NetworkIfInfo {
+  name: string
+  ip: string
+  mac: string
+}
+
+export interface SystemInfo {
+  hostname: string
+  os: string
+  kernel: string
+  model: string
+  cpu_cores: number
+  mem_total: string
+  mem_free: string
+  uptime: string
+  networks: NetworkIfInfo[]
+}
+
 export interface SystemTuning {
   persistent_journal: boolean
   swappiness: number
@@ -390,6 +408,7 @@ export const api = {
     if (since) params.set('since', since)
     return get<{ logs: string }>(`/system/journal?${params}`)
   },
+  systemInfo: () => get<SystemInfo>('/system/info'),
   systemTuning: () => get<SystemTuning>('/system/tuning'),
   setSystemTuning: (action: string, value: string) =>
     post<{ status: string }>('/system/tuning', { action, value }),

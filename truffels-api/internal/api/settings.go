@@ -129,6 +129,17 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// --- System Info ---
+
+func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := s.compose.SystemInfoGet()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 // --- System Journal ---
 
 func (s *Server) handleSystemJournal(w http.ResponseWriter, r *http.Request) {
