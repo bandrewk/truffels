@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"truffels-api/internal/model"
 )
 
 const (
@@ -45,12 +47,20 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("tar", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Error("backup failed", "err", err, "output", string(out))
+		s.store.UpsertAlert(&model.Alert{
+			Type:     "backup_failed",
+			Severity: model.SeverityWarning,
+			Message:  "Backup export failed: " + err.Error(),
+		})
 		writeError(w, http.StatusInternalServerError, "backup failed: "+err.Error())
 		return
 	}
 
 	// Prune old backups
 	pruneBackups()
+
+	// Resolve any previous backup_failed alerts on success
+	s.store.ResolveAlerts("backup_failed", "")
 
 	s.store.LogAudit("backup_export", filename, "", r.RemoteAddr)
 

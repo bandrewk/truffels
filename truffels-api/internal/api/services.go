@@ -25,6 +25,9 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 			Enabled:    enabled,
 			Containers: containers,
 		}
+		if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
+			svc.State = model.StateDisabled
+		}
 		svc.DependencyIssues = s.checkDependencyIssues(tmpl)
 		services = append(services, svc)
 	}
@@ -47,6 +50,9 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		State:      deriveState(containers),
 		Enabled:    enabled,
 		Containers: containers,
+	}
+	if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
+		svc.State = model.StateDisabled
 	}
 	svc.DependencyIssues = s.checkDependencyIssues(tmpl)
 	writeJSON(w, http.StatusOK, svc)
@@ -79,6 +85,12 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Action {
 	case "start":
+		// Check if service is enabled
+		enabled, _ := s.store.IsServiceEnabled(id)
+		if !enabled {
+			writeError(w, http.StatusConflict, "service is disabled — enable it first")
+			return
+		}
 		// Validate dependencies before starting
 		isRunning := func(depID string) bool {
 			dep, ok := s.registry.Get(depID)
@@ -172,8 +184,25 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+	case "enable":
+		s.store.SetServiceEnabled(id, true)
+		s.store.LogAudit("service_enable", id, "", r.RemoteAddr)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": "enable"})
+		return
+
+	case "disable":
+		// Stop the service first if running
+		containers := docker.InspectContainers(tmpl.ContainerNames)
+		if deriveState(containers) == model.StateRunning {
+			s.compose.Down(id)
+		}
+		s.store.SetServiceEnabled(id, false)
+		s.store.LogAudit("service_disable", id, "", r.RemoteAddr)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": "disable"})
+		return
+
 	default:
-		writeError(w, http.StatusBadRequest, "action must be start, stop, restart, or pull-restart")
+		writeError(w, http.StatusBadRequest, "action must be start, stop, restart, enable, disable, or pull-restart")
 		return
 	}
 

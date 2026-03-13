@@ -8,7 +8,8 @@ const (
 	StateRunning  ServiceState = "running"
 	StateStopped  ServiceState = "stopped"
 	StateDegraded ServiceState = "degraded"
-	StateUnknown  ServiceState = "unknown"
+	StateUnknown   ServiceState = "unknown"
+	StateDisabled  ServiceState = "disabled"
 )
 
 type ServiceTemplate struct {
