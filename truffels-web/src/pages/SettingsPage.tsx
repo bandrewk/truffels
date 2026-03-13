@@ -345,10 +345,8 @@ function SystemLogsTab() {
     }))
   }, [data])
 
-  const warnCount = useMemo(
-    () => parsed.filter((l) => l.severity === 'error' || l.severity === 'warn').length,
-    [parsed],
-  )
+  const errorCount = useMemo(() => parsed.filter((l) => l.severity === 'error').length, [parsed])
+  const warnCount = useMemo(() => parsed.filter((l) => l.severity === 'warn').length, [parsed])
 
   const filtered = useMemo(() => {
     if (filter === 'all') return parsed
@@ -377,17 +375,27 @@ function SystemLogsTab() {
         </select>
 
         <div className="flex gap-1">
-          {(['all', ...SEVERITY_LEVELS] as const).map((s) => (
+          {([
+            { key: 'all' as SeverityFilter, label: 'All' },
+            { key: 'error' as SeverityFilter, label: errorCount > 0 ? `Error (${errorCount})` : 'Error' },
+            { key: 'warn' as SeverityFilter, label: warnCount > 0 ? `Warn (${warnCount})` : 'Warn' },
+            { key: 'info' as SeverityFilter, label: 'Info' },
+            { key: 'debug' as SeverityFilter, label: 'Debug' },
+          ]).map((fb) => (
             <button
-              key={s}
-              onClick={() => setFilter(s)}
+              key={fb.key}
+              onClick={() => setFilter(fb.key)}
               className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
-                filter === s
+                filter === fb.key
                   ? 'bg-accent text-black'
-                  : 'bg-surface-overlay text-gray-400 hover:text-white'
+                  : fb.key === 'error' && errorCount > 0
+                    ? 'bg-surface-overlay text-red-400 hover:text-white'
+                    : fb.key === 'warn' && warnCount > 0
+                      ? 'bg-surface-overlay text-yellow-400 hover:text-white'
+                      : 'bg-surface-overlay text-gray-400 hover:text-white'
               }`}
             >
-              {s === 'all' ? `All${warnCount > 0 ? ` (${warnCount})` : ''}` : s}
+              {fb.label}
             </button>
           ))}
         </div>
