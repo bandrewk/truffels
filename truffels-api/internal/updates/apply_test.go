@@ -719,3 +719,270 @@ func TestApplyUpdate_CreatesConfigSnapshot(t *testing.T) {
 		t.Errorf("expected 'pre-update snapshot' in diff, got: %s", revisions[0].Diff)
 	}
 }
+
+// --- Self-update (github_release) ---
+
+func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/git/checkout":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/compose/build":
+			if opts.buildFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/compose/up-detached":
+			w.WriteHeader(202)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+
+		case "/v1/image/inspect":
+			info := docker.ImageInfo{
+				Image: "truffels/agent:v0.1.0",
+			}
+			_ = json.NewEncoder(w).Encode(info)
+
+		case "/v1/inspect":
+			var req struct {
+				Containers []string `json:"containers"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			var states []map[string]interface{}
+			for _, name := range req.Containers {
+				health := "healthy"
+				if opts.unhealthy {
+					health = "unhealthy"
+				}
+				states = append(states, map[string]interface{}{
+					"name": name, "status": "running", "health": health,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(states)
+
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+}
+
+func TestApplySelfUpdate_Success(t *testing.T) {
+	agent := newSelfUpdateMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	composeDir := t.TempDir()
+	composePath := filepath.Join(composeDir, "docker-compose.yml")
+	_ = os.WriteFile(composePath, []byte(`services:
+  agent:
+    image: truffels/agent:v0.1.0
+  api:
+    image: truffels/api:v0.1.0
+  web:
+    image: truffels/web:v0.1.0
+`), 0644)
+
+	tmpls := []model.ServiceTemplate{
+		{
+			ID: "truffels-agent", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-agent"},
+			UpdateSource: &model.UpdateSource{
+				Type: model.SourceGitHubRelease, Repo: "owner/repo",
+				Images: []string{"truffels/agent"}, NeedsBuild: true,
+			},
+		},
+		{
+			ID: "truffels-api", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-api"},
+			UpdateSource: &model.UpdateSource{
+				Type: model.SourceGitHubRelease, Repo: "owner/repo",
+				Images: []string{"truffels/api"}, NeedsBuild: true,
+			},
+		},
+		{
+			ID: "truffels-web", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-web"},
+			UpdateSource: &model.UpdateSource{
+				Type: model.SourceGitHubRelease, Repo: "owner/repo",
+				Images: []string{"truffels/web"}, NeedsBuild: true,
+			},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, tmpls)
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels-agent",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels-agent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify compose file was rewritten for all three
+	data, _ := os.ReadFile(composePath)
+	content := string(data)
+	if !strings.Contains(content, "truffels/agent:v0.2.0") {
+		t.Error("expected agent image tag updated to v0.2.0")
+	}
+	if !strings.Contains(content, "truffels/api:v0.2.0") {
+		t.Error("expected api image tag updated to v0.2.0")
+	}
+	if !strings.Contains(content, "truffels/web:v0.2.0") {
+		t.Error("expected web image tag updated to v0.2.0")
+	}
+
+	// Verify primary log is "restarting" (will be reconciled on startup)
+	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	if len(logs) == 0 {
+		t.Fatal("expected update log for truffels-agent")
+	}
+	if logs[0].Status != model.UpdateRestarting {
+		t.Errorf("expected status restarting, got %s", logs[0].Status)
+	}
+
+	// Verify sibling logs were created
+	apiLogs, _ := st.GetUpdateLogs("truffels-api", 5)
+	if len(apiLogs) == 0 {
+		t.Fatal("expected update log for truffels-api")
+	}
+	webLogs, _ := st.GetUpdateLogs("truffels-web", 5)
+	if len(webLogs) == 0 {
+		t.Fatal("expected update log for truffels-web")
+	}
+}
+
+func TestApplySelfUpdate_BuildFailure(t *testing.T) {
+	agent := newSelfUpdateMockAgent(mockAgentOpts{buildFail: true})
+	defer agent.Close()
+
+	composeDir := t.TempDir()
+	composePath := filepath.Join(composeDir, "docker-compose.yml")
+	_ = os.WriteFile(composePath, []byte(`services:
+  agent:
+    image: truffels/agent:v0.1.0
+`), 0644)
+
+	tmpls := []model.ServiceTemplate{
+		{
+			ID: "truffels-agent", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-agent"},
+			UpdateSource: &model.UpdateSource{
+				Type: model.SourceGitHubRelease, Repo: "owner/repo",
+				Images: []string{"truffels/agent"}, NeedsBuild: true,
+			},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, tmpls)
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels-agent",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels-agent")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "build failed") {
+		t.Errorf("expected 'build failed' in error, got: %s", err)
+	}
+
+	// Verify log shows failed
+	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
+		t.Error("expected failed update log")
+	}
+}
+
+// --- Startup reconciliation ---
+
+func TestReconcileStuckUpdates_HealthyMarkedDone(t *testing.T) {
+	agent := newSelfUpdateMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	tmpls := []model.ServiceTemplate{
+		{
+			ID:             "truffels-agent",
+			ContainerNames: []string{"truffels-agent"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, tmpls)
+
+	// Create a stuck "restarting" log
+	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID:   "truffels-agent",
+		FromVersion: "v0.1.0",
+		ToVersion:   "v0.2.0",
+		Status:      model.UpdatePending,
+	})
+	_ = st.UpdateLogStatus(logID, model.UpdateRestarting, "", "v0.1.0")
+
+	// Run reconciliation
+	eng.reconcileStuckUpdates()
+
+	// Verify it was marked done (mock agent returns healthy containers)
+	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	if len(logs) == 0 {
+		t.Fatal("expected update log")
+	}
+	if logs[0].Status != model.UpdateDone {
+		t.Errorf("expected done, got %s", logs[0].Status)
+	}
+}
+
+func TestReconcileStuckUpdates_UnhealthyMarkedFailed(t *testing.T) {
+	agent := newSelfUpdateMockAgent(mockAgentOpts{unhealthy: true})
+	defer agent.Close()
+
+	tmpls := []model.ServiceTemplate{
+		{
+			ID:             "truffels-agent",
+			ContainerNames: []string{"truffels-agent"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, tmpls)
+
+	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID:   "truffels-agent",
+		FromVersion: "v0.1.0",
+		ToVersion:   "v0.2.0",
+		Status:      model.UpdatePending,
+	})
+	_ = st.UpdateLogStatus(logID, model.UpdateRestarting, "", "v0.1.0")
+
+	eng.reconcileStuckUpdates()
+
+	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	if len(logs) == 0 {
+		t.Fatal("expected update log")
+	}
+	if logs[0].Status != model.UpdateFailed {
+		t.Errorf("expected failed, got %s", logs[0].Status)
+	}
+}
+
+func TestReconcileStuckUpdates_NoStuckLogs(t *testing.T) {
+	agent := newSelfUpdateMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	tmpls := []model.ServiceTemplate{
+		{ID: "truffels-agent", ContainerNames: []string{"truffels-agent"}},
+	}
+
+	eng, _ := newTestEngine(t, agent, tmpls)
+
+	// Should not panic with no stuck logs
+	eng.reconcileStuckUpdates()
+}

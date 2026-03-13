@@ -420,8 +420,16 @@ function SystemInfoTab() {
     </div>
   )
 
+  const truffelsVersion = import.meta.env.VITE_APP_VERSION || 'dev'
+
   return (
     <div className="space-y-4">
+      <Card>
+        <CardTitle>Truffels</CardTitle>
+        <div className="divide-y divide-border-subtle">
+          <Row label="Version" value={truffelsVersion} />
+        </div>
+      </Card>
       <Card>
         <CardTitle>Hardware</CardTitle>
         <div className="divide-y divide-border-subtle">

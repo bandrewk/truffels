@@ -40,6 +40,7 @@ func NewEngine(s *store.Store, r *service.Registry, c *docker.ComposeClient) *En
 }
 
 func (e *Engine) Start() {
+	e.reconcileStuckUpdates()
 	go e.loop()
 }
 
@@ -389,6 +390,18 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 
 	src := tmpl.UpdateSource
 
+	// For github_release sources (truffels self-update), use a dedicated flow.
+	// All three truffels services share one compose stack, so if any sibling
+	// is already being updated we skip (the ongoing update covers all three).
+	if src.Type == model.SourceGitHubRelease {
+		for _, sib := range []string{"truffels-agent", "truffels-api", "truffels-web"} {
+			if sib != serviceID && e.IsUpdating(sib) {
+				return &UpdateError{Msg: "sibling service " + sib + " is already updating the truffels stack"}
+			}
+		}
+		return e.applySelfUpdate(serviceID, tmpl, check, logID)
+	}
+
 	// Snapshot compose file before update
 	composePath := tmpl.ComposeDir + "/docker-compose.yml"
 	if snapshot, err := os.ReadFile(composePath); err == nil {
@@ -668,6 +681,126 @@ func updateComposeImageTags(composePath string, images []string, oldTag, newTag 
 	}
 	slog.Info("compose file updated", "path", composePath, "images", images, "version", newTag)
 	return nil
+}
+
+// applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
+// Flow: git checkout tag → build with VERSION arg → rewrite compose tags → detached restart.
+func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck, logID int64) error {
+	src := tmpl.UpdateSource
+
+	// Snapshot compose file
+	composePath := tmpl.ComposeDir + "/docker-compose.yml"
+	if snapshot, err := os.ReadFile(composePath); err == nil {
+		_ = e.store.CreateConfigRevision(&model.ConfigRevision{
+			ServiceID:        serviceID,
+			Actor:            "update_engine",
+			Diff:             fmt.Sprintf("pre-self-update snapshot (%s → %s)", check.CurrentVersion, check.LatestVersion),
+			ConfigSnapshot:   string(snapshot),
+			ValidationResult: "ok",
+		})
+	}
+
+	// Step 1: Git checkout the new tag
+	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
+	if err := e.compose.GitCheckout("/repo", check.LatestVersion); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
+		return &UpdateError{Msg: "git checkout failed: " + err.Error()}
+	}
+
+	// Step 2: Build with VERSION arg (builds all services in the truffels stack)
+	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
+	buildArgs := map[string]string{"VERSION": check.LatestVersion}
+	// Use the first truffels service ID to trigger the full compose build
+	if err := e.compose.BuildWithArgs("truffels-agent", buildArgs); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
+		return &UpdateError{Msg: "build failed: " + err.Error()}
+	}
+
+	// Step 3: Rewrite compose image tags for all three services
+	allImages := []string{"truffels/agent", "truffels/api", "truffels/web"}
+	if err := updateComposeImageTags(composePath, allImages, check.CurrentVersion, check.LatestVersion); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
+		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+	}
+
+	// Step 4: Create update logs for sibling services (so they all show as updated)
+	for _, sib := range []string{"truffels-agent", "truffels-api", "truffels-web"} {
+		if sib == serviceID {
+			continue
+		}
+		sibLog := &model.UpdateLog{
+			ServiceID:   sib,
+			FromVersion: check.CurrentVersion,
+			ToVersion:   check.LatestVersion,
+			Status:      model.UpdateRestarting,
+		}
+		sibLogID, err := e.store.CreateUpdateLog(sibLog)
+		if err == nil {
+			// These will be reconciled on startup
+			_ = e.store.UpdateLogStatus(sibLogID, model.UpdateRestarting, "", check.CurrentVersion)
+		}
+		// Update version checks for siblings
+		_ = e.store.UpsertUpdateCheck(&model.UpdateCheck{
+			ServiceID:      sib,
+			CurrentVersion: check.CurrentVersion,
+			LatestVersion:  check.LatestVersion,
+			HasUpdate:      true,
+		})
+	}
+
+	// Step 5: Detached restart — agent calls docker compose up -d via nsenter
+	// This replaces all containers including the agent itself
+	_ = e.store.UpdateLogStatus(logID, model.UpdateRestarting, "", check.CurrentVersion)
+
+	if err := e.compose.ComposeUpDetached("truffels-agent"); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "detached restart failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "detached restart failed: "+err.Error())
+		return &UpdateError{Msg: "detached restart failed: " + err.Error()}
+	}
+
+	// The API will be replaced shortly. The "restarting" status will be reconciled
+	// when the new API starts up (reconcileStuckUpdates).
+	slog.Info("self-update: detached restart initiated, API will restart shortly",
+		"service", serviceID, "version", check.LatestVersion)
+
+	return nil
+}
+
+// reconcileStuckUpdates checks for update logs stuck in "restarting" status on startup.
+// This handles the gap after a self-update where the old API went down and the new one came up.
+func (e *Engine) reconcileStuckUpdates() {
+	logs, err := e.store.GetUpdateLogsByStatus(model.UpdateRestarting)
+	if err != nil {
+		slog.Warn("reconcile: failed to query stuck updates", "err", err)
+		return
+	}
+	for _, l := range logs {
+		tmpl, ok := e.registry.Get(l.ServiceID)
+		if !ok {
+			_ = e.store.UpdateLogStatus(l.ID, model.UpdateFailed, "service not found during reconciliation", "")
+			continue
+		}
+
+		healthy := e.checkHealth(tmpl)
+		if healthy {
+			slog.Info("reconcile: update completed successfully", "service", l.ServiceID, "version", l.ToVersion)
+			_ = e.store.UpdateLogStatus(l.ID, model.UpdateDone, "", "")
+			_ = e.store.ResolveAlerts("update_failed", l.ServiceID)
+			_ = e.store.UpsertUpdateCheck(&model.UpdateCheck{
+				ServiceID:      l.ServiceID,
+				CurrentVersion: l.ToVersion,
+				LatestVersion:  l.ToVersion,
+				HasUpdate:      false,
+			})
+		} else {
+			slog.Error("reconcile: update appears to have failed", "service", l.ServiceID)
+			_ = e.store.UpdateLogStatus(l.ID, model.UpdateFailed, "unhealthy after self-update restart", "")
+			e.alertUpdateFailed(l.ServiceID, "unhealthy after self-update restart")
+		}
+	}
 }
 
 type UpdateError struct {

@@ -137,6 +137,36 @@ func (s *Store) GetUpdateLogs(serviceID string, limit int) ([]model.UpdateLog, e
 	return logs, rows.Err()
 }
 
+// GetUpdateLogsByStatus returns all update logs matching a given status.
+func (s *Store) GetUpdateLogsByStatus(status model.UpdateStatus) ([]model.UpdateLog, error) {
+	rows, err := s.db.Query(
+		`SELECT id, service_id, from_version, to_version, status, started_at, completed_at, error, rollback_version
+		 FROM update_log WHERE status = ? ORDER BY started_at DESC`,
+		status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []model.UpdateLog
+	for rows.Next() {
+		var l model.UpdateLog
+		var startedAt string
+		var completedAt sql.NullString
+		if err := rows.Scan(&l.ID, &l.ServiceID, &l.FromVersion, &l.ToVersion, &l.Status,
+			&startedAt, &completedAt, &l.Error, &l.RollbackVersion); err != nil {
+			continue
+		}
+		l.StartedAt, _ = time.Parse("2006-01-02 15:04:05", startedAt)
+		if completedAt.Valid {
+			t, _ := time.Parse("2006-01-02 15:04:05", completedAt.String)
+			l.CompletedAt = &t
+		}
+		logs = append(logs, l)
+	}
+	return logs, rows.Err()
+}
+
 // PendingUpdateCount returns the number of services with available updates.
 func (s *Store) PendingUpdateCount() (int, error) {
 	var count int

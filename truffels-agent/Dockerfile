@@ -3,11 +3,14 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /truffels-agent .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /truffels-agent .
 
 FROM debian:bookworm-slim
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="${VERSION}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl gnupg wget \
+    ca-certificates curl gnupg wget git \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \

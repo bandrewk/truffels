@@ -844,3 +844,134 @@ func TestHandleSystemTuningSet_ValidJournal(t *testing.T) {
 		}
 	}
 }
+
+// --- handleGitCheckout ---
+
+func TestHandleGitCheckout_InvalidRepoDir(t *testing.T) {
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/etc/passwd", Tag: "v0.2.0"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "repo_dir not allowed" {
+		t.Fatalf("expected 'repo_dir not allowed', got %q", resp["error"])
+	}
+}
+
+func TestHandleGitCheckout_EmptyTag(t *testing.T) {
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: ""})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleGitCheckout_InvalidTagFormat(t *testing.T) {
+	tests := []string{"latest", "main", "0.2.0", "v0.2.0; rm -rf /", "v0.2.0\necho pwned"}
+	for _, tag := range tests {
+		body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: tag})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+		handleGitCheckout(w, r)
+
+		if w.Code != 400 {
+			t.Fatalf("tag %q: expected 400, got %d", tag, w.Code)
+		}
+	}
+}
+
+func TestHandleGitCheckout_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader([]byte("bad")))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestIsValidTag(t *testing.T) {
+	valid := []string{"v0.1.0", "v1.0", "v0.2.0", "v10.20.30"}
+	for _, tag := range valid {
+		if !isValidTag(tag) {
+			t.Errorf("expected %q to be valid", tag)
+		}
+	}
+	invalid := []string{"", "v", "latest", "main", "0.2.0", "v0.2.0-beta", "v0.2.0; rm -rf /"}
+	for _, tag := range invalid {
+		if isValidTag(tag) {
+			t.Errorf("expected %q to be invalid", tag)
+		}
+	}
+}
+
+// --- handleComposeUpDetached ---
+
+func TestHandleComposeUpDetached_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(composeUpDetachedRequest{ServiceID: "evil"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/up-detached", bytes.NewReader(body))
+
+	handleComposeUpDetached(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeUpDetached_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/up-detached", bytes.NewReader([]byte("}")))
+
+	handleComposeUpDetached(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- handleComposeBuild with build args ---
+
+func TestHandleComposeBuild_WithBuildArgs(t *testing.T) {
+	// Valid request with build args — will fail at docker compose in CI
+	body, _ := json.Marshal(buildRequest{ServiceID: "truffels-agent", BuildArgs: map[string]string{"VERSION": "v0.2.0"}})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/build", bytes.NewReader(body))
+
+	handleComposeBuild(w, r)
+
+	// Should not be 400 or 403
+	if w.Code == 400 || w.Code == 403 {
+		t.Fatalf("expected non-4xx, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- version in health ---
+
+func TestHealthIncludesVersion(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/v1/health", nil)
+	handleHealth(w, r)
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["version"] == "" {
+		t.Fatal("expected version field in health response")
+	}
+	if body["version"] != "dev" {
+		// Default should be "dev" when not built with ldflags
+		t.Fatalf("expected 'dev', got %q", body["version"])
+	}
+}

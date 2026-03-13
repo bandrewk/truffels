@@ -298,3 +298,109 @@ func TestComposeClient_SystemAction_AgentUnreachable(t *testing.T) {
 		t.Fatal("expected error for unreachable agent")
 	}
 }
+
+// --- GitCheckout ---
+
+func TestComposeClient_GitCheckout_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/git/checkout" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["repo_dir"] != "/repo" || body["tag"] != "v0.2.0" {
+			t.Errorf("unexpected body: %v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	if err := client.GitCheckout("/repo", "v0.2.0"); err != nil {
+		t.Fatalf("git checkout: %v", err)
+	}
+}
+
+func TestComposeClient_GitCheckout_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "checkout failed"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.GitCheckout("/repo", "v0.2.0")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+// --- BuildWithArgs ---
+
+func TestComposeClient_BuildWithArgs_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["service_id"] != "truffels-agent" {
+			t.Errorf("unexpected service_id: %v", body["service_id"])
+		}
+		args, ok := body["build_args"].(map[string]interface{})
+		if !ok || args["VERSION"] != "v0.2.0" {
+			t.Errorf("unexpected build_args: %v", body["build_args"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.BuildWithArgs("truffels-agent", map[string]string{"VERSION": "v0.2.0"})
+	if err != nil {
+		t.Fatalf("build with args: %v", err)
+	}
+}
+
+func TestComposeClient_BuildWithArgs_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.BuildWithArgs("truffels-agent", map[string]string{"VERSION": "v0.2.0"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+// --- ComposeUpDetached ---
+
+func TestComposeClient_ComposeUpDetached_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/compose/up-detached" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(202)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	if err := client.ComposeUpDetached("truffels-agent"); err != nil {
+		t.Fatalf("compose up detached: %v", err)
+	}
+}
+
+func TestComposeClient_ComposeUpDetached_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "nsenter failed"})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.ComposeUpDetached("truffels-agent")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

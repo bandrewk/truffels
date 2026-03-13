@@ -277,6 +277,70 @@ func (c *ComposeClient) SystemTuningSet(action, value string) error {
 	return nil
 }
 
+// GitCheckout tells the agent to fetch tags and checkout a specific git tag.
+func (c *ComposeClient) GitCheckout(repoDir, tag string) error {
+	body, _ := json.Marshal(map[string]string{"repo_dir": repoDir, "tag": tag})
+	slog.Info("agent git checkout", "repo", repoDir, "tag", tag)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/git/checkout", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent git checkout: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent git checkout: %s", ar.Error)
+	}
+	return nil
+}
+
+// BuildWithArgs runs docker compose build with extra build args via the agent.
+func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]string) error {
+	type buildReq struct {
+		ServiceID string            `json:"service_id"`
+		BuildArgs map[string]string `json:"build_args,omitempty"`
+	}
+	body, _ := json.Marshal(buildReq{ServiceID: serviceID, BuildArgs: buildArgs})
+	slog.Info("agent build with args", "service", serviceID, "args", buildArgs)
+
+	longClient := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent build: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent build: %s", ar.Error)
+	}
+	return nil
+}
+
+// ComposeUpDetached triggers a detached compose up via nsenter on the host.
+// This is used for self-updates where the agent container will be replaced.
+// Returns immediately with 202 Accepted.
+func (c *ComposeClient) ComposeUpDetached(serviceID string) error {
+	body, _ := json.Marshal(map[string]string{"service_id": serviceID})
+	slog.Info("agent compose up detached", "service", serviceID)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/up-detached", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent compose up detached: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		return fmt.Errorf("agent compose up detached: %s", ar.Error)
+	}
+	return nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)
