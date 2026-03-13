@@ -608,15 +608,16 @@ function SystemTuningTab({ setMsg }: { setMsg: (m: string) => void }) {
 function RebootOverlay({ action }: { action: 'shutdown' | 'restart' }) {
   const [elapsed, setElapsed] = useState(0)
   const [status, setStatus] = useState<'waiting' | 'polling' | 'online'>('waiting')
+  const isShutdown = action === 'shutdown'
 
   useEffect(() => {
+    if (isShutdown) return
     const timer = setInterval(() => setElapsed((s) => s + 1), 1000)
     return () => clearInterval(timer)
-  }, [])
+  }, [isShutdown])
 
   useEffect(() => {
-    if (action === 'shutdown') return
-    // Start polling after 15s (system needs time to go down first)
+    if (isShutdown) return
     if (elapsed < 15) return
     if (status === 'online') return
     if (status === 'waiting') setStatus('polling')
@@ -627,7 +628,7 @@ function RebootOverlay({ action }: { action: 'shutdown' | 'restart' }) {
       .then((r) => { if (r.ok) setStatus('online') })
       .catch(() => {})
       .finally(() => clearTimeout(timeout))
-  }, [elapsed, action, status])
+  }, [elapsed, isShutdown, status])
 
   useEffect(() => {
     if (status === 'online') {
@@ -636,37 +637,48 @@ function RebootOverlay({ action }: { action: 'shutdown' | 'restart' }) {
     }
   }, [status])
 
-  const isShutdown = action === 'shutdown'
   const minutes = Math.floor(elapsed / 60)
   const seconds = elapsed % 60
   const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`
 
+  if (isShutdown) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center">
+        <div className="text-center space-y-6 max-w-md">
+          <div className="text-6xl text-red-500">{'\u23FB'}</div>
+          <h2 className="text-2xl font-bold text-white">System Shutting Down</h2>
+          <p className="text-gray-400">
+            The system is powering off. You can close this page.
+          </p>
+          <p className="text-gray-400">
+            You may need to physically power the device back on.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center">
       <div className="text-center space-y-6 max-w-md">
-        <div className={`text-6xl ${isShutdown ? 'text-red-500' : 'text-yellow-500'}`}>
+        <div className={`text-6xl ${status === 'online' ? 'text-green-500' : 'text-yellow-500'}`}>
           {status === 'online' ? '\u2713' : '\u23F3'}
         </div>
         <h2 className="text-2xl font-bold text-white">
-          {isShutdown ? 'System Shutting Down' : status === 'online' ? 'System Online' : 'System Restarting'}
+          {status === 'online' ? 'System Online' : 'System Restarting'}
         </h2>
         <p className="text-gray-400">
-          {isShutdown
-            ? 'The system is powering off. You can close this page.'
-            : status === 'online'
-              ? 'Redirecting to login...'
-              : status === 'polling'
-                ? 'Waiting for system to come back online...'
-                : 'System is going down for restart...'}
+          {status === 'online'
+            ? 'Redirecting to login...'
+            : status === 'polling'
+              ? 'Waiting for system to come back online...'
+              : 'System is going down for restart...'}
         </p>
         <div className="text-4xl font-mono text-gray-300">{timeStr}</div>
         {status === 'polling' && (
           <div className="flex justify-center">
             <div className="w-8 h-8 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        )}
-        {isShutdown && elapsed > 10 && (
-          <p className="text-sm text-gray-600">You may need to physically power the device back on.</p>
         )}
       </div>
     </div>
