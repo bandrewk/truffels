@@ -95,13 +95,15 @@ export default function ServiceDetailPage() {
       <div className="flex gap-2 items-center">
         {!svc.template.read_only && (
           <>
-            {svc.state !== 'running' && (
+            {svc.state !== 'running' && svc.state !== 'disabled' && (
               <ActionButton label="Start" variant="start" onClick={() => doAction('start')} disabled={actionLoading} />
             )}
-            {svc.state !== 'stopped' && (
+            {svc.state !== 'stopped' && svc.state !== 'disabled' && (
               <ActionButton label="Stop" variant="stop" onClick={() => doAction('stop')} disabled={actionLoading} />
             )}
-            <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
+            {svc.state !== 'disabled' && (
+              <ActionButton label="Restart" variant="restart" onClick={() => doAction('restart')} disabled={actionLoading} />
+            )}
             {svc.enabled ? (
               <button
                 onClick={() => doAction('disable')}

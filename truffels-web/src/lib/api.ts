@@ -63,7 +63,7 @@ export interface ServiceTemplate {
 
 export interface ServiceInstance {
   template: ServiceTemplate
-  state: 'running' | 'stopped' | 'degraded' | 'unknown'
+  state: 'running' | 'stopped' | 'degraded' | 'unknown' | 'disabled'
   enabled: boolean
   containers: ContainerState[]
 }
