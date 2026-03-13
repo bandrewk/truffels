@@ -181,6 +181,17 @@ type NetworkIfInfo struct {
 	MAC  string `json:"mac"`
 }
 
+// StorageInfo represents a filesystem mount.
+type StorageInfo struct {
+	Device string `json:"device"`
+	Mount  string `json:"mount"`
+	FSType string `json:"fstype"`
+	Size   string `json:"size"`
+	Used   string `json:"used"`
+	Free   string `json:"free"`
+	UsePct string `json:"use_pct"`
+}
+
 // SystemInfo represents host system information.
 type SystemInfo struct {
 	Hostname string          `json:"hostname"`
@@ -192,6 +203,7 @@ type SystemInfo struct {
 	MemFree  string          `json:"mem_free"`
 	Uptime   string          `json:"uptime"`
 	Networks []NetworkIfInfo `json:"networks"`
+	Storage  []StorageInfo   `json:"storage"`
 }
 
 // SystemInfoGet fetches host system info via the agent.

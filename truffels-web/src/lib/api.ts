@@ -326,6 +326,16 @@ export interface NetworkIfInfo {
   mac: string
 }
 
+export interface StorageInfo {
+  device: string
+  mount: string
+  fstype: string
+  size: string
+  used: string
+  free: string
+  use_pct: string
+}
+
 export interface SystemInfo {
   hostname: string
   os: string
@@ -336,6 +346,7 @@ export interface SystemInfo {
   mem_free: string
   uptime: string
   networks: NetworkIfInfo[]
+  storage: StorageInfo[]
 }
 
 export interface SystemTuning {
