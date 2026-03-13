@@ -203,6 +203,7 @@ listen=1
 maxconnections=128
 par=4
 dbcache=1024
+loglevelalways=1
 $RPCAUTH_LINE
 rpcbind=0.0.0.0
 rpcallowip=172.16.0.0/12
