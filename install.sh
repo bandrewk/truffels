@@ -5,8 +5,23 @@
 # Prerequisites:
 #   - Raspberry Pi 5 (8GB) running Raspberry Pi OS Lite 64-bit
 #   - NVMe boot with ext4
-#   - Memory cgroups enabled (cgroup_enable=memory in cmdline.txt)
+#   - Memory cgroups enabled: add 'cgroup_enable=memory' to
+#     /boot/firmware/cmdline.txt (same line, space-separated) and reboot.
+#     The script will check this and abort if not active.
 #   - Internet connectivity
+#   - This repo cloned to /home/truffel/Project-Truffels/ (or override paths
+#     via TRUFFELS_API_SRC, TRUFFELS_WEB_SRC, TRUFFELS_AGENT_SRC env vars)
+#
+# Interactive prompts:
+#   - Bitcoin mining address (for ckpool solo mining). Skip by setting
+#     TRUFFELS_MINING_ADDRESS env var. Mining signature defaults to
+#     '/truffels/' (override: TRUFFELS_MINING_SIG).
+#
+# External dependencies cloned automatically:
+#   - ckpool: built from https://bitbucket.org/ckolivas/ckpool.git (v1.0.0)
+#     inside Docker during build — no host git clone needed.
+#   - ckstats (ckpoolstats): cloned from https://github.com/mrv777/ckstats.git
+#     into /srv/truffels/data/ckpoolstats/ if not already present.
 #
 # Usage:
 #   sudo ./install.sh [--skip-docker] [--skip-pull] [--restore-from /path/to/backup]
@@ -766,7 +781,17 @@ if [[ "$SKIP_PULL" == false ]]; then
     docker pull "$CADDY_IMAGE"
 fi
 
-# --- Step 8: Build custom images ---------------------------------------------
+# --- Step 8: Clone external sources + build custom images --------------------
+
+# ckpoolstats source (needed for ckstats Docker build)
+if [[ ! -d "$DATA_DIR/ckpoolstats/.git" ]]; then
+    log "Cloning ckpoolstats (ckstats dashboard)..."
+    git clone --depth 1 https://github.com/mrv777/ckstats.git "$DATA_DIR/ckpoolstats"
+    chown -R 1000:1000 "$DATA_DIR/ckpoolstats"
+else
+    log "ckpoolstats source already present, skipping clone."
+fi
+
 log "Building ckpool image..."
 cd "$COMPOSE_DIR/ckpool" && docker compose build --quiet
 
