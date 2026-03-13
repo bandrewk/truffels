@@ -118,7 +118,7 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose")
+	reg := service.NewRegistry("/srv/truffels/compose", "")
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 
@@ -1345,7 +1345,7 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose")
+	reg := service.NewRegistry("/srv/truffels/compose", "")
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 	docker.NewAgentInspector(mockSrv.URL)
@@ -1537,7 +1537,7 @@ func newTestServerWithPullAgent(t *testing.T, agentState *mockAgentState, pullOu
 	mockSrv := newMockAgentWithPull(t, agentState, pullOutput)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose")
+	reg := service.NewRegistry("/srv/truffels/compose", "")
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 	docker.NewAgentInspector(mockSrv.URL)

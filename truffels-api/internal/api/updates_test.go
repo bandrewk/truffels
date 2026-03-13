@@ -25,7 +25,7 @@ func newTestServerWithEngine(t *testing.T) (*Server, *store.Store, *updates.Engi
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	reg := service.NewRegistry("/srv/truffels/compose")
+	reg := service.NewRegistry("/srv/truffels/compose", "")
 	a := auth.New(st)
 	eng := updates.NewEngine(st, reg, nil)
 

@@ -952,6 +952,7 @@ services:
       TRUFFELS_HOST_PROC: "/host/proc"
       TRUFFELS_HOST_SYS: "/host/sys"
       TRUFFELS_AGENT_URL: "http://truffels-agent:9090"
+      TRUFFELS_GITHUB_REPO: "${TRUFFELS_GITHUB_REPO:-bandrewk/Project-Truffels}"
     deploy:
       resources:
         limits:

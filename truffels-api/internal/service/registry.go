@@ -11,7 +11,7 @@ type Registry struct {
 	order    []string // topological order
 }
 
-func NewRegistry(composeRoot string) *Registry {
+func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 	all := []model.ServiceTemplate{
 		templates.Bitcoind,
 		templates.Electrs,
@@ -36,6 +36,12 @@ func NewRegistry(composeRoot string) *Registry {
 			dirName = svc.ComposeDir
 		}
 		svc.ComposeDir = composeRoot + "/" + dirName
+		// Override GitHub repo for self-update sources
+		if svc.UpdateSource != nil && svc.UpdateSource.Type == model.SourceGitHubRelease && gitHubRepo != "" {
+			src := *svc.UpdateSource
+			src.Repo = gitHubRepo
+			svc.UpdateSource = &src
+		}
 		r.services[svc.ID] = svc
 	}
 
