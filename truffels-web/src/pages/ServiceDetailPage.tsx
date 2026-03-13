@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   AreaChart,
@@ -841,22 +841,139 @@ function MonitorTab({ id }: { id: string }) {
   )
 }
 
+type LogSeverity = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
+
+function classifyLine(line: string): LogSeverity {
+  // Try JSON log format first (mempool-backend, caddy)
+  if (line.startsWith('{')) {
+    try {
+      const obj = JSON.parse(line)
+      const lvl = (obj.level || obj.lvl || '').toLowerCase()
+      if (lvl === 'error' || lvl === 'fatal' || lvl === 'panic') return 'error'
+      if (lvl === 'warn' || lvl === 'warning') return 'warn'
+      if (lvl === 'info' || lvl === 'notice') return 'info'
+      if (lvl === 'debug' || lvl === 'trace') return 'debug'
+    } catch { /* not JSON, fall through */ }
+  }
+  const upper = line.toUpperCase()
+  if (/\b(ERROR|FATAL|PANIC|CRITICAL)\b/.test(upper)) return 'error'
+  if (/\b(WARN|WARNING)\b/.test(upper)) return 'warn'
+  if (/\b(INFO|NOTICE)\b/.test(upper)) return 'info'
+  if (/\b(DEBUG|TRACE)\b/.test(upper)) return 'debug'
+  return 'unknown'
+}
+
+const severityColor: Record<LogSeverity, string> = {
+  error: 'text-red-400',
+  warn: 'text-yellow-400',
+  info: 'text-gray-400',
+  debug: 'text-gray-600',
+  unknown: 'text-gray-400',
+}
+
+const TAIL_OPTIONS = [100, 200, 500, 1000] as const
+type SeverityFilter = 'all' | LogSeverity
+
 function LogsTab({ id }: { id: string }) {
-  const fetcher = useCallback(() => api.serviceLogs(id, 200), [id])
-  const { data, error, loading, refresh } = useApi(fetcher)
+  const [tail, setTail] = useState(200)
+  const [filter, setFilter] = useState<SeverityFilter>('all')
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  const fetcher = useCallback(() => api.serviceLogs(id, tail), [id, tail])
+  const { data, error, loading, refresh } = useApi(fetcher, autoRefresh ? 10000 : 0)
+
+  // Classify all lines once
+  const classified = useMemo(() => {
+    if (!data?.logs) return []
+    return data.logs.split('\n').map((line) => ({
+      text: line,
+      severity: classifyLine(line),
+    }))
+  }, [data])
+
+  // Count errors for badge
+  const errorCount = useMemo(() => classified.filter((l) => l.severity === 'error').length, [classified])
+
+  // Filtered lines
+  const filtered = useMemo(
+    () => filter === 'all' ? classified : classified.filter((l) => l.severity === filter || l.severity === 'unknown'),
+    [classified, filter],
+  )
+
+  // Auto-scroll to bottom on new data
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [filtered])
+
+  const filterButtons: { key: SeverityFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'error', label: errorCount > 0 ? `Error (${errorCount})` : 'Error' },
+    { key: 'warn', label: 'Warn' },
+    { key: 'info', label: 'Info' },
+    { key: 'debug', label: 'Debug' },
+  ]
 
   return (
     <Card>
-      <div className="flex justify-between items-center mb-3">
-        <CardTitle>Logs (last 200 lines)</CardTitle>
-        <button onClick={refresh} className="text-xs text-accent hover:text-accent-hover">Refresh</button>
+      <div className="flex flex-col gap-3 mb-3">
+        <div className="flex justify-between items-center">
+          <CardTitle>Logs</CardTitle>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+                className="rounded bg-surface border-border"
+              />
+              Auto-refresh
+            </label>
+            <select
+              value={tail}
+              onChange={(e) => setTail(Number(e.target.value))}
+              className="text-xs bg-surface border border-border rounded px-2 py-1 text-gray-300"
+            >
+              {TAIL_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} lines</option>
+              ))}
+            </select>
+            <button onClick={refresh} className="text-xs text-accent hover:text-accent-hover">Refresh</button>
+          </div>
+        </div>
+        <div className="flex gap-1">
+          {filterButtons.map((fb) => (
+            <button
+              key={fb.key}
+              onClick={() => setFilter(fb.key)}
+              className={`text-xs px-2 py-1 rounded ${
+                filter === fb.key
+                  ? 'bg-accent text-white'
+                  : fb.key === 'error' && errorCount > 0
+                    ? 'bg-surface text-red-400 hover:bg-border'
+                    : 'bg-surface text-gray-400 hover:bg-border'
+              }`}
+            >
+              {fb.label}
+            </button>
+          ))}
+        </div>
       </div>
-      {loading && <div className="text-gray-400">Loading...</div>}
+      {loading && !data && <div className="text-gray-400">Loading...</div>}
       {error && <div className="text-red-400">{error}</div>}
       {data && (
-        <pre className="text-xs font-mono text-gray-400 bg-surface rounded p-3 overflow-auto max-h-[600px] whitespace-pre-wrap">
-          {data.logs || 'No logs available'}
-        </pre>
+        <div className="text-xs font-mono bg-surface rounded p-3 overflow-auto max-h-[600px]">
+          {filtered.length === 0 ? (
+            <span className="text-gray-600">No matching log lines</span>
+          ) : (
+            filtered.map((line, i) => (
+              <div key={i} className={`${severityColor[line.severity]} whitespace-pre-wrap`}>
+                {line.text}
+              </div>
+            ))
+          )}
+          <div ref={logEndRef} />
+        </div>
       )}
     </Card>
   )
