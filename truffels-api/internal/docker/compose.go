@@ -70,7 +70,7 @@ func (c *ComposeClient) Logs(serviceID string, tail int) (string, error) {
 	defer resp.Body.Close()
 
 	var ar agentResponse
-	json.NewDecoder(resp.Body).Decode(&ar)
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return ar.Logs, fmt.Errorf("agent logs: %s", ar.Error)
 	}
@@ -90,7 +90,7 @@ func (c *ComposeClient) Pull(image string) (string, error) {
 	defer resp.Body.Close()
 
 	var ar agentResponse
-	json.NewDecoder(resp.Body).Decode(&ar)
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("agent pull: %s", ar.Error)
 	}
@@ -109,7 +109,7 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 
 	if resp.StatusCode != 200 {
 		var ar agentResponse
-		json.NewDecoder(resp.Body).Decode(&ar)
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
 		return nil, fmt.Errorf("agent image inspect: %s", ar.Error)
 	}
 

@@ -19,12 +19,12 @@ func TestComposeClient_Up(t *testing.T) {
 		}
 
 		var req agentServiceReq
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.ServiceID != "bitcoind" {
 			t.Fatalf("expected bitcoind, got %q", req.ServiceID)
 		}
 
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -40,7 +40,7 @@ func TestComposeClient_Down(t *testing.T) {
 		if r.URL.Path != "/v1/compose/down" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -55,7 +55,7 @@ func TestComposeClient_Restart(t *testing.T) {
 		if r.URL.Path != "/v1/compose/restart" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -68,14 +68,14 @@ func TestComposeClient_Restart(t *testing.T) {
 func TestComposeClient_Logs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agentLogsReq
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.ServiceID != "electrs" {
 			t.Fatalf("expected electrs, got %q", req.ServiceID)
 		}
 		if req.Tail != 100 {
 			t.Fatalf("expected tail 100, got %d", req.Tail)
 		}
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "ok",
 			"logs":   "line1\nline2\n",
 		})
@@ -95,7 +95,7 @@ func TestComposeClient_Logs(t *testing.T) {
 func TestComposeClient_AgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": "compose failed"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "compose failed"})
 	}))
 	defer srv.Close()
 
@@ -150,7 +150,7 @@ func TestInspectContainer_NoAgent(t *testing.T) {
 func TestInspectContainers_WithAgent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req inspectRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		states := make([]model.ContainerState, len(req.Containers))
 		for i, name := range req.Containers {
@@ -160,7 +160,7 @@ func TestInspectContainers_WithAgent(t *testing.T) {
 				Health: "healthy",
 			}
 		}
-		json.NewEncoder(w).Encode(states)
+		_ = json.NewEncoder(w).Encode(states)
 	}))
 	defer srv.Close()
 
@@ -183,7 +183,7 @@ func TestInspectContainers_WithAgent(t *testing.T) {
 func TestInspectContainers_AgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 
@@ -214,11 +214,11 @@ func TestComposeClient_Stop(t *testing.T) {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
 		var req agentServiceReq
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.ServiceID != "electrs" {
 			t.Fatalf("expected electrs, got %q", req.ServiceID)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -231,7 +231,7 @@ func TestComposeClient_Stop(t *testing.T) {
 func TestComposeClient_Stop_AgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": "stop failed"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "stop failed"})
 	}))
 	defer srv.Close()
 
@@ -252,7 +252,7 @@ func TestComposeClient_SystemAction_Restart(t *testing.T) {
 		if r.Method != "POST" {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -267,7 +267,7 @@ func TestComposeClient_SystemAction_Shutdown(t *testing.T) {
 		if r.URL.Path != "/v1/system/shutdown" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer srv.Close()
 
@@ -280,7 +280,7 @@ func TestComposeClient_SystemAction_Shutdown(t *testing.T) {
 func TestComposeClient_SystemAction_AgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": "permission denied"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "permission denied"})
 	}))
 	defer srv.Close()
 

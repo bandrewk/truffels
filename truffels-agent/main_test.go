@@ -18,7 +18,7 @@ func TestHandleHealth(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "ok" {
 		t.Fatalf("expected ok, got %q", body["status"])
 	}
@@ -145,7 +145,7 @@ func TestHandleInspect_DeniedContainer(t *testing.T) {
 	}
 
 	var states []containerState
-	json.Unmarshal(w.Body.Bytes(), &states)
+	_ = json.Unmarshal(w.Body.Bytes(), &states)
 	if len(states) != 1 {
 		t.Fatalf("expected 1 state, got %d", len(states))
 	}
@@ -202,7 +202,7 @@ func TestWriteJSON(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["key"] != "value" {
 		t.Fatalf("expected value, got %q", body["key"])
 	}
@@ -472,7 +472,7 @@ func TestHandleImagePull_MalformedJSON(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["error"] != "invalid request" {
 		t.Fatalf("expected 'invalid request' error, got %q", body["error"])
 	}
@@ -489,7 +489,7 @@ func TestHandleImagePull_EmptyImage(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["error"] != "image required" {
 		t.Fatalf("expected 'image required' error, got %q", body["error"])
 	}
@@ -508,7 +508,7 @@ func TestHandleImageInspect_DeniedContainer(t *testing.T) {
 		t.Fatalf("expected 403, got %d", w.Code)
 	}
 	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["error"] != "container not allowed" {
 		t.Fatalf("expected 'container not allowed' error, got %q", body["error"])
 	}

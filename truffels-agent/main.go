@@ -363,7 +363,7 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 	cmd3.Stdout = &tagsOut
 	var tags []string
 	if cmd3.Run() == nil {
-		json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
+		_ = json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
 	}
 
 	writeJSON(w, 200, imageInspectResult{
@@ -577,5 +577,5 @@ func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
