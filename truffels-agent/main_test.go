@@ -621,7 +621,7 @@ func TestHandleSystemJournal_InvalidUnit(t *testing.T) {
 }
 
 func TestHandleSystemJournal_InvalidBoot(t *testing.T) {
-	body, _ := json.Marshal(journalRequest{Lines: 100, Boot: -2})
+	body, _ := json.Marshal(journalRequest{Lines: 100, Boot: 1})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
 
@@ -632,8 +632,8 @@ func TestHandleSystemJournal_InvalidBoot(t *testing.T) {
 	}
 	var resp map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] != "boot must be 0 or -1" {
-		t.Fatalf("expected 'boot must be 0 or -1', got %q", resp["error"])
+	if resp["error"] != "boot must be 0 or negative" {
+		t.Fatalf("expected 'boot must be 0 or negative', got %q", resp["error"])
 	}
 }
 

@@ -1570,7 +1570,7 @@ func TestSystemJournal_InvalidBoot(t *testing.T) {
 	srv, _, _ := newTestServerWithAgent(t, agentState)
 
 	w := httptest.NewRecorder()
-	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?boot=-2", "")
+	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?boot=1", "")
 	srv.Router().ServeHTTP(w, req)
 
 	if w.Code != 400 {

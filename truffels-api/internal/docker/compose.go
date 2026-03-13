@@ -158,11 +158,20 @@ func (c *ComposeClient) SystemAction(action string) error {
 	return nil
 }
 
+// BootEntry represents a journal boot entry.
+type BootEntry struct {
+	Index int    `json:"index"`
+	ID    string `json:"id"`
+	First string `json:"first"`
+	Last  string `json:"last"`
+}
+
 // SystemTuningInfo represents host tuning parameters.
 type SystemTuningInfo struct {
-	PersistentJournal bool   `json:"persistent_journal"`
-	Swappiness        int    `json:"swappiness"`
-	JournalDiskUsage  string `json:"journal_disk_usage"`
+	PersistentJournal bool        `json:"persistent_journal"`
+	Swappiness        int         `json:"swappiness"`
+	JournalDiskUsage  string      `json:"journal_disk_usage"`
+	Boots             []BootEntry `json:"boots"`
 }
 
 // SystemJournal fetches journalctl output via the agent.

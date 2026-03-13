@@ -326,6 +326,10 @@ function SystemLogsTab() {
   const [since, setSince] = useState('')
   const logEndRef = useRef<HTMLDivElement>(null)
 
+  const bootsFetcher = useCallback(() => api.systemTuning(), [])
+  const { data: tuningData } = useApi(bootsFetcher)
+  const boots = tuningData?.boots ?? []
+
   const fetcher = useCallback(
     () => api.systemJournal(lines, priority, unit, since, boot),
     [lines, priority, unit, since, boot],
@@ -410,24 +414,19 @@ function SystemLogsTab() {
           ))}
         </select>
 
-        <div className="flex gap-1">
-          <button
-            onClick={() => setBoot(0)}
-            className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
-              boot === 0 ? 'bg-accent text-black' : 'bg-surface-overlay text-gray-400 hover:text-white'
-            }`}
-          >
-            Current boot
-          </button>
-          <button
-            onClick={() => setBoot(-1)}
-            className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
-              boot === -1 ? 'bg-accent text-black' : 'bg-surface-overlay text-gray-400 hover:text-white'
-            }`}
-          >
-            Previous boot
-          </button>
-        </div>
+        <select
+          value={boot}
+          onChange={(e) => setBoot(Number(e.target.value))}
+          className="px-3 py-1.5 bg-surface-overlay border border-border rounded text-sm text-white"
+        >
+          {boots.length > 0 ? boots.map((b) => (
+            <option key={b.index} value={b.index}>
+              {b.index === 0 ? 'Current boot' : `Boot ${b.index}`} — {b.first}
+            </option>
+          )) : (
+            <option value={0}>Current boot</option>
+          )}
+        </select>
 
         <label className="flex items-center gap-1.5 text-sm text-gray-400 cursor-pointer">
           <input
@@ -460,7 +459,7 @@ function SystemLogsTab() {
         {loading && !data ? (
           <div className="text-gray-500">Loading...</div>
         ) : filtered.length === 0 ? (
-          <div className="text-gray-500">{boot === -1 ? 'No previous boot available' : 'No log entries'}</div>
+          <div className="text-gray-500">{boot < 0 ? 'No logs available for this boot' : 'No log entries'}</div>
         ) : (
           filtered.map((line, i) => (
             <div key={i} className={`${severityColor[line.severity]} whitespace-pre-wrap`}>

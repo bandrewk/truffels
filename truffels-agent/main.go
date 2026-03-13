@@ -616,8 +616,8 @@ func handleSystemJournal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid unit"})
 		return
 	}
-	if req.Boot != 0 && req.Boot != -1 {
-		writeJSON(w, 400, map[string]string{"error": "boot must be 0 or -1"})
+	if req.Boot > 0 {
+		writeJSON(w, 400, map[string]string{"error": "boot must be 0 or negative"})
 		return
 	}
 	if req.Lines <= 0 || req.Lines > 1000 {
@@ -662,10 +662,18 @@ func handleSystemJournal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"logs": out.String()})
 }
 
+type bootEntry struct {
+	Index int    `json:"index"`
+	ID    string `json:"id"`
+	First string `json:"first"`
+	Last  string `json:"last"`
+}
+
 type tuningResponse struct {
-	PersistentJournal bool   `json:"persistent_journal"`
-	Swappiness        int    `json:"swappiness"`
-	JournalDiskUsage  string `json:"journal_disk_usage"`
+	PersistentJournal bool        `json:"persistent_journal"`
+	Swappiness        int         `json:"swappiness"`
+	JournalDiskUsage  string      `json:"journal_disk_usage"`
+	Boots             []bootEntry `json:"boots"`
 }
 
 func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
@@ -700,10 +708,37 @@ func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// List available boots
+	cmd4 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+		"journalctl", "--list-boots", "--no-pager")
+	var bootsOut bytes.Buffer
+	cmd4.Stdout = &bootsOut
+	_ = cmd4.Run()
+	var boots []bootEntry
+	for _, line := range strings.Split(bootsOut.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "IDX") {
+			continue
+		}
+		// Format: IDX UUID DOW DATE TIME TZ DOW DATE TIME TZ
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		idx, _ := strconv.Atoi(fields[0])
+		boots = append(boots, bootEntry{
+			Index: idx,
+			ID:    fields[1],
+			First: fields[3] + " " + fields[4],
+			Last:  fields[7] + " " + fields[8],
+		})
+	}
+
 	writeJSON(w, 200, tuningResponse{
 		PersistentJournal: persistent,
 		Swappiness:        swappiness,
 		JournalDiskUsage:  usage,
+		Boots:             boots,
 	})
 }
 

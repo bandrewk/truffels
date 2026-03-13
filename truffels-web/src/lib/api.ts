@@ -306,10 +306,18 @@ export interface MonitoringResponse {
   alerts: Alert[]
 }
 
+export interface BootEntry {
+  index: number
+  id: string
+  first: string
+  last: string
+}
+
 export interface SystemTuning {
   persistent_journal: boolean
   swappiness: number
   journal_disk_usage: string
+  boots: BootEntry[]
 }
 
 export interface Settings {
