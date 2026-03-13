@@ -242,8 +242,8 @@ func TestServiceAction_Stop_Success(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if agentState.lastAction != "down" {
-		t.Fatalf("expected compose down, got %q", agentState.lastAction)
+	if agentState.lastAction != "stop" {
+		t.Fatalf("expected compose stop, got %q", agentState.lastAction)
 	}
 }
 

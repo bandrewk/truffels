@@ -59,6 +59,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
 	mux.HandleFunc("POST /v1/compose/down", handleComposeDown)
+	mux.HandleFunc("POST /v1/compose/stop", handleComposeStop)
 	mux.HandleFunc("POST /v1/compose/restart", handleComposeRestart)
 	mux.HandleFunc("POST /v1/compose/logs", handleComposeLogs)
 	mux.HandleFunc("POST /v1/inspect", handleInspect)
@@ -158,6 +159,19 @@ func handleComposeDown(w http.ResponseWriter, r *http.Request) {
 	}
 	dir := composeDir(req.ServiceID)
 	if err := runCompose(dir, "down"); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleComposeStop(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+	dir := composeDir(req.ServiceID)
+	if err := runCompose(dir, "stop"); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
