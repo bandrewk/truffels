@@ -84,6 +84,9 @@ func (s *Server) Router() http.Handler {
 			r.Put("/settings", s.handleUpdateSettings)
 			r.Post("/system/shutdown", s.handleSystemShutdown)
 			r.Post("/system/restart", s.handleSystemRestart)
+			r.Get("/system/journal", s.handleSystemJournal)
+			r.Get("/system/tuning", s.handleSystemTuningGet)
+			r.Post("/system/tuning", s.handleSystemTuningSet)
 
 			r.Get("/updates", s.handleGetUpdates)
 			r.Post("/updates/check", s.handleCheckUpdates)
