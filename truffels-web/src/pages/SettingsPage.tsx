@@ -10,15 +10,22 @@ import {
   severityAtOrAbove,
 } from '@/lib/logUtils'
 
-type Tab = 'info' | 'services' | 'alerts' | 'logs' | 'tuning' | 'danger'
+type Tab = 'services' | 'alerts' | 'updates' | 'info' | 'logs' | 'tuning' | 'danger'
 
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'info', label: 'Info' },
-  { key: 'services', label: 'Service Handling' },
-  { key: 'alerts', label: 'Alerts' },
-  { key: 'logs', label: 'System Logs' },
-  { key: 'tuning', label: 'System' },
-  { key: 'danger', label: 'Danger Zone' },
+const TAB_GROUPS: { label: string; tabs: { key: Tab; label: string }[] }[] = [
+  { label: 'Truffels', tabs: [
+    { key: 'services', label: 'Services' },
+    { key: 'alerts', label: 'Alerts' },
+    { key: 'updates', label: 'Updates' },
+  ]},
+  { label: 'Host', tabs: [
+    { key: 'info', label: 'Info' },
+    { key: 'logs', label: 'Logs' },
+    { key: 'tuning', label: 'Tuning' },
+  ]},
+  { label: '', tabs: [
+    { key: 'danger', label: 'Danger Zone' },
+  ]},
 ]
 
 export default function SettingsPage() {
@@ -36,19 +43,30 @@ export default function SettingsPage() {
     <div>
       <h1 className="text-2xl font-bold mb-4">Settings</h1>
 
-      <div className="flex gap-1 mb-6 border-b border-border overflow-x-auto">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setTab(t.key); setMsg('') }}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-              tab === t.key
-                ? 'border-accent text-accent'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {t.label}
-          </button>
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-2 mb-6 border-b border-border">
+        {TAB_GROUPS.map((group) => (
+          <div key={group.label || 'danger'} className="flex flex-col">
+            {group.label && (
+              <span className="text-xs uppercase tracking-wider text-gray-500 font-medium mb-1 px-1">{group.label}</span>
+            )}
+            <div className="flex gap-1">
+              {group.tabs.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => { setTab(t.key); setMsg('') }}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                    tab === t.key
+                      ? t.key === 'danger' ? 'border-red-500 text-red-400' : 'border-accent text-accent'
+                      : t.key === 'danger'
+                        ? 'border-transparent text-red-400/60 hover:text-red-400'
+                        : 'border-transparent text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
 
@@ -78,6 +96,21 @@ export default function SettingsPage() {
       )}
       {tab === 'alerts' && (
         <AlertsTab
+          settings={settings}
+          saving={saving}
+          onSave={async (patch) => {
+            setSaving(true); setMsg('')
+            try {
+              await api.updateSettings(patch)
+              setMsg('Settings saved')
+              refresh()
+            } catch (e: any) { setMsg(`Error: ${e.message}`) }
+            finally { setSaving(false) }
+          }}
+        />
+      )}
+      {tab === 'updates' && (
+        <UpdatesTab
           settings={settings}
           saving={saving}
           onSave={async (patch) => {
@@ -294,6 +327,62 @@ function AlertsTab({ settings, saving, onSave }: {
         <button
           disabled={!changed || saving || tempWarning >= tempCritical}
           onClick={() => onSave({ temp_warning: tempWarning, temp_critical: tempCritical })}
+          className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function UpdatesTab({ settings, saving, onSave }: {
+  settings: Settings; saving: boolean; onSave: (patch: Partial<Settings>) => void
+}) {
+  const [enabled, setEnabled] = useState(settings.update_check_enabled)
+  const [interval, setInterval] = useState(settings.update_check_interval_hours)
+
+  const changed = interval !== settings.update_check_interval_hours
+    || enabled !== settings.update_check_enabled
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardTitle>Automatic Update Checks</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Periodically check for new versions of managed services.
+          You can always check manually from the Updates page regardless of this setting.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)}
+            className="accent-accent w-4 h-4"
+          />
+          <span className="text-sm text-white font-medium">Enable automatic update checks</span>
+        </label>
+      </Card>
+
+      <Card className={!enabled ? 'opacity-50 pointer-events-none' : ''}>
+        <CardTitle>Check Interval</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          How often the system automatically checks for service updates.
+        </p>
+        <div className="flex items-center gap-3 max-w-xs">
+          <input
+            type="number" min={1} max={168}
+            value={interval}
+            onChange={(e) => setInterval(Number(e.target.value))}
+            className="w-24 px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+          />
+          <span className="text-sm text-gray-400">hours</span>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">Min 1 hour, max 168 hours (7 days). Default is 24 hours.</p>
+      </Card>
+
+      <div className="flex justify-end">
+        <button
+          disabled={!changed || saving || (enabled && (interval < 1 || interval > 168))}
+          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}

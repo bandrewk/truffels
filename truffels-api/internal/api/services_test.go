@@ -933,6 +933,12 @@ func TestGetSettings_Defaults(t *testing.T) {
 	if resp["temp_critical"] != float64(80) {
 		t.Fatalf("expected temp_critical=80, got %v", resp["temp_critical"])
 	}
+	if resp["update_check_interval_hours"] != float64(24) {
+		t.Fatalf("expected update_check_interval_hours=24, got %v", resp["update_check_interval_hours"])
+	}
+	if resp["update_check_enabled"] != true {
+		t.Fatalf("expected update_check_enabled=true, got %v", resp["update_check_enabled"])
+	}
 }
 
 func TestUpdateSettings_Success(t *testing.T) {
@@ -1086,6 +1092,84 @@ func TestGetSettings_AfterUpdate(t *testing.T) {
 	// Unchanged values should still be defaults
 	if resp["temp_warning"] != float64(75) {
 		t.Fatalf("expected unchanged temp_warning=75, got %v", resp["temp_warning"])
+	}
+}
+
+func TestUpdateSettings_BooleanValue(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	// Set boolean to false
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"update_check_enabled":false}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	val, _ := st.GetSetting("update_check_enabled")
+	if val != "false" {
+		t.Fatalf("expected 'false', got %q", val)
+	}
+
+	// Read back via GET — should be false
+	w = httptest.NewRecorder()
+	req = authedReq(t, srv, "GET", "/api/truffels/settings", "")
+	srv.Router().ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp["update_check_enabled"] != false {
+		t.Fatalf("expected update_check_enabled=false, got %v", resp["update_check_enabled"])
+	}
+
+	// Set back to true
+	w = httptest.NewRecorder()
+	req = authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"update_check_enabled":true}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	val, _ = st.GetSetting("update_check_enabled")
+	if val != "true" {
+		t.Fatalf("expected 'true', got %q", val)
+	}
+}
+
+func TestUpdateSettings_IntervalHours(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "PUT", "/api/truffels/settings",
+		`{"update_check_interval_hours":12}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	val, _ := st.GetSetting("update_check_interval_hours")
+	if val != "12" {
+		t.Fatalf("expected '12', got %q", val)
+	}
+
+	// Read back
+	w = httptest.NewRecorder()
+	req = authedReq(t, srv, "GET", "/api/truffels/settings", "")
+	srv.Router().ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp["update_check_interval_hours"] != float64(12) {
+		t.Fatalf("expected 12, got %v", resp["update_check_interval_hours"])
 	}
 }
 

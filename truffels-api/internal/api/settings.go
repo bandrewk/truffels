@@ -14,8 +14,10 @@ var settingsDefaults = map[string]string{
 	"dep_handling_mode":       "flag_only",
 	"temp_warning":            "75",
 	"temp_critical":           "80",
-	"admission_disk_min_gb":   "10",
-	"admission_temp_max":      "80",
+	"admission_disk_min_gb":          "10",
+	"admission_temp_max":             "80",
+	"update_check_interval_hours":    "24",
+	"update_check_enabled":           "true",
 }
 
 type settingsResponse struct {
@@ -25,8 +27,10 @@ type settingsResponse struct {
 	DepHandlingMode       string  `json:"dep_handling_mode"`
 	TempWarning           float64 `json:"temp_warning"`
 	TempCritical          float64 `json:"temp_critical"`
-	AdmissionDiskMinGB    float64 `json:"admission_disk_min_gb"`
-	AdmissionTempMax      float64 `json:"admission_temp_max"`
+	AdmissionDiskMinGB        float64 `json:"admission_disk_min_gb"`
+	AdmissionTempMax          float64 `json:"admission_temp_max"`
+	UpdateCheckIntervalHours int     `json:"update_check_interval_hours"`
+	UpdateCheckEnabled       bool    `json:"update_check_enabled"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +41,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		DepHandlingMode:       s.getSettingStr("dep_handling_mode", "flag_only"),
 		TempWarning:           s.getSettingFloat("temp_warning", 75),
 		TempCritical:          s.getSettingFloat("temp_critical", 80),
-		AdmissionDiskMinGB:    s.getSettingFloat("admission_disk_min_gb", 10),
-		AdmissionTempMax:      s.getSettingFloat("admission_temp_max", 80),
+		AdmissionDiskMinGB:        s.getSettingFloat("admission_disk_min_gb", 10),
+		AdmissionTempMax:          s.getSettingFloat("admission_temp_max", 80),
+		UpdateCheckIntervalHours: s.getSettingInt("update_check_interval_hours", 24),
+		UpdateCheckEnabled:       s.getSettingStr("update_check_enabled", "true") == "true",
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -57,17 +63,22 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var val string
-		// Try as string first, then number
+		// Try as string first, then number, then boolean
 		if err := json.Unmarshal(raw, &val); err != nil {
 			var num float64
-			if err := json.Unmarshal(raw, &num); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid value for "+key)
-				return
-			}
-			if num == float64(int(num)) {
-				val = strconv.Itoa(int(num))
+			if numErr := json.Unmarshal(raw, &num); numErr != nil {
+				var b bool
+				if boolErr := json.Unmarshal(raw, &b); boolErr != nil {
+					writeError(w, http.StatusBadRequest, "invalid value for "+key)
+					return
+				}
+				val = strconv.FormatBool(b)
 			} else {
-				val = strconv.FormatFloat(num, 'f', -1, 64)
+				if num == float64(int(num)) {
+					val = strconv.Itoa(int(num))
+				} else {
+					val = strconv.FormatFloat(num, 'f', -1, 64)
+				}
 			}
 		}
 
