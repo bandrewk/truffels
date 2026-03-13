@@ -22,13 +22,13 @@ CONFIG_DIR="$TRUFFELS_BASE/config"
 DATA_DIR="$TRUFFELS_BASE/data"
 SECRETS_DIR="$TRUFFELS_BASE/secrets"
 
-BITCOIN_IMAGE="btcpayserver/bitcoin:29.0@sha256:061fced86838b54d645ae7a7fa572763ee892f26cccd2baed6eeb66c8943b301"
-ELECTRS_IMAGE="getumbrel/electrs:v0.10.10@sha256:c991fd3d8b19614fa7309525e8ccb6c0a87464f8bf6bd4dff1479b493f7308f2"
-MEMPOOL_BACKEND_IMAGE="mempool/backend:v3.2.0@sha256:dae3ee56782ded9f90317bf66ce7f51a228936049f75cec688cb1cbf5dba0042"
-MEMPOOL_FRONTEND_IMAGE="mempool/frontend:v3.2.0@sha256:99f6d7fa2370a96bd05f370e4e72d6e4a27ea083183edc21f164cc047644a707"
+BITCOIN_IMAGE="btcpayserver/bitcoin:30.2@sha256:cff45bbc8e166bb3403675baea73cf597c7373f20a87a76101e3d849f766d61e"
+ELECTRS_IMAGE="getumbrel/electrs:v0.11.0@sha256:0a2c6f573abfd8d724651c6ba1c1f3a9c740219c1cf0f4468043c3342170d8a5"
+MEMPOOL_BACKEND_IMAGE="mempool/backend:v3.2.1@sha256:d3531090e3bdd9a3dd38151349c5027768c3b7132438db267df8d8f026e15e61"
+MEMPOOL_FRONTEND_IMAGE="mempool/frontend:v3.2.1@sha256:dd126cf383bd425ad46710925697c6a7925675a535c1026c206f2c092231e106"
 MARIADB_IMAGE="mariadb:lts@sha256:8164f184d16c30e2f159e30518113667b796306dff0fe558876ab1ff521a682f"
-POSTGRES_IMAGE="postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416"
-CADDY_IMAGE="caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0"
+POSTGRES_IMAGE="postgres:16.13-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416"
+CADDY_IMAGE="caddy:2.11.2-alpine@sha256:fce4f15aad23222c0ac78a1220adf63bae7b94355d5ea28eee53910624acedfa"
 
 SKIP_DOCKER=false
 SKIP_PULL=false
@@ -142,11 +142,12 @@ fi
 # --- Step 2: Directory layout -------------------------------------------------
 log "Creating directory layout..."
 mkdir -p "$TRUFFELS_BASE"/{compose,config,data,logs,backups,secrets,tmp}
-mkdir -p "$DATA_DIR"/{bitcoin/blockchain,ckpool/logs,electrs/db,mempool/mysql,ckstats/postgres}
-mkdir -p "$CONFIG_DIR"/{bitcoin,electrs,ckpool,ckstats,proxy}
-mkdir -p "$COMPOSE_DIR"/{bitcoin,electrs,ckpool,mempool,ckstats,proxy}
+mkdir -p "$DATA_DIR"/{bitcoin/blockchain,ckpool/logs,electrs/db,mempool/mysql,ckstats/postgres,truffels}
+mkdir -p "$CONFIG_DIR"/{bitcoin,electrs,ckpool,ckstats,proxy,nftables}
+mkdir -p "$COMPOSE_DIR"/{bitcoin,electrs,ckpool,mempool,ckstats,proxy,truffels}
 chmod 0755 "$TRUFFELS_BASE"
 chmod 0750 "$SECRETS_DIR"
+chown 1000:1000 "$DATA_DIR/truffels"
 
 # --- Step 3: Data restore (optional) -----------------------------------------
 if [[ -n "$RESTORE_PATH" ]]; then
@@ -166,6 +167,7 @@ chown -R 1000:1000 "$DATA_DIR"
 log "Creating Docker networks..."
 docker network create --driver bridge --subnet 172.20.0.0/24 bitcoin-backend 2>/dev/null || true
 docker network create --driver bridge --subnet 172.21.0.0/24 truffels-edge 2>/dev/null || true
+docker network create --driver bridge --subnet 172.22.0.0/24 truffels-core 2>/dev/null || true
 
 # --- Step 5: Generate credentials (if not already present) --------------------
 if [[ ! -f "$SECRETS_DIR/rpc.env" ]]; then
@@ -294,11 +296,11 @@ DB_SSL=false
 DB_SSL_REJECT_UNAUTHORIZED=false
 CSENV
 
-# Lock down secrets
-chmod 700 "$SECRETS_DIR"
-chown root:root "$SECRETS_DIR"
-chmod 600 "$SECRETS_DIR"/*.env
-chown root:root "$SECRETS_DIR"/*.env
+# Lock down secrets — group-readable by gid 1000 for API container access
+chmod 750 "$SECRETS_DIR"
+chown root:1000 "$SECRETS_DIR"
+chmod 640 "$SECRETS_DIR"/*.env
+chown root:1000 "$SECRETS_DIR"/*.env
 chmod 640 "$CONFIG_DIR"/bitcoin/bitcoin.conf "$CONFIG_DIR"/electrs/electrs.toml \
           "$CONFIG_DIR"/ckpool/ckpool.conf "$CONFIG_DIR"/ckstats/.env
 
@@ -309,7 +311,7 @@ log "Writing compose files..."
 tee "$COMPOSE_DIR/bitcoin/docker-compose.yml" >/dev/null <<'BITCOINDC'
 services:
   bitcoind:
-    image: btcpayserver/bitcoin:29.0@sha256:061fced86838b54d645ae7a7fa572763ee892f26cccd2baed6eeb66c8943b301
+    image: btcpayserver/bitcoin:30.2@sha256:cff45bbc8e166bb3403675baea73cf597c7373f20a87a76101e3d849f766d61e
     container_name: truffels-bitcoind
     restart: unless-stopped
     user: "1000:1000"
@@ -345,7 +347,7 @@ BITCOINDC
 tee "$COMPOSE_DIR/electrs/docker-compose.yml" >/dev/null <<'ELECTRSDC'
 services:
   electrs:
-    image: getumbrel/electrs:v0.10.10@sha256:c991fd3d8b19614fa7309525e8ccb6c0a87464f8bf6bd4dff1479b493f7308f2
+    image: getumbrel/electrs:v0.11.0@sha256:0a2c6f573abfd8d724651c6ba1c1f3a9c740219c1cf0f4468043c3342170d8a5
     container_name: truffels-electrs
     restart: unless-stopped
     security_opt:
@@ -418,7 +420,7 @@ services:
     volumes:
       - /srv/truffels/data/ckpool:/data
       - /srv/truffels/config/ckpool/ckpool.conf:/etc/ckpool/ckpool.conf:ro
-    entrypoint: ["ckpool", "-B", "-l", "4", "-c", "/etc/ckpool/ckpool.conf"]
+    entrypoint: ["sh", "-c", "rm -f /tmp/ckpool/main.pid; exec ckpool -B -l 4 -c /etc/ckpool/ckpool.conf"]
     stop_grace_period: 10s
     deploy:
       resources:
@@ -632,7 +634,7 @@ services:
           memory: 256M
 
   ckstats-db:
-    image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    image: postgres:16.13-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
     container_name: truffels-ckstats-db
     restart: unless-stopped
     cap_drop:
@@ -673,10 +675,12 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 }
 
 :80 {
+	# ckstats — basePath handles /ckstats prefix internally
 	handle /ckstats* {
 		reverse_proxy truffels-ckstats:3000
 	}
 
+	# Truffels control plane
 	handle /admin* {
 		reverse_proxy truffels-web:8080
 	}
@@ -685,8 +689,8 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 		reverse_proxy truffels-api:8080
 	}
 
-	# All other traffic (API, websocket, frontend) goes through mempool frontend.
-	# The mempool frontend nginx rewrites /api/ → /api/v1/ before proxying to backend.
+	# Mempool — all traffic (API + websocket + frontend) goes through
+	# the mempool frontend nginx, which handles /api/ → /api/v1/ rewrite.
 	# Do NOT route /api/* directly to mempool-backend — Esplora-style paths will 404.
 	handle /ws {
 		reverse_proxy truffels-mempool-frontend:8080
@@ -709,7 +713,7 @@ CADDYFILE
 tee "$COMPOSE_DIR/proxy/docker-compose.yml" >/dev/null <<'PROXYDC'
 services:
   proxy:
-    image: caddy:2.9-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
+    image: caddy:2.11.2-alpine@sha256:fce4f15aad23222c0ac78a1220adf63bae7b94355d5ea28eee53910624acedfa
     container_name: truffels-proxy
     restart: unless-stopped
     cap_drop:
@@ -798,8 +802,6 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
-mkdir -p "$COMPOSE_DIR/truffels" "$DATA_DIR/truffels"
-chown 1000:1000 "$DATA_DIR/truffels"
 
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-/home/truffel/Project-Truffels/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-/home/truffel/Project-Truffels/truffels-web}"
@@ -813,15 +815,17 @@ services:
       dockerfile: $TRUFFELS_AGENT_SRC/Dockerfile
     image: truffels/agent:v0.1.0
     container_name: truffels-agent
+    pid: "host"
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
     networks:
-      bitcoin-backend:
-      truffels-edge:
+      truffels-core:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/truffels/compose:/srv/truffels/compose:ro
+      - /srv/truffels/config:/srv/truffels/config:ro
       - /srv/truffels/secrets:/srv/truffels/secrets:ro
     environment:
       TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
@@ -852,9 +856,17 @@ services:
     networks:
       bitcoin-backend:
       truffels-edge:
+      truffels-core:
+    depends_on:
+      agent:
+        condition: service_healthy
     volumes:
-      - /srv/truffels:/srv/truffels
+      - /srv/truffels/config:/srv/truffels/config:ro
+      - /srv/truffels/compose:/srv/truffels/compose
+      - /srv/truffels/secrets:/srv/truffels/secrets:ro
       - /srv/truffels/data/truffels:/data
+      - /srv/truffels/data:/srv/truffels/data:ro
+      - /srv/truffels/backups:/srv/truffels/backups
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
     environment:
@@ -867,9 +879,6 @@ services:
       TRUFFELS_HOST_PROC: "/host/proc"
       TRUFFELS_HOST_SYS: "/host/sys"
       TRUFFELS_AGENT_URL: "http://truffels-agent:9090"
-    depends_on:
-      agent:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -915,6 +924,8 @@ networks:
     external: true
   truffels-edge:
     external: true
+  truffels-core:
+    external: true
 TRUFFELSDC
 
 log "Building truffels-agent image..."
@@ -947,7 +958,6 @@ fi
 
 # --- Step 10: Host firewall (nftables) ----------------------------------------
 log "Configuring host firewall..."
-mkdir -p "$CONFIG_DIR/nftables"
 tee "$CONFIG_DIR/nftables/truffels.conf" >/dev/null <<'NFTCONF'
 #!/usr/sbin/nft -f
 # Project Truffels — Host firewall rules
