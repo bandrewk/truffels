@@ -104,6 +104,7 @@ type serviceRequest struct {
 type logsRequest struct {
 	ServiceID string `json:"service_id"`
 	Tail      int    `json:"tail"`
+	Since     string `json:"since,omitempty"`
 }
 
 type inspectRequest struct {
@@ -209,9 +210,12 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-f",
-		dir+"/docker-compose.yml", "logs", "--tail",
-		strconv.Itoa(req.Tail), "--no-color")
+	args := []string{"compose", "-f", dir + "/docker-compose.yml", "logs",
+		"--tail", strconv.Itoa(req.Tail), "--no-color"}
+	if req.Since != "" {
+		args = append(args, "--since", req.Since)
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

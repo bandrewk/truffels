@@ -227,8 +227,9 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 			tail = v
 		}
 	}
+	since := r.URL.Query().Get("since")
 
-	logs, err := s.compose.Logs(id, tail)
+	logs, err := s.compose.Logs(id, tail, since)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
