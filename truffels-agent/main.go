@@ -652,7 +652,7 @@ func handleSystemJournal(w http.ResponseWriter, r *http.Request) {
 	if err := cmd.Run(); err != nil {
 		// journalctl exits 1 when boot not found — return empty logs, not an error
 		text := out.String()
-		if strings.Contains(text, "no persistent journal") || strings.Contains(text, "No boot ID matched") {
+		if strings.Contains(text, "no persistent journal") || strings.Contains(text, "No boot ID matched") || strings.Contains(text, "No journal boot entry found") {
 			writeJSON(w, 200, map[string]string{"logs": ""})
 			return
 		}
