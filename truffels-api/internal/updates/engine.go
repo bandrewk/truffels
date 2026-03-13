@@ -686,8 +686,6 @@ func updateComposeImageTags(composePath string, images []string, oldTag, newTag 
 // applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
 // Flow: git checkout tag → build with VERSION arg → rewrite compose tags → detached restart.
 func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck, logID int64) error {
-	src := tmpl.UpdateSource
-
 	// Snapshot compose file
 	composePath := tmpl.ComposeDir + "/docker-compose.yml"
 	if snapshot, err := os.ReadFile(composePath); err == nil {
