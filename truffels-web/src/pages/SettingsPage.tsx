@@ -316,7 +316,7 @@ function RebootOverlay({ action }: { action: 'shutdown' | 'restart' }) {
 
   useEffect(() => {
     if (status === 'online') {
-      const t = setTimeout(() => { window.location.href = '/admin/login' }, 1500)
+      const t = setTimeout(() => { window.location.href = '/admin/' }, 1500)
       return () => clearTimeout(t)
     }
   }, [status])
@@ -373,6 +373,8 @@ function DangerZoneTab({ setMsg }: { setMsg: (m: string) => void }) {
       } else {
         await api.systemRestart(password)
       }
+      // Clear session so redirect lands on login screen
+      try { await fetch('/api/truffels/auth/logout', { method: 'POST' }) } catch {}
       setOverlay(action)
     } catch (e: any) {
       setMsg(`Error: ${e.message}`)
