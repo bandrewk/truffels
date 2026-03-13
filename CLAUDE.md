@@ -108,6 +108,6 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Rollback:** Manual rollback to previous version via service detail page or `POST /updates/rollback/{id}`. Finds last successful update, pulls old image, rewrites compose tags, restarts + health check. Not available for floating-tag or custom-built services.
 - **Versioning:** Single system version for agent/api/web (`TRUFFELS_VERSION`), baked into binaries via ldflags and Docker image labels. Git tags as source of truth (semver `v0.x.y`). Version displayed in Settings Info tab and health endpoints.
 - **Services:** 11 registered services (5 managed, 3 updatable infrastructure [agent/api/web], 3 read-only [proxy/mempool-db/ckstats-db]). Managed services support enable/disable — disabled services show purple "disabled" badge and cannot be started.
-- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), golangci-lint (errcheck), tsc --noEmit, coverage reporting, 430 tests total
+- **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), golangci-lint (errcheck), tsc --noEmit, coverage reporting, 455 tests total
 - **Installation:** `install.sh` prompts for pruning mode (full node or pruned, env var `TRUFFELS_PRUNE_SIZE` for non-interactive). Uses `TRUFFELS_VERSION` env var for image tags and build args (default v0.2.0). INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
