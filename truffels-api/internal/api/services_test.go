@@ -804,7 +804,7 @@ func TestCkpoolStats_IncompleteFile(t *testing.T) {
 func TestElectrsStats_Success(t *testing.T) {
 	// Create a mock electrs prometheus endpoint
 	electrsMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`# TYPE electrs_index_height gauge
+		_, _ = w.Write([]byte(`# TYPE electrs_index_height gauge
 electrs_index_height{type="tip"} 890123
 `))
 	}))
