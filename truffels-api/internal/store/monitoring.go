@@ -77,7 +77,7 @@ func (s *Store) InsertContainerSnapshots(snaps []model.ContainerSnapshot) error 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(
 		`INSERT INTO container_snapshots (container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes)
