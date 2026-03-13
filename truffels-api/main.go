@@ -37,7 +37,7 @@ func main() {
 	defer st.Close()
 
 	// Service registry
-	registry := service.NewRegistry(cfg.ComposeRoot)
+	registry := service.NewRegistry(cfg.ComposeRoot, cfg.GitHubRepo)
 
 	// Ensure all services exist in DB
 	for _, tmpl := range registry.All() {

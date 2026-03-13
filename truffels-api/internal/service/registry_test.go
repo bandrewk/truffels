@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewRegistry_AllServices(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	all := r.All()
 	if len(all) != 11 {
 		t.Fatalf("expected 11 services, got %d", len(all))
@@ -14,7 +14,7 @@ func TestNewRegistry_AllServices(t *testing.T) {
 }
 
 func TestRegistry_TopologicalOrder(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	all := r.All()
 	expected := []string{
 		"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db",
@@ -28,7 +28,7 @@ func TestRegistry_TopologicalOrder(t *testing.T) {
 }
 
 func TestRegistry_Get_Found(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	svc, ok := r.Get("bitcoind")
 	if !ok {
 		t.Fatal("expected to find bitcoind")
@@ -39,7 +39,7 @@ func TestRegistry_Get_Found(t *testing.T) {
 }
 
 func TestRegistry_Get_NotFound(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	_, ok := r.Get("nonexistent")
 	if ok {
 		t.Fatal("expected not found")
@@ -47,7 +47,7 @@ func TestRegistry_Get_NotFound(t *testing.T) {
 }
 
 func TestRegistry_ComposeDir(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 
 	// bitcoind has explicit ComposeDir "bitcoin"
 	btc, _ := r.Get("bitcoind")
@@ -69,7 +69,7 @@ func TestRegistry_ComposeDir(t *testing.T) {
 }
 
 func TestRegistry_ValidateDependencies_NoDeps(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	err := r.ValidateDependencies("bitcoind", func(string) bool { return false })
 	if err != nil {
 		t.Fatalf("bitcoind has no deps, should pass: %v", err)
@@ -77,7 +77,7 @@ func TestRegistry_ValidateDependencies_NoDeps(t *testing.T) {
 }
 
 func TestRegistry_ValidateDependencies_AllRunning(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	err := r.ValidateDependencies("electrs", func(id string) bool {
 		return id == "bitcoind"
 	})
@@ -87,7 +87,7 @@ func TestRegistry_ValidateDependencies_AllRunning(t *testing.T) {
 }
 
 func TestRegistry_ValidateDependencies_DepNotRunning(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	err := r.ValidateDependencies("electrs", func(string) bool { return false })
 	if err == nil {
 		t.Fatal("expected error when dependency not running")
@@ -95,7 +95,7 @@ func TestRegistry_ValidateDependencies_DepNotRunning(t *testing.T) {
 }
 
 func TestRegistry_ValidateDependencies_MultipleDeps(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	// mempool depends on bitcoind and electrs
 	err := r.ValidateDependencies("mempool", func(id string) bool {
 		return id == "bitcoind" // electrs not running
@@ -111,7 +111,7 @@ func TestRegistry_ValidateDependencies_MultipleDeps(t *testing.T) {
 }
 
 func TestRegistry_ValidateDependencies_UnknownService(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	err := r.ValidateDependencies("nonexistent", func(string) bool { return true })
 	if err == nil {
 		t.Fatal("expected error for unknown service")
@@ -119,7 +119,7 @@ func TestRegistry_ValidateDependencies_UnknownService(t *testing.T) {
 }
 
 func TestRegistry_Dependents(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 
 	// bitcoind should have electrs, ckpool, and mempool as dependents
 	deps := r.Dependents("bitcoind")
@@ -136,7 +136,7 @@ func TestRegistry_Dependents(t *testing.T) {
 }
 
 func TestRegistry_Dependents_NoDependents(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	deps := r.Dependents("truffels-web")
 	if len(deps) != 0 {
 		t.Fatalf("expected 0 dependents, got %d", len(deps))
@@ -144,7 +144,7 @@ func TestRegistry_Dependents_NoDependents(t *testing.T) {
 }
 
 func TestRegistry_ReadOnlyServices(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 	readOnly := []string{"proxy", "mempool-db", "ckstats-db"}
 	for _, id := range readOnly {
 		svc, ok := r.Get(id)
@@ -166,7 +166,7 @@ func TestRegistry_ReadOnlyServices(t *testing.T) {
 }
 
 func TestRegistry_FloatingTagServices(t *testing.T) {
-	r := NewRegistry("/srv/truffels/compose")
+	r := NewRegistry("/srv/truffels/compose", "")
 
 	// mempool-db uses a floating tag (mariadb:lts)
 	svc, ok := r.Get("mempool-db")
