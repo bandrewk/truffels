@@ -95,16 +95,16 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **LAN ports:** 22 (SSH), 80 (Caddy), 3333 (stratum), 8333 (P2P)
 - **Swap:** 4GB NVMe swapfile at `/srv/truffels/swapfile` + 2GB zram (6GB total)
 - **Firewall:** nftables INPUT drop policy (truffels-firewall.service), allow SSH/80/3333/8333/loopback/docker bridges
-- **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry)
+- **Auth:** Admin login required for web UI (bcrypt + HMAC session cookies, 24h expiry, login rate-limited 5/min/IP)
 - **Docker hardening:** All containers have cap_drop: ALL (except agent for Docker socket), security_opt: no-new-privileges where possible
 - **Backups:** API endpoint exports configs/compose/SQLite to `/srv/truffels/backups/`, keeps last 5
 - **Updates:** Automatic version checking (Docker Hub / Docker Digest / GitHub / Bitbucket) for 8 services (bitcoind, electrs, mempool, mempool-db, ckpool, ckstats, proxy/Caddy, ckstats-db/PostgreSQL), tag filter support, preflight checks, one-click apply with automatic rollback, pull & restart for floating-tag services (MariaDB), 24h background check cycle
 - **Monitoring:** Resource trends (Recharts) — CPU, memory, temp/fan, disk usage, network I/O (RX/TX), disk I/O utilization — on `/admin/monitoring`. Container status table, health timeline, actionable errors. Per-container metrics (CPU, memory, network I/O, block I/O) collected every 60s as deltas, 48h retention. Per-service Monitor tab on service detail pages with dual-line charts (RX/TX, Read/Write) and live totals table.
 - **Settings:** `/admin/settings` — 3 tabs: Service Handling (restart loop detection: N restarts in M minutes, max retries before auto-stop; dependent service handling: flag-only or flag-and-stop), Alerts (configurable temp warning/critical thresholds), Danger Zone (system shutdown/restart with password confirmation via agent nsenter)
-- **Alerting:** Restart loop detection (windowed, configurable), dependency health checks (upstream unhealthy → flag or auto-stop dependents), disk/temp alerts with configurable thresholds
+- **Alerting:** Restart loop detection (windowed, configurable), dependency health checks (upstream unhealthy → flag or auto-stop dependents), disk/temp alerts with configurable thresholds, backup failure alerts (auto-resolve on success)
 - **Admission control:** Blocks manual service starts when disk free < threshold or CPU temp >= threshold (configurable via Settings, default 10GB/80°C). Does not affect Docker restart policies.
 - **Rollback:** Manual rollback to previous version via service detail page or `POST /updates/rollback/{id}`. Finds last successful update, pulls old image, rewrites compose tags, restarts + health check. Not available for floating-tag or custom-built services.
-- **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services)
+- **Services:** 11 registered services (5 managed, 6 read-only infrastructure including DB services). Managed services support enable/disable — disabled services show purple "disabled" badge and cannot be started.
 - **CI:** GitHub Actions — 3 parallel jobs (API Go tests, Agent Go tests, Web Vitest), 330+ tests total
 - **Installation progress:** INSTALLATION.md completed through step 20 (update system)
 - **Next milestone:** Phase 9 — ePaper display (ping user first)
