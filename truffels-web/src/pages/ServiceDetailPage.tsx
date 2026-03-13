@@ -892,8 +892,9 @@ function LogsTab({ id }: { id: string }) {
     }))
   }, [data])
 
-  // Count errors for badge
+  // Count errors/warnings for badges
   const errorCount = useMemo(() => classified.filter((l) => l.severity === 'error').length, [classified])
+  const warnCount = useMemo(() => classified.filter((l) => l.severity === 'warn').length, [classified])
 
   // Filtered lines
   const filtered = useMemo(
@@ -909,7 +910,7 @@ function LogsTab({ id }: { id: string }) {
   const filterButtons: { key: SeverityFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'error', label: errorCount > 0 ? `Error (${errorCount})` : 'Error' },
-    { key: 'warn', label: 'Warn' },
+    { key: 'warn', label: warnCount > 0 ? `Warn (${warnCount})` : 'Warn' },
     { key: 'info', label: 'Info' },
     { key: 'debug', label: 'Debug' },
   ]
@@ -951,7 +952,9 @@ function LogsTab({ id }: { id: string }) {
                   ? 'bg-accent text-white'
                   : fb.key === 'error' && errorCount > 0
                     ? 'bg-surface text-red-400 hover:bg-border'
-                    : 'bg-surface text-gray-400 hover:bg-border'
+                    : fb.key === 'warn' && warnCount > 0
+                      ? 'bg-surface text-yellow-400 hover:bg-border'
+                      : 'bg-surface text-gray-400 hover:bg-border'
               }`}
             >
               {fb.label}
