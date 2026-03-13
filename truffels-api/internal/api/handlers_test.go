@@ -67,8 +67,8 @@ func TestHandleHealth(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Fatalf("expected ok, got %q", body["status"])
 	}
-	if body["version"] != "0.1.0" {
-		t.Fatalf("expected 0.1.0, got %q", body["version"])
+	if body["version"] != "test" {
+		t.Fatalf("expected test, got %q", body["version"])
 	}
 }
 

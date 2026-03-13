@@ -145,7 +145,7 @@ func TestRegistry_Dependents_NoDependents(t *testing.T) {
 
 func TestRegistry_ReadOnlyServices(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose")
-	readOnly := []string{"proxy", "mempool-db", "ckstats-db", "truffels-agent", "truffels-api", "truffels-web"}
+	readOnly := []string{"proxy", "mempool-db", "ckstats-db"}
 	for _, id := range readOnly {
 		svc, ok := r.Get(id)
 		if !ok {
@@ -156,7 +156,7 @@ func TestRegistry_ReadOnlyServices(t *testing.T) {
 		}
 	}
 
-	manageable := []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats"}
+	manageable := []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "truffels-agent", "truffels-api", "truffels-web"}
 	for _, id := range manageable {
 		svc, _ := r.Get(id)
 		if svc.ReadOnly {
