@@ -122,7 +122,7 @@ func TestAuditLog_Ordering(t *testing.T) {
 func TestAuditLog_Limit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {
-		s.LogAudit("action", "", "", "")
+		_ = s.LogAudit("action", "", "", "")
 	}
 
 	entries, _ := s.GetAuditLog(3)
@@ -166,7 +166,7 @@ func TestService_EnsureAndDisable(t *testing.T) {
 	}
 
 	// Re-enable
-	s.SetServiceEnabled("bitcoind", true)
+	_ = s.SetServiceEnabled("bitcoind", true)
 	enabled, _ = s.IsServiceEnabled("bitcoind")
 	if !enabled {
 		t.Fatal("expected re-enabled")
@@ -175,7 +175,7 @@ func TestService_EnsureAndDisable(t *testing.T) {
 
 func TestService_EnsureDuplicate(t *testing.T) {
 	s := newTestStore(t)
-	s.EnsureService("bitcoind")
+	_ = s.EnsureService("bitcoind")
 	err := s.EnsureService("bitcoind")
 	if err != nil {
 		t.Fatalf("duplicate ensure should not error: %v", err)
@@ -226,7 +226,7 @@ func TestConfigRevisions_Empty(t *testing.T) {
 func TestConfigRevisions_Limit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {
-		s.CreateConfigRevision(&model.ConfigRevision{
+		_ = s.CreateConfigRevision(&model.ConfigRevision{
 			ServiceID: "test", Actor: "admin", Diff: "changed",
 			ConfigSnapshot: "v", ValidationResult: "ok",
 		})
@@ -266,11 +266,11 @@ func TestAlerts_UpsertNew(t *testing.T) {
 
 func TestAlerts_UpsertExisting(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "disk_full", Severity: model.SeverityWarning, Message: "90%",
 	})
 	// Upsert same type → should update, not create new
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "disk_full", Severity: model.SeverityCritical, Message: "95%",
 	})
 
@@ -288,7 +288,7 @@ func TestAlerts_UpsertExisting(t *testing.T) {
 
 func TestAlerts_Resolve(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "high_temp", Severity: model.SeverityWarning, Message: "75C",
 	})
 
@@ -314,14 +314,14 @@ func TestAlerts_Resolve(t *testing.T) {
 
 func TestAlerts_ResolveOnlyMatchingType(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "disk_full", Severity: model.SeverityWarning, Message: "disk",
 	})
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "high_temp", Severity: model.SeverityWarning, Message: "temp",
 	})
 
-	s.ResolveAlerts("disk_full", "")
+	_ = s.ResolveAlerts("disk_full", "")
 
 	active, _ := s.GetActiveAlerts()
 	if len(active) != 1 {
@@ -334,17 +334,17 @@ func TestAlerts_ResolveOnlyMatchingType(t *testing.T) {
 
 func TestAlerts_ServiceScoped(t *testing.T) {
 	s := newTestStore(t)
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "service_unhealthy", Severity: model.SeverityCritical,
 		ServiceID: "bitcoind", Message: "unhealthy",
 	})
-	s.UpsertAlert(&model.Alert{
+	_ = s.UpsertAlert(&model.Alert{
 		Type: "service_unhealthy", Severity: model.SeverityCritical,
 		ServiceID: "electrs", Message: "unhealthy",
 	})
 
 	// Resolve only bitcoind
-	s.ResolveAlerts("service_unhealthy", "bitcoind")
+	_ = s.ResolveAlerts("service_unhealthy", "bitcoind")
 
 	active, _ := s.GetActiveAlerts()
 	if len(active) != 1 {
@@ -358,7 +358,7 @@ func TestAlerts_ServiceScoped(t *testing.T) {
 func TestAlerts_GetAllLimit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {
-		s.UpsertAlert(&model.Alert{
+		_ = s.UpsertAlert(&model.Alert{
 			Type: "test", Severity: model.SeverityWarning, Message: "test",
 			ServiceID: string(rune('a' + i)),
 		})

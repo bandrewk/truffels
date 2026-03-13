@@ -133,7 +133,7 @@ func (c *ComposeClient) Build(serviceID string) error {
 	defer resp.Body.Close()
 
 	var ar agentResponse
-	json.NewDecoder(resp.Body).Decode(&ar)
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("agent build: %s", ar.Error)
 	}
@@ -150,7 +150,7 @@ func (c *ComposeClient) SystemAction(action string) error {
 	defer resp.Body.Close()
 
 	var ar agentResponse
-	json.NewDecoder(resp.Body).Decode(&ar)
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("agent system %s: %s", action, ar.Error)
 	}
@@ -168,7 +168,7 @@ func (c *ComposeClient) composeAction(path, serviceID string) error {
 	defer resp.Body.Close()
 
 	var ar agentResponse
-	json.NewDecoder(resp.Body).Decode(&ar)
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("agent %s: %s", path, ar.Error)
 	}
