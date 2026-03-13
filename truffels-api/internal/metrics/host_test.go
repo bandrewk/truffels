@@ -9,7 +9,9 @@ import (
 func writeTempFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	os.MkdirAll(filepath.Dir(path), 0755)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
@@ -89,8 +91,8 @@ Buffers:          456789 kB
 func TestCollectTemp(t *testing.T) {
 	dir := t.TempDir()
 	thermalDir := filepath.Join(dir, "class", "thermal", "thermal_zone0")
-	os.MkdirAll(thermalDir, 0755)
-	os.WriteFile(filepath.Join(thermalDir, "temp"), []byte("52300\n"), 0644)
+	_ = os.MkdirAll(thermalDir, 0755)
+	_ = os.WriteFile(filepath.Join(thermalDir, "temp"), []byte("52300\n"), 0644)
 
 	c := &Collector{sysPath: dir}
 	temp := c.collectTemp()
