@@ -460,7 +460,7 @@ function SystemLogsTab() {
         {loading && !data ? (
           <div className="text-gray-500">Loading...</div>
         ) : filtered.length === 0 ? (
-          <div className="text-gray-500">No log entries</div>
+          <div className="text-gray-500">{boot === -1 ? 'No previous boot available' : 'No log entries'}</div>
         ) : (
           filtered.map((line, i) => (
             <div key={i} className={`${severityColor[line.severity]} whitespace-pre-wrap`}>
