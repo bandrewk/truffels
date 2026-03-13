@@ -20,7 +20,7 @@ func mockRPCServer(t *testing.T, handler func(method string) (interface{}, *rpcE
 
 		body, _ := io.ReadAll(r.Body)
 		var req rpcRequest
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 
 		result, rpcErr := handler(req.Method)
 		resp := rpcResponse{}
@@ -31,7 +31,7 @@ func mockRPCServer(t *testing.T, handler func(method string) (interface{}, *rpcE
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 }
 

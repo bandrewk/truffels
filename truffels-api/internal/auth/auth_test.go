@@ -45,7 +45,7 @@ func TestSetPassword_MakesSetup(t *testing.T) {
 
 func TestCheckPassword_Correct(t *testing.T) {
 	a := newTestAuth(t)
-	a.SetPassword("correcthorse")
+	_ = a.SetPassword("correcthorse")
 
 	ok, err := a.CheckPassword("correcthorse")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestCheckPassword_Correct(t *testing.T) {
 
 func TestCheckPassword_Wrong(t *testing.T) {
 	a := newTestAuth(t)
-	a.SetPassword("correcthorse")
+	_ = a.SetPassword("correcthorse")
 
 	ok, err := a.CheckPassword("wrongpassword")
 	if err != nil {

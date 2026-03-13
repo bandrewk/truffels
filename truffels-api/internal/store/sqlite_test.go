@@ -69,8 +69,8 @@ func TestSettings_SetAndGet(t *testing.T) {
 
 func TestSettings_Upsert(t *testing.T) {
 	s := newTestStore(t)
-	s.SetSetting("key1", "v1")
-	s.SetSetting("key1", "v2")
+	_ = s.SetSetting("key1", "v1")
+	_ = s.SetSetting("key1", "v2")
 
 	val, _ := s.GetSetting("key1")
 	if val != "v2" {
@@ -105,9 +105,9 @@ func TestAuditLog_InsertAndRetrieve(t *testing.T) {
 
 func TestAuditLog_Ordering(t *testing.T) {
 	s := newTestStore(t)
-	s.LogAudit("first", "", "", "")
-	s.LogAudit("second", "", "", "")
-	s.LogAudit("third", "", "", "")
+	_ = s.LogAudit("first", "", "", "")
+	_ = s.LogAudit("second", "", "", "")
+	_ = s.LogAudit("third", "", "", "")
 
 	entries, _ := s.GetAuditLog(10)
 	if len(entries) != 3 {
