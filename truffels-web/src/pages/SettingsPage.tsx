@@ -16,7 +16,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'services', label: 'Service Handling' },
   { key: 'alerts', label: 'Alerts' },
   { key: 'logs', label: 'System Logs' },
-  { key: 'tuning', label: 'System Tuning' },
+  { key: 'tuning', label: 'System' },
   { key: 'danger', label: 'Danger Zone' },
 ]
 
