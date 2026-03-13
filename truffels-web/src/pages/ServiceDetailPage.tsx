@@ -874,19 +874,33 @@ const severityColor: Record<LogSeverity, string> = {
 const TAIL_OPTIONS = [100, 200, 500, 1000] as const
 type SeverityFilter = 'all' | LogSeverity
 
+// Severity levels ordered by importance (cumulative filtering)
+const SEVERITY_LEVELS: LogSeverity[] = ['error', 'warn', 'info', 'debug']
+
+function severityAtOrAbove(threshold: LogSeverity): Set<LogSeverity> {
+  const idx = SEVERITY_LEVELS.indexOf(threshold)
+  return new Set(SEVERITY_LEVELS.slice(0, idx + 1))
+}
+
 function LogsTab({ id }: { id: string }) {
   const [tail, setTail] = useState(200)
   const [filter, setFilter] = useState<SeverityFilter>('all')
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [since, setSince] = useState('')
   const logEndRef = useRef<HTMLDivElement>(null)
 
-  const fetcher = useCallback(() => api.serviceLogs(id, tail), [id, tail])
+  const fetcher = useCallback(() => api.serviceLogs(id, tail, since), [id, tail, since])
   const { data, error, loading, refresh } = useApi(fetcher, autoRefresh ? 10000 : 0)
+
+  const handleClear = () => {
+    setSince(new Date().toISOString())
+    setFilter('all')
+  }
 
   // Classify all lines once
   const classified = useMemo(() => {
     if (!data?.logs) return []
-    return data.logs.split('\n').map((line) => ({
+    return data.logs.split('\n').filter((l) => l.trim()).map((line) => ({
       text: line,
       severity: classifyLine(line),
     }))
@@ -896,11 +910,12 @@ function LogsTab({ id }: { id: string }) {
   const errorCount = useMemo(() => classified.filter((l) => l.severity === 'error').length, [classified])
   const warnCount = useMemo(() => classified.filter((l) => l.severity === 'warn').length, [classified])
 
-  // Filtered lines
-  const filtered = useMemo(
-    () => filter === 'all' ? classified : classified.filter((l) => l.severity === filter || l.severity === 'unknown'),
-    [classified, filter],
-  )
+  // Cumulative filtered lines — e.g. "warn" shows error + warn, "info" shows error + warn + info
+  const filtered = useMemo(() => {
+    if (filter === 'all') return classified
+    const allowed = severityAtOrAbove(filter)
+    return classified.filter((l) => allowed.has(l.severity))
+  }, [classified, filter])
 
   // Auto-scroll to bottom on new data
   useEffect(() => {
@@ -919,7 +934,7 @@ function LogsTab({ id }: { id: string }) {
     <Card>
       <div className="flex flex-col gap-3 mb-3">
         <div className="flex justify-between items-center">
-          <CardTitle>Logs</CardTitle>
+          <CardTitle>Logs{since && <span className="text-xs text-gray-500 font-normal ml-2">(cleared at {new Date(since).toLocaleTimeString()})</span>}</CardTitle>
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
               <input
@@ -939,6 +954,8 @@ function LogsTab({ id }: { id: string }) {
                 <option key={n} value={n}>{n} lines</option>
               ))}
             </select>
+            <button onClick={handleClear} className="text-xs text-gray-400 hover:text-gray-200">Clear</button>
+            {since && <button onClick={() => setSince('')} className="text-xs text-gray-500 hover:text-gray-300">Show all</button>}
             <button onClick={refresh} className="text-xs text-accent hover:text-accent-hover">Refresh</button>
           </div>
         </div>

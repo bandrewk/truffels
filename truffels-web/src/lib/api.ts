@@ -335,7 +335,11 @@ export const api = {
   services: () => get<ServiceInstance[]>('/services'),
   service: (id: string) => get<ServiceInstance>(`/services/${id}`),
   serviceAction: (id: string, action: string) => post<{ status: string }>(`/services/${id}/action`, { action }),
-  serviceLogs: (id: string, tail = 200) => get<{ logs: string }>(`/services/${id}/logs?tail=${tail}`),
+  serviceLogs: (id: string, tail = 200, since = '') => {
+    const params = new URLSearchParams({ tail: String(tail) })
+    if (since) params.set('since', since)
+    return get<{ logs: string }>(`/services/${id}/logs?${params}`)
+  },
   serviceConfig: (id: string) => get<ConfigResponse>(`/services/${id}/config`),
   updateConfig: (id: string, config: string, restart: boolean) =>
     post<{ status: string }>(`/services/${id}/config`, { config, restart }),

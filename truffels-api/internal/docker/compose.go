@@ -30,6 +30,7 @@ type agentServiceReq struct {
 type agentLogsReq struct {
 	ServiceID string `json:"service_id"`
 	Tail      int    `json:"tail"`
+	Since     string `json:"since,omitempty"`
 }
 
 type agentResponse struct {
@@ -61,8 +62,8 @@ func (c *ComposeClient) Restart(serviceID string) error {
 	return c.composeAction("/v1/compose/restart", serviceID)
 }
 
-func (c *ComposeClient) Logs(serviceID string, tail int) (string, error) {
-	body, _ := json.Marshal(agentLogsReq{ServiceID: serviceID, Tail: tail})
+func (c *ComposeClient) Logs(serviceID string, tail int, since string) (string, error) {
+	body, _ := json.Marshal(agentLogsReq{ServiceID: serviceID, Tail: tail, Since: since})
 	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/logs", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("agent logs: %w", err)
