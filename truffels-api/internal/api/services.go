@@ -97,6 +97,10 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return false
 			}
+			// Skip check for same-stack services — compose up will start them
+			if dep.ComposeDir != "" && dep.ComposeDir == tmpl.ComposeDir {
+				return true
+			}
 			containers := docker.InspectContainers(dep.ContainerNames)
 			return deriveState(containers) == model.StateRunning
 		}
@@ -140,7 +144,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := s.compose.Down(id); err != nil {
+		if err := s.compose.Stop(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -194,7 +198,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		// Stop the service first if running
 		containers := docker.InspectContainers(tmpl.ContainerNames)
 		if deriveState(containers) == model.StateRunning {
-			s.compose.Down(id)
+			s.compose.Stop(id)
 		}
 		s.store.SetServiceEnabled(id, false)
 		s.store.LogAudit("service_disable", id, "", r.RemoteAddr)

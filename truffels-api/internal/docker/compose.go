@@ -53,6 +53,10 @@ func (c *ComposeClient) Down(serviceID string) error {
 	return c.composeAction("/v1/compose/down", serviceID)
 }
 
+func (c *ComposeClient) Stop(serviceID string) error {
+	return c.composeAction("/v1/compose/stop", serviceID)
+}
+
 func (c *ComposeClient) Restart(serviceID string) error {
 	return c.composeAction("/v1/compose/restart", serviceID)
 }
