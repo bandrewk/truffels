@@ -9,7 +9,8 @@ var Mempool = model.ServiceTemplate{
 	ContainerNames: []string{"truffels-mempool-backend", "truffels-mempool-frontend"},
 	Dependencies:   []string{"bitcoind", "electrs", "mempool-db"},
 	MemoryLimit:    "1792M",
-	ConfigPath:     "",
+	ConfigPath:       "",
+	RequiresUnpruned: true,
 	Port:           "80 (via proxy)",
 	UpdateSource: &model.UpdateSource{
 		Type:   model.SourceDockerHub,

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"truffels-api/internal/auth"
+	"truffels-api/internal/bitcoin"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/model"
@@ -1884,5 +1886,178 @@ func TestSystemTuningSet_RequiresAuth(t *testing.T) {
 
 	if w.Code != 401 {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// --- Pruning Compatibility ---
+
+// mockBtcRPC creates a mock Bitcoin Core RPC server that returns the given pruned status.
+func mockBtcRPC(t *testing.T, pruned bool) *bitcoin.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(body, &req)
+
+		result, _ := json.Marshal(map[string]interface{}{
+			"chain":                "main",
+			"blocks":               890123,
+			"headers":              890123,
+			"bestblockhash":        "0000000000000000000abc",
+			"difficulty":           92049594548004.64,
+			"verificationprogress": 0.9999,
+			"size_on_disk":         650000000000,
+			"pruned":               pruned,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": json.RawMessage(result),
+			"error":  nil,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return bitcoin.NewClient(srv.Listener.Addr().String(), "", "")
+}
+
+func TestServiceAction_Start_BlockedByPruning(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPC(t, true)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 conflict, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "unpruned") {
+		t.Fatalf("expected error about unpruned node, got %q", body["error"])
+	}
+}
+
+func TestServiceAction_Start_UnprunedAllowed(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPC(t, false)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServiceAction_Start_PruningCheckSkippedWhenNoRPC(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	// btcRPC is nil by default — should not block start
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (graceful skip), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServiceAction_Start_MempoolBlockedByPruning(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind":   {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+			"truffels-electrs":    {Name: "truffels-electrs", Status: "running", Health: "healthy"},
+			"truffels-mempool-db": {Name: "truffels-mempool-db", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPC(t, true)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/mempool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 conflict, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "unpruned") {
+		t.Fatalf("expected error about unpruned node, got %q", body["error"])
+	}
+}
+
+func TestServiceAction_Start_CkpoolAllowedWithPruning(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPC(t, true)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckpool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (ckpool works with pruned node), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDependencyIssues_PrunedNode(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPC(t, true)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/electrs", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var svc model.ServiceInstance
+	_ = json.Unmarshal(w.Body.Bytes(), &svc)
+
+	found := false
+	for _, issue := range svc.DependencyIssues {
+		if strings.Contains(issue, "unpruned") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'requires unpruned' in dependency issues, got %v", svc.DependencyIssues)
 	}
 }
