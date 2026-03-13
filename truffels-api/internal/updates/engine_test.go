@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"truffels-api/internal/model"
 )
@@ -195,6 +196,107 @@ services:
 	got := readFile(t, path)
 	if got != original {
 		t.Errorf("file should be unchanged when no images match.\nbefore:\n%s\nafter:\n%s", original, got)
+	}
+}
+
+// --- getCheckInterval / isCheckEnabled tests ---
+
+func TestGetCheckInterval_Default(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, _ := newTestEngine(t, agent, nil)
+
+	got := eng.getCheckInterval()
+	if got != 24*time.Hour {
+		t.Fatalf("expected 24h default, got %v", got)
+	}
+}
+
+func TestGetCheckInterval_CustomValue(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_interval_hours", "12")
+
+	got := eng.getCheckInterval()
+	if got != 12*time.Hour {
+		t.Fatalf("expected 12h, got %v", got)
+	}
+}
+
+func TestGetCheckInterval_BoundsLow(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_interval_hours", "0")
+
+	got := eng.getCheckInterval()
+	if got != 24*time.Hour {
+		t.Fatalf("expected 24h fallback for 0, got %v", got)
+	}
+}
+
+func TestGetCheckInterval_BoundsHigh(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_interval_hours", "200")
+
+	got := eng.getCheckInterval()
+	if got != 24*time.Hour {
+		t.Fatalf("expected 24h fallback for 200, got %v", got)
+	}
+}
+
+func TestGetCheckInterval_InvalidValue(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_interval_hours", "abc")
+
+	got := eng.getCheckInterval()
+	if got != 24*time.Hour {
+		t.Fatalf("expected 24h fallback for invalid, got %v", got)
+	}
+}
+
+func TestIsCheckEnabled_Default(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, _ := newTestEngine(t, agent, nil)
+
+	if !eng.isCheckEnabled() {
+		t.Fatal("expected enabled by default")
+	}
+}
+
+func TestIsCheckEnabled_True(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_enabled", "true")
+
+	if !eng.isCheckEnabled() {
+		t.Fatal("expected enabled when set to true")
+	}
+}
+
+func TestIsCheckEnabled_False(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	eng, st := newTestEngine(t, agent, nil)
+	_ = st.SetSetting("update_check_enabled", "false")
+
+	if eng.isCheckEnabled() {
+		t.Fatal("expected disabled when set to false")
 	}
 }
 

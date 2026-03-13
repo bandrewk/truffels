@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -61,19 +62,50 @@ func (e *Engine) IsUpdating(serviceID string) bool {
 	return e.updating[serviceID]
 }
 
+func (e *Engine) isCheckEnabled() bool {
+	val, err := e.store.GetSetting("update_check_enabled")
+	if err != nil || val == "" {
+		return true // default enabled
+	}
+	return val == "true"
+}
+
+func (e *Engine) getCheckInterval() time.Duration {
+	val, err := e.store.GetSetting("update_check_interval_hours")
+	if err == nil && val != "" {
+		if hours, err := strconv.Atoi(val); err == nil && hours >= 1 && hours <= 168 {
+			return time.Duration(hours) * time.Hour
+		}
+	}
+	return 24 * time.Hour
+}
+
 func (e *Engine) loop() {
 	// Initial check after 30s (give services time to start)
 	time.Sleep(30 * time.Second)
-	e.checkAll()
+	if e.isCheckEnabled() {
+		e.checkAll()
+	}
 
-	ticker := time.NewTicker(24 * time.Hour)
+	interval := e.getCheckInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			e.checkAll()
+			if e.isCheckEnabled() {
+				e.checkAll()
+			}
+			// Re-read interval in case it changed
+			newInterval := e.getCheckInterval()
+			if newInterval != interval {
+				interval = newInterval
+				ticker.Reset(interval)
+				slog.Info("update check interval changed", "hours", int(interval.Hours()))
+			}
 		case <-e.triggerCh:
+			// Manual trigger always runs regardless of enabled setting
 			e.checkAll()
 		case <-e.stopCh:
 			return

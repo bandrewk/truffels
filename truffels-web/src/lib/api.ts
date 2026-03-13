@@ -365,6 +365,8 @@ export interface Settings {
   temp_critical: number
   admission_disk_min_gb: number
   admission_temp_max: number
+  update_check_interval_hours: number
+  update_check_enabled: boolean
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
