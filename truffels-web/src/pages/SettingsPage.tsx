@@ -351,6 +351,39 @@ function SystemInfoTab() {
           <Row label="Uptime" value={data.uptime} />
         </div>
       </Card>
+      {data.storage.length > 0 && (
+        <Card>
+          <CardTitle>Storage</CardTitle>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-border-subtle">
+                  <th className="pb-2 pr-4">Mount</th>
+                  <th className="pb-2 pr-4">Device</th>
+                  <th className="pb-2 pr-4">Type</th>
+                  <th className="pb-2 pr-4 text-right">Size</th>
+                  <th className="pb-2 pr-4 text-right">Used</th>
+                  <th className="pb-2 text-right">Free</th>
+                  <th className="pb-2 pl-4 text-right">Use%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.storage.map((s) => (
+                  <tr key={s.mount} className="border-b border-border-subtle last:border-0">
+                    <td className="py-1.5 pr-4 font-mono text-gray-300">{s.mount}</td>
+                    <td className="py-1.5 pr-4 font-mono text-gray-400 text-xs">{s.device}</td>
+                    <td className="py-1.5 pr-4 text-gray-400">{s.fstype}</td>
+                    <td className="py-1.5 pr-4 text-right text-gray-300">{s.size}</td>
+                    <td className="py-1.5 pr-4 text-right text-gray-300">{s.used}</td>
+                    <td className="py-1.5 text-right text-gray-300">{s.free}</td>
+                    <td className="py-1.5 pl-4 text-right text-gray-300">{s.use_pct}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
       {data.networks.length > 0 && (
         <Card>
           <CardTitle>Network</CardTitle>

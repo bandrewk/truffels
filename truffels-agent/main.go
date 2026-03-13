@@ -594,12 +594,23 @@ type systemInfoResponse struct {
 	MemFree  string           `json:"mem_free"`
 	Uptime   string           `json:"uptime"`
 	Networks []networkIfInfo  `json:"networks"`
+	Storage  []storageInfo    `json:"storage"`
 }
 
 type networkIfInfo struct {
 	Name string `json:"name"`
 	IP   string `json:"ip"`
 	MAC  string `json:"mac"`
+}
+
+type storageInfo struct {
+	Device string `json:"device"`
+	Mount  string `json:"mount"`
+	FSType string `json:"fstype"`
+	Size   string `json:"size"`
+	Used   string `json:"used"`
+	Free   string `json:"free"`
+	UsePct string `json:"use_pct"`
 }
 
 func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
@@ -695,6 +706,25 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Storage — df for real filesystems (skip tmpfs, devtmpfs, overlay, etc.)
+	dfOut := nsrun("sh", "-c", "df -hT | awk 'NR>1 && $2!=\"tmpfs\" && $2!=\"devtmpfs\" && $2!=\"overlay\" && $2!=\"squashfs\" {print $1, $7, $2, $3, $4, $5, $6}'")
+	var storage []storageInfo
+	for _, line := range strings.Split(dfOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 7 {
+			continue
+		}
+		storage = append(storage, storageInfo{
+			Device: fields[0],
+			Mount:  fields[1],
+			FSType: fields[2],
+			Size:   fields[3],
+			Used:   fields[4],
+			Free:   fields[5],
+			UsePct: fields[6],
+		})
+	}
+
 	writeJSON(w, 200, systemInfoResponse{
 		Hostname: hostname,
 		OS:       osRelease,
@@ -705,6 +735,7 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		MemFree:  memFree,
 		Uptime:   uptime,
 		Networks: networks,
+		Storage:  storage,
 	})
 }
 
