@@ -14,6 +14,13 @@ import { api, ServiceInstance, UpdateCheck, UpdateLog, ContainerSnapshot } from 
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
+import {
+  type LogSeverity,
+  classifyLine,
+  severityColor,
+  SEVERITY_LEVELS,
+  severityAtOrAbove,
+} from '@/lib/logUtils'
 
 function formatUptime(startedAt: string): string {
   if (!startedAt) return '-'
@@ -841,46 +848,8 @@ function MonitorTab({ id }: { id: string }) {
   )
 }
 
-type LogSeverity = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
-
-function classifyLine(line: string): LogSeverity {
-  // Try JSON log format first (mempool-backend, caddy)
-  if (line.startsWith('{')) {
-    try {
-      const obj = JSON.parse(line)
-      const lvl = (obj.level || obj.lvl || '').toLowerCase()
-      if (lvl === 'error' || lvl === 'fatal' || lvl === 'panic') return 'error'
-      if (lvl === 'warn' || lvl === 'warning') return 'warn'
-      if (lvl === 'info' || lvl === 'notice') return 'info'
-      if (lvl === 'debug' || lvl === 'trace') return 'debug'
-    } catch { /* not JSON, fall through */ }
-  }
-  const upper = line.toUpperCase()
-  if (/\b(ERROR|FATAL|PANIC|CRITICAL)\b/.test(upper)) return 'error'
-  if (/\b(WARN|WARNING)\b/.test(upper)) return 'warn'
-  if (/\b(INFO|NOTICE)\b/.test(upper)) return 'info'
-  if (/\b(DEBUG|TRACE)\b/.test(upper)) return 'debug'
-  return 'unknown'
-}
-
-const severityColor: Record<LogSeverity, string> = {
-  error: 'text-red-400',
-  warn: 'text-yellow-400',
-  info: 'text-gray-400',
-  debug: 'text-gray-600',
-  unknown: 'text-gray-400',
-}
-
 const TAIL_OPTIONS = [100, 200, 500, 1000] as const
 type SeverityFilter = 'all' | LogSeverity
-
-// Severity levels ordered by importance (cumulative filtering)
-const SEVERITY_LEVELS: LogSeverity[] = ['error', 'warn', 'info', 'debug']
-
-function severityAtOrAbove(threshold: LogSeverity): Set<LogSeverity> {
-  const idx = SEVERITY_LEVELS.indexOf(threshold)
-  return new Set(SEVERITY_LEVELS.slice(0, idx + 1))
-}
 
 function LogsTab({ id }: { id: string }) {
   const [tail, setTail] = useState(200)

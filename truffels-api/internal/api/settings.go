@@ -129,6 +129,114 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// --- System Journal ---
+
+func (s *Server) handleSystemJournal(w http.ResponseWriter, r *http.Request) {
+	lines := 200
+	if v := r.URL.Query().Get("lines"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1000 {
+			lines = n
+		}
+	}
+	priority := r.URL.Query().Get("priority")
+	unit := r.URL.Query().Get("unit")
+	since := r.URL.Query().Get("since")
+	boot := 0
+	if v := r.URL.Query().Get("boot"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			boot = n
+		}
+	}
+
+	// Validate priority
+	validPriorities := map[string]bool{
+		"": true, "emerg": true, "crit": true, "err": true,
+		"warning": true, "info": true, "debug": true,
+	}
+	if !validPriorities[priority] {
+		writeError(w, http.StatusBadRequest, "invalid priority")
+		return
+	}
+
+	// Validate unit
+	validUnits := map[string]bool{
+		"": true, "docker": true, "kernel": true, "systemd": true,
+		"nftables": true, "ssh": true,
+	}
+	if !validUnits[unit] {
+		writeError(w, http.StatusBadRequest, "invalid unit")
+		return
+	}
+
+	// Validate boot
+	if boot != 0 && boot != -1 {
+		writeError(w, http.StatusBadRequest, "boot must be 0 or -1")
+		return
+	}
+
+	logs, err := s.compose.SystemJournal(lines, priority, unit, since, boot)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
+}
+
+// --- System Tuning ---
+
+func (s *Server) handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
+	info, err := s.compose.SystemTuningGet()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Action string `json:"action"`
+		Value  string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	// Validate action
+	validActions := map[string]bool{
+		"set_persistent_journal": true,
+		"set_swappiness":         true,
+	}
+	if !validActions[body.Action] {
+		writeError(w, http.StatusBadRequest, "unknown action")
+		return
+	}
+
+	// Validate value
+	switch body.Action {
+	case "set_persistent_journal":
+		if body.Value != "true" && body.Value != "false" {
+			writeError(w, http.StatusBadRequest, "value must be true or false")
+			return
+		}
+	case "set_swappiness":
+		n, err := strconv.Atoi(body.Value)
+		if err != nil || n < 0 || n > 100 {
+			writeError(w, http.StatusBadRequest, "swappiness must be 0-100")
+			return
+		}
+	}
+
+	if err := s.compose.SystemTuningSet(body.Action, body.Value); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	_ = s.store.LogAudit("system_tuning", "", "Tuning: "+body.Action+"="+body.Value, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) getSettingStr(key, def string) string {
 	val, err := s.store.GetSetting(key)
 	if err != nil || val == "" {

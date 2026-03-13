@@ -583,3 +583,240 @@ func TestHandleComposeBuild_MalformedJSON(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+// --- handleSystemJournal ---
+
+func TestHandleSystemJournal_InvalidPriority(t *testing.T) {
+	body, _ := json.Marshal(journalRequest{Lines: 100, Priority: "invalid"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+
+	handleSystemJournal(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid priority" {
+		t.Fatalf("expected 'invalid priority', got %q", resp["error"])
+	}
+}
+
+func TestHandleSystemJournal_InvalidUnit(t *testing.T) {
+	body, _ := json.Marshal(journalRequest{Lines: 100, Unit: "mysql"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+
+	handleSystemJournal(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid unit" {
+		t.Fatalf("expected 'invalid unit', got %q", resp["error"])
+	}
+}
+
+func TestHandleSystemJournal_InvalidBoot(t *testing.T) {
+	body, _ := json.Marshal(journalRequest{Lines: 100, Boot: -2})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+
+	handleSystemJournal(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "boot must be 0 or -1" {
+		t.Fatalf("expected 'boot must be 0 or -1', got %q", resp["error"])
+	}
+}
+
+func TestHandleSystemJournal_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader([]byte("bad")))
+
+	handleSystemJournal(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleSystemJournal_ValidRequest(t *testing.T) {
+	body, _ := json.Marshal(journalRequest{Lines: 50, Priority: "err", Unit: "docker", Boot: 0})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+
+	handleSystemJournal(w, r)
+
+	// nsenter will fail in CI, expect 500
+	if w.Code != 500 && w.Code != 200 {
+		t.Fatalf("expected 500 or 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+}
+
+func TestHandleSystemJournal_ValidPriorities(t *testing.T) {
+	for _, p := range []string{"", "emerg", "crit", "err", "warning", "info", "debug"} {
+		body, _ := json.Marshal(journalRequest{Lines: 10, Priority: p})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+		handleSystemJournal(w, r)
+		// Should not be 400
+		if w.Code == 400 {
+			t.Fatalf("priority %q should be valid, got 400", p)
+		}
+	}
+}
+
+func TestHandleSystemJournal_ValidUnits(t *testing.T) {
+	for _, u := range []string{"", "docker", "kernel", "systemd", "nftables", "ssh"} {
+		body, _ := json.Marshal(journalRequest{Lines: 10, Unit: u})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+		handleSystemJournal(w, r)
+		if w.Code == 400 {
+			t.Fatalf("unit %q should be valid, got 400", u)
+		}
+	}
+}
+
+func TestHandleSystemJournal_LinesClamp(t *testing.T) {
+	// Lines 0 should be clamped to 200, not rejected
+	body, _ := json.Marshal(journalRequest{Lines: 0})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/journal", bytes.NewReader(body))
+	handleSystemJournal(w, r)
+	// Should not be 400 (lines gets clamped)
+	if w.Code == 400 {
+		t.Fatal("lines=0 should be clamped, not rejected")
+	}
+}
+
+// --- handleSystemTuningGet ---
+
+func TestHandleSystemTuningGet_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/v1/system/tuning", nil)
+
+	handleSystemTuningGet(w, r)
+
+	// nsenter will fail in CI but response should still be JSON
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var resp tuningResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+}
+
+// --- handleSystemTuningSet ---
+
+func TestHandleSystemTuningSet_UnknownAction(t *testing.T) {
+	body, _ := json.Marshal(tuningSetRequest{Action: "reboot", Value: "now"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader(body))
+
+	handleSystemTuningSet(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "unknown action" {
+		t.Fatalf("expected 'unknown action', got %q", resp["error"])
+	}
+}
+
+func TestHandleSystemTuningSet_InvalidJournalValue(t *testing.T) {
+	body, _ := json.Marshal(tuningSetRequest{Action: "set_persistent_journal", Value: "maybe"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader(body))
+
+	handleSystemTuningSet(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "value must be true or false" {
+		t.Fatalf("expected 'value must be true or false', got %q", resp["error"])
+	}
+}
+
+func TestHandleSystemTuningSet_InvalidSwappiness(t *testing.T) {
+	tests := []struct {
+		value string
+	}{
+		{"-1"},
+		{"101"},
+		{"abc"},
+	}
+	for _, tt := range tests {
+		body, _ := json.Marshal(tuningSetRequest{Action: "set_swappiness", Value: tt.value})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader(body))
+
+		handleSystemTuningSet(w, r)
+
+		if w.Code != 400 {
+			t.Fatalf("swappiness=%q: expected 400, got %d", tt.value, w.Code)
+		}
+		var resp map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["error"] != "swappiness must be 0-100" {
+			t.Fatalf("swappiness=%q: expected 'swappiness must be 0-100', got %q", tt.value, resp["error"])
+		}
+	}
+}
+
+func TestHandleSystemTuningSet_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader([]byte("nope")))
+
+	handleSystemTuningSet(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleSystemTuningSet_ValidSwappiness(t *testing.T) {
+	// Valid request — will fail at nsenter in CI, but should not be 400
+	body, _ := json.Marshal(tuningSetRequest{Action: "set_swappiness", Value: "10"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader(body))
+
+	handleSystemTuningSet(w, r)
+
+	if w.Code == 400 {
+		t.Fatal("valid swappiness should not return 400")
+	}
+}
+
+func TestHandleSystemTuningSet_ValidJournal(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		body, _ := json.Marshal(tuningSetRequest{Action: "set_persistent_journal", Value: v})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/system/tuning", bytes.NewReader(body))
+
+		handleSystemTuningSet(w, r)
+
+		if w.Code == 400 {
+			t.Fatalf("journal=%q should not return 400", v)
+		}
+	}
+}

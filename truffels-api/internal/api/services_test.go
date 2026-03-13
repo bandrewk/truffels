@@ -33,6 +33,19 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/v1/system/journal" && r.Method == "POST":
+			_ = json.NewEncoder(w).Encode(map[string]string{"logs": "Mar 13 10:00:00 host kernel: test log line"})
+
+		case r.URL.Path == "/v1/system/tuning" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"persistent_journal": true,
+				"swappiness":         10,
+				"journal_disk_usage": "8.0M",
+			})
+
+		case r.URL.Path == "/v1/system/tuning" && r.Method == "POST":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		case strings.HasPrefix(r.URL.Path, "/v1/compose/"):
 			var req struct {
 				ServiceID string `json:"service_id"`
@@ -1503,5 +1516,215 @@ func TestServiceAction_PullRestart_AuditLogged(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected audit log entry for service_pull-restart")
+	}
+}
+
+// --- System Journal ---
+
+func TestSystemJournal_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?lines=100", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["logs"] == "" {
+		t.Fatal("expected logs in response")
+	}
+}
+
+func TestSystemJournal_InvalidPriority(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?priority=invalid", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemJournal_InvalidUnit(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?unit=mysql", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemJournal_InvalidBoot(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/journal?boot=-2", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemJournal_RequiresAuth(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	_ = srv.auth.SetPassword("testpassword")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/truffels/system/journal", nil)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// --- System Tuning ---
+
+func TestSystemTuningGet_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/system/tuning", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		PersistentJournal bool   `json:"persistent_journal"`
+		Swappiness        int    `json:"swappiness"`
+		JournalDiskUsage  string `json:"journal_disk_usage"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if !body.PersistentJournal {
+		t.Fatal("expected persistent_journal=true from mock")
+	}
+	if body.Swappiness != 10 {
+		t.Fatalf("expected swappiness=10 from mock, got %d", body.Swappiness)
+	}
+}
+
+func TestSystemTuningGet_RequiresAuth(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	_ = srv.auth.SetPassword("testpassword")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/truffels/system/tuning", nil)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestSystemTuningSet_InvalidAction(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/system/tuning",
+		`{"action":"reboot","value":"now"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemTuningSet_InvalidJournalValue(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/system/tuning",
+		`{"action":"set_persistent_journal","value":"maybe"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemTuningSet_InvalidSwappiness(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/system/tuning",
+		`{"action":"set_swappiness","value":"101"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemTuningSet_Success(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/system/tuning",
+		`{"action":"set_swappiness","value":"10"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemTuningSet_AuditLogged(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/system/tuning",
+		`{"action":"set_swappiness","value":"15"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, _ := st.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.Action == "system_tuning" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected audit log entry for system_tuning")
+	}
+}
+
+func TestSystemTuningSet_RequiresAuth(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	_ = srv.auth.SetPassword("testpassword")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/truffels/system/tuning",
+		strings.NewReader(`{"action":"set_swappiness","value":"10"}`))
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }

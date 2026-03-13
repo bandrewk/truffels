@@ -70,6 +70,9 @@ func main() {
 	mux.HandleFunc("GET /v1/health", handleHealth)
 	mux.HandleFunc("POST /v1/system/shutdown", handleSystemShutdown)
 	mux.HandleFunc("POST /v1/system/restart", handleSystemRestart)
+	mux.HandleFunc("POST /v1/system/journal", handleSystemJournal)
+	mux.HandleFunc("GET /v1/system/tuning", handleSystemTuningGet)
+	mux.HandleFunc("POST /v1/system/tuning", handleSystemTuningSet)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -575,6 +578,190 @@ func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"status": "error", "error": err.Error()})
 		return
 	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// --- System Journal & Tuning ---
+
+type journalRequest struct {
+	Lines    int    `json:"lines"`
+	Priority string `json:"priority"`
+	Unit     string `json:"unit"`
+	Since    string `json:"since"`
+	Boot     int    `json:"boot"`
+}
+
+var allowedPriorities = map[string]bool{
+	"": true, "emerg": true, "crit": true, "err": true,
+	"warning": true, "info": true, "debug": true,
+}
+
+var allowedUnits = map[string]bool{
+	"": true, "docker": true, "kernel": true, "systemd": true,
+	"nftables": true, "ssh": true,
+}
+
+func handleSystemJournal(w http.ResponseWriter, r *http.Request) {
+	var req journalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if !allowedPriorities[req.Priority] {
+		writeJSON(w, 400, map[string]string{"error": "invalid priority"})
+		return
+	}
+	if !allowedUnits[req.Unit] {
+		writeJSON(w, 400, map[string]string{"error": "invalid unit"})
+		return
+	}
+	if req.Boot != 0 && req.Boot != -1 {
+		writeJSON(w, 400, map[string]string{"error": "boot must be 0 or -1"})
+		return
+	}
+	if req.Lines <= 0 || req.Lines > 1000 {
+		req.Lines = 200
+	}
+
+	args := []string{"-t", "1", "-m", "--", "journalctl", "--no-pager",
+		"--output=short", "-n", strconv.Itoa(req.Lines)}
+	args = append(args, "-b", strconv.Itoa(req.Boot))
+	if req.Priority != "" {
+		args = append(args, "-p", req.Priority)
+	}
+	if req.Unit != "" {
+		if req.Unit == "kernel" {
+			args = append(args, "-k")
+		} else {
+			args = append(args, "-u", req.Unit)
+		}
+	}
+	if req.Since != "" {
+		args = append(args, "--since", req.Since)
+	}
+
+	slog.Info("system journal", "lines", req.Lines, "priority", req.Priority, "unit", req.Unit)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "nsenter", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": out.String()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"logs": out.String()})
+}
+
+type tuningResponse struct {
+	PersistentJournal bool   `json:"persistent_journal"`
+	Swappiness        int    `json:"swappiness"`
+	JournalDiskUsage  string `json:"journal_disk_usage"`
+}
+
+func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Check if persistent journal dir exists
+	cmd1 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+		"test", "-d", "/var/log/journal")
+	persistent := cmd1.Run() == nil
+
+	// Read swappiness
+	cmd2 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+		"cat", "/proc/sys/vm/swappiness")
+	var swapOut bytes.Buffer
+	cmd2.Stdout = &swapOut
+	_ = cmd2.Run()
+	swappiness, _ := strconv.Atoi(strings.TrimSpace(swapOut.String()))
+
+	// Journal disk usage
+	cmd3 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+		"journalctl", "--disk-usage")
+	var usageOut bytes.Buffer
+	cmd3.Stdout = &usageOut
+	_ = cmd3.Run()
+	usage := strings.TrimSpace(usageOut.String())
+	// Extract just the size part, e.g. "Archived and active journals take up 8.0M in the file system."
+	if idx := strings.Index(usage, "take up "); idx >= 0 {
+		rest := usage[idx+8:]
+		if end := strings.Index(rest, " "); end >= 0 {
+			usage = rest[:end]
+		}
+	}
+
+	writeJSON(w, 200, tuningResponse{
+		PersistentJournal: persistent,
+		Swappiness:        swappiness,
+		JournalDiskUsage:  usage,
+	})
+}
+
+type tuningSetRequest struct {
+	Action string `json:"action"`
+	Value  string `json:"value"`
+}
+
+func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
+	var req tuningSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	switch req.Action {
+	case "set_persistent_journal":
+		if req.Value != "true" && req.Value != "false" {
+			writeJSON(w, 400, map[string]string{"error": "value must be true or false"})
+			return
+		}
+		if req.Value == "true" {
+			// Create persistent journal directory + restart journald
+			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+				"sh", "-c", "mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && systemctl restart systemd-journald")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+				return
+			}
+		} else {
+			// Remove persistent journal directory + restart journald
+			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+				"sh", "-c", "rm -rf /var/log/journal && systemctl restart systemd-journald")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+				return
+			}
+		}
+
+	case "set_swappiness":
+		val, err := strconv.Atoi(req.Value)
+		if err != nil || val < 0 || val > 100 {
+			writeJSON(w, 400, map[string]string{"error": "swappiness must be 0-100"})
+			return
+		}
+		// Set live + persist to sysctl.d
+		script := fmt.Sprintf(
+			"sysctl -w vm.swappiness=%d && mkdir -p /etc/sysctl.d && echo 'vm.swappiness=%d' > /etc/sysctl.d/90-truffels.conf",
+			val, val)
+		cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--", "sh", "-c", script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+			return
+		}
+
+	default:
+		writeJSON(w, 400, map[string]string{"error": "unknown action"})
+		return
+	}
+
+	slog.Info("system tuning applied", "action", req.Action, "value", req.Value)
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 

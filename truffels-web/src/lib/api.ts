@@ -306,6 +306,12 @@ export interface MonitoringResponse {
   alerts: Alert[]
 }
 
+export interface SystemTuning {
+  persistent_journal: boolean
+  swappiness: number
+  journal_disk_usage: string
+}
+
 export interface Settings {
   restart_loop_count: number
   restart_loop_window_min: number
@@ -362,4 +368,14 @@ export const api = {
   updateSettings: (settings: Partial<Settings>) => put<{ status: string }>('/settings', settings),
   systemRestart: (password: string) => post<{ status: string }>('/system/restart', { password }),
   systemShutdown: (password: string) => post<{ status: string }>('/system/shutdown', { password }),
+  systemJournal: (lines = 200, priority = '', unit = '', since = '', boot = 0) => {
+    const params = new URLSearchParams({ lines: String(lines), boot: String(boot) })
+    if (priority) params.set('priority', priority)
+    if (unit) params.set('unit', unit)
+    if (since) params.set('since', since)
+    return get<{ logs: string }>(`/system/journal?${params}`)
+  },
+  systemTuning: () => get<SystemTuning>('/system/tuning'),
+  setSystemTuning: (action: string, value: string) =>
+    post<{ status: string }>('/system/tuning', { action, value }),
 }

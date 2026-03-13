@@ -158,6 +158,70 @@ func (c *ComposeClient) SystemAction(action string) error {
 	return nil
 }
 
+// SystemTuningInfo represents host tuning parameters.
+type SystemTuningInfo struct {
+	PersistentJournal bool   `json:"persistent_journal"`
+	Swappiness        int    `json:"swappiness"`
+	JournalDiskUsage  string `json:"journal_disk_usage"`
+}
+
+// SystemJournal fetches journalctl output via the agent.
+func (c *ComposeClient) SystemJournal(lines int, priority, unit, since string, boot int) (string, error) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"lines": lines, "priority": priority, "unit": unit, "since": since, "boot": boot,
+	})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/journal", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("agent journal: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return ar.Logs, fmt.Errorf("agent journal: %s", ar.Error)
+	}
+	return ar.Logs, nil
+}
+
+// SystemTuningGet reads current host tuning values via the agent.
+func (c *ComposeClient) SystemTuningGet() (*SystemTuningInfo, error) {
+	resp, err := c.httpClient.Get(c.agentURL + "/v1/system/tuning")
+	if err != nil {
+		return nil, fmt.Errorf("agent tuning get: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		var ar agentResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
+		return nil, fmt.Errorf("agent tuning get: %s", ar.Error)
+	}
+
+	var info SystemTuningInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("agent tuning decode: %w", err)
+	}
+	return &info, nil
+}
+
+// SystemTuningSet applies a tuning change via the agent.
+func (c *ComposeClient) SystemTuningSet(action, value string) error {
+	body, _ := json.Marshal(map[string]string{"action": action, "value": value})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/tuning", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent tuning set: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent tuning set: %s", ar.Error)
+	}
+	return nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)
