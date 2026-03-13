@@ -41,6 +41,10 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 				"persistent_journal": true,
 				"swappiness":         10,
 				"journal_disk_usage": "8.0M",
+				"boots": []map[string]interface{}{
+					{"index": -1, "id": "abc123", "first": "2026-03-13 18:00:00", "last": "2026-03-13 18:10:00"},
+					{"index": 0, "id": "def456", "first": "2026-03-13 18:15:00", "last": "2026-03-13 18:20:00"},
+				},
 			})
 
 		case r.URL.Path == "/v1/system/tuning" && r.Method == "POST":
@@ -1606,9 +1610,15 @@ func TestSystemTuningGet_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var body struct {
-		PersistentJournal bool   `json:"persistent_journal"`
-		Swappiness        int    `json:"swappiness"`
+		PersistentJournal bool `json:"persistent_journal"`
+		Swappiness        int  `json:"swappiness"`
 		JournalDiskUsage  string `json:"journal_disk_usage"`
+		Boots             []struct {
+			Index int    `json:"index"`
+			ID    string `json:"id"`
+			First string `json:"first"`
+			Last  string `json:"last"`
+		} `json:"boots"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if !body.PersistentJournal {
@@ -1616,6 +1626,12 @@ func TestSystemTuningGet_Success(t *testing.T) {
 	}
 	if body.Swappiness != 10 {
 		t.Fatalf("expected swappiness=10 from mock, got %d", body.Swappiness)
+	}
+	if len(body.Boots) != 2 {
+		t.Fatalf("expected 2 boots from mock, got %d", len(body.Boots))
+	}
+	if body.Boots[0].Index != -1 || body.Boots[1].Index != 0 {
+		t.Fatalf("unexpected boot indices: %d, %d", body.Boots[0].Index, body.Boots[1].Index)
 	}
 }
 
