@@ -169,8 +169,8 @@ func (s *Server) handleSystemJournal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate boot
-	if boot != 0 && boot != -1 {
-		writeError(w, http.StatusBadRequest, "boot must be 0 or -1")
+	if boot > 0 {
+		writeError(w, http.StatusBadRequest, "boot must be 0 or negative")
 		return
 	}
 
