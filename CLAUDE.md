@@ -77,7 +77,7 @@ The host provides only: boot, kernel, networking, Docker, systemd, journald, nft
 - **Docker:** 29.3.0 (official APT repo), daemon configured with live-restore and local log driver
 - **Cgroups:** v2 with memory controller active
 - **Directory layout:** `/srv/truffels/` created per spec
-- **Networks:** `bitcoin-backend` (172.20.0.0/24), `truffels-edge` (172.21.0.0/24)
+- **Networks:** `bitcoin-backend` (172.20.0.0/24), `truffels-edge` (172.21.0.0/24), `truffels-core` (172.22.0.0/24 — API↔agent only)
 - **Running containers (13):**
   - `truffels-bitcoind` — Bitcoin Core 30.2 (btcpayserver/bitcoin)
   - `truffels-electrs` — Electrum Rust Server v0.11.0 (getumbrel/electrs)
