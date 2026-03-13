@@ -54,6 +54,11 @@ export default function ServicesPage() {
               <div className="flex items-start justify-between mb-2">
                 <h3 className="font-semibold text-gray-100">{svc.template.display_name}</h3>
                 <div className="flex items-center gap-2">
+                  {svc.sync_info?.syncing && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
+                      Syncing {(svc.sync_info.progress * 100).toFixed(1)}%
+                    </span>
+                  )}
                   <span className="text-xs text-gray-500">{serviceUptime(svc.containers)}</span>
                   <StatusBadge status={svc.state} />
                 </div>

@@ -36,6 +36,12 @@ type ContainerState struct {
 	Image        string `json:"image"`
 }
 
+type SyncInfo struct {
+	Syncing  bool    `json:"syncing"`
+	Progress float64 `json:"progress"` // 0.0–1.0
+	Detail   string  `json:"detail"`   // e.g. "74.5%" or "1,234 blocks behind"
+}
+
 type ServiceInstance struct {
 	Template         ServiceTemplate  `json:"template"`
 	State            ServiceState     `json:"state"`
@@ -43,4 +49,5 @@ type ServiceInstance struct {
 	Containers       []ContainerState `json:"containers"`
 	LastHealthCheck  time.Time        `json:"last_health_check"`
 	DependencyIssues []string         `json:"dependency_issues,omitempty"`
+	SyncInfo         *SyncInfo        `json:"sync_info,omitempty"`
 }
