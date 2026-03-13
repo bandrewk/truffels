@@ -61,11 +61,18 @@ export interface ServiceTemplate {
   update_source?: UpdateSource
 }
 
+export interface SyncInfo {
+  syncing: boolean
+  progress: number // 0.0–1.0
+  detail: string
+}
+
 export interface ServiceInstance {
   template: ServiceTemplate
   state: 'running' | 'stopped' | 'degraded' | 'unknown' | 'disabled'
   enabled: boolean
   containers: ContainerState[]
+  sync_info?: SyncInfo
 }
 
 export interface Alert {

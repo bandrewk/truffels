@@ -374,6 +374,20 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
 
   return (
     <div className="space-y-4">
+      {svc.sync_info?.syncing && (
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <CardTitle>Syncing</CardTitle>
+            <span className="text-sm text-yellow-400">{svc.sync_info.detail}</span>
+          </div>
+          <div className="w-full bg-surface rounded-full h-2.5">
+            <div
+              className="bg-accent h-2.5 rounded-full transition-all duration-500"
+              style={{ width: `${Math.min(svc.sync_info.progress * 100, 100)}%` }}
+            />
+          </div>
+        </Card>
+      )}
       {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
       {svc.template.id === 'ckpool' && <CkpoolStatsCard />}
       {svc.template.id === 'electrs' && <ElectrsStatsCard />}

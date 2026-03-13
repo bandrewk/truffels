@@ -3,10 +3,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,6 +31,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 			svc.State = model.StateDisabled
 		}
 		svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+		s.enrichSyncInfo(&svc)
 		services = append(services, svc)
 	}
 	writeJSON(w, http.StatusOK, services)
@@ -55,7 +58,96 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		svc.State = model.StateDisabled
 	}
 	svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+	s.enrichSyncInfo(&svc)
 	writeJSON(w, http.StatusOK, svc)
+}
+
+func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
+	if svc.State != model.StateRunning {
+		return
+	}
+	switch svc.Template.ID {
+	case "bitcoind":
+		s.enrichBitcoindSync(svc)
+	case "electrs":
+		s.enrichElectrsSync(svc)
+	}
+}
+
+func (s *Server) enrichBitcoindSync(svc *model.ServiceInstance) {
+	if s.btcRPC == nil {
+		return
+	}
+	info, err := s.btcRPC.GetBlockchainInfo()
+	if err != nil {
+		return
+	}
+	// Bitcoin Core reports verificationprogress < 0.9999 during IBD
+	if info.VerificationProgress >= 0.9999 {
+		return
+	}
+	pct := info.VerificationProgress * 100
+	svc.SyncInfo = &model.SyncInfo{
+		Syncing:  true,
+		Progress: info.VerificationProgress,
+		Detail:   fmt.Sprintf("%.2f%% (%s / %s blocks)", pct, formatInt(info.Blocks), formatInt(info.Headers)),
+	}
+}
+
+func (s *Server) enrichElectrsSync(svc *model.ServiceInstance) {
+	// Fetch electrs index height from Prometheus metrics
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://truffels-electrs:4224/")
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	indexHeight := parsePrometheusGauge(string(body), `electrs_index_height{type="tip"}`)
+	if indexHeight == 0 {
+		return
+	}
+
+	// Get bitcoind height for comparison
+	if s.btcRPC == nil {
+		return
+	}
+	bcInfo, err := s.btcRPC.GetBlockchainInfo()
+	if err != nil || bcInfo.Blocks == 0 {
+		return
+	}
+
+	if indexHeight >= bcInfo.Blocks {
+		return // synced
+	}
+
+	progress := float64(indexHeight) / float64(bcInfo.Blocks)
+	behind := bcInfo.Blocks - indexHeight
+	pct := progress * 100
+	svc.SyncInfo = &model.SyncInfo{
+		Syncing:  true,
+		Progress: progress,
+		Detail:   fmt.Sprintf("%.1f%% (%s blocks behind)", pct, formatInt(behind)),
+	}
+}
+
+func formatInt(n int) string {
+	s := strconv.Itoa(n)
+	if n < 1000 {
+		return s
+	}
+	// Insert commas
+	var result []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(c))
+	}
+	return string(result)
 }
 
 type actionRequest struct {
