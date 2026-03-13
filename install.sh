@@ -13,6 +13,8 @@
 #     via TRUFFELS_API_SRC, TRUFFELS_WEB_SRC, TRUFFELS_AGENT_SRC env vars)
 #
 # Interactive prompts:
+#   - Pruning mode (0 for full node, or MiB to keep). Skip by setting
+#     TRUFFELS_PRUNE_SIZE env var. Defaults to 0 (full node).
 #   - Bitcoin mining address (for ckpool solo mining). Skip by setting
 #     TRUFFELS_MINING_ADDRESS env var. Mining signature defaults to
 #     '/truffels/' (override: TRUFFELS_MINING_SIG).
@@ -185,6 +187,44 @@ docker network create --driver bridge --subnet 172.21.0.0/24 truffels-edge 2>/de
 docker network create --driver bridge --subnet 172.22.0.0/24 truffels-core 2>/dev/null || true
 
 # --- Step 5: Generate credentials (if not already present) --------------------
+
+# --- Pruning configuration ---------------------------------------------------
+PRUNE_SIZE="${TRUFFELS_PRUNE_SIZE:-}"
+if [[ -z "$PRUNE_SIZE" ]]; then
+    echo ""
+    echo "=== Bitcoin Core Pruning ==="
+    echo "A full (unpruned) node keeps the entire blockchain (~650GB)."
+    echo "Pruning saves disk space but disables electrs and mempool."
+    echo "ckpool (solo mining) works fine with pruning."
+    echo ""
+    echo "Options:"
+    echo "  0     = Full node (no pruning, required for electrs/mempool)"
+    echo "  550+  = Pruned node (keep N MiB of blocks, minimum 550)"
+    echo ""
+    read -rp "Prune size in MiB (0 for full node) [0]: " PRUNE_SIZE
+    PRUNE_SIZE="${PRUNE_SIZE:-0}"
+fi
+
+# Validate
+if [[ "$PRUNE_SIZE" =~ ^[0-9]+$ ]]; then
+    if [[ "$PRUNE_SIZE" -gt 0 && "$PRUNE_SIZE" -lt 550 ]]; then
+        die "Minimum prune size is 550 MiB."
+    fi
+else
+    die "Prune size must be a number."
+fi
+
+# Set txindex based on pruning
+if [[ "$PRUNE_SIZE" -eq 0 ]]; then
+    TXINDEX_LINE="txindex=1"
+    PRUNE_LINE="prune=0"
+    log "Full node mode: txindex=1, prune=0"
+else
+    TXINDEX_LINE="# txindex disabled (incompatible with pruning)"
+    PRUNE_LINE="prune=$PRUNE_SIZE"
+    log "Pruned mode: prune=$PRUNE_SIZE MiB (electrs/mempool will not be available)"
+fi
+
 if [[ ! -f "$SECRETS_DIR/rpc.env" ]]; then
     log "Generating RPC credentials..."
     eval "$(generate_rpcauth truffels)"
@@ -197,8 +237,8 @@ RPC
     tee "$CONFIG_DIR/bitcoin/bitcoin.conf" >/dev/null <<BTCCONF
 # Bitcoin Core configuration — Project Truffels
 server=1
-txindex=1
-prune=0
+$TXINDEX_LINE
+$PRUNE_LINE
 listen=1
 maxconnections=128
 par=4
