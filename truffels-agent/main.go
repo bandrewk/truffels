@@ -666,9 +666,9 @@ func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Check if persistent journal dir exists
+	// Check if persistent journal is configured via drop-in
 	cmd1 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
-		"test", "-d", "/var/log/journal")
+		"test", "-f", "/etc/systemd/journald.conf.d/truffels.conf")
 	persistent := cmd1.Run() == nil
 
 	// Read swappiness
@@ -723,17 +723,17 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Value == "true" {
-			// Create persistent journal directory + restart journald
+			// Create persistent journal dir, set Storage=persistent via drop-in, restart journald
 			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
-				"sh", "-c", "mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && systemctl restart systemd-journald")
+				"sh", "-c", "mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && mkdir -p /etc/systemd/journald.conf.d && printf '[Journal]\\nStorage=persistent\\n' > /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
 				return
 			}
 		} else {
-			// Remove persistent journal directory + restart journald
+			// Remove persistent journal dir + drop-in config, restart journald
 			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
-				"sh", "-c", "rm -rf /var/log/journal && systemctl restart systemd-journald")
+				"sh", "-c", "rm -rf /var/log/journal && rm -f /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
 				return
