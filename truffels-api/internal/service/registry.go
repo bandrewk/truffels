@@ -51,9 +51,7 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 	// Compute stack containers: all containers sharing the same compose dir
 	byDir := map[string][]string{}
 	for _, svc := range r.services {
-		for _, c := range svc.ContainerNames {
-			byDir[svc.ComposeDir] = append(byDir[svc.ComposeDir], c)
-		}
+		byDir[svc.ComposeDir] = append(byDir[svc.ComposeDir], svc.ContainerNames...)
 	}
 	for id, svc := range r.services {
 		stack := byDir[svc.ComposeDir]
