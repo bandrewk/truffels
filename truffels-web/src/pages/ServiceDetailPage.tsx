@@ -150,7 +150,7 @@ export default function ServiceDetailPage() {
 
       {tab === 'overview' && <OverviewTab svc={svc} updateCheck={updateStatus?.checks?.find(c => c.service_id === id)} serviceId={id!} />}
       {tab === 'monitor' && <MonitorTab id={id!} />}
-      {tab === 'logs' && <LogsTab id={id!} />}
+      {tab === 'logs' && <LogsTab id={id!} containerNames={svc.template.stack_containers ?? svc.template.container_names} defaultContainer={svc.template.stack_containers && svc.template.container_names.length === 1 ? svc.template.container_names[0] : ''} />}
       {tab === 'config' && <ConfigTab id={id!} />}
     </div>
   )
@@ -865,14 +865,15 @@ function MonitorTab({ id }: { id: string }) {
 const TAIL_OPTIONS = [100, 200, 500, 1000] as const
 type SeverityFilter = 'all' | LogSeverity
 
-function LogsTab({ id }: { id: string }) {
+function LogsTab({ id, containerNames, defaultContainer = '' }: { id: string; containerNames: string[]; defaultContainer?: string }) {
   const [tail, setTail] = useState(200)
   const [filter, setFilter] = useState<SeverityFilter>('all')
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [since, setSince] = useState('')
+  const [container, setContainer] = useState(defaultContainer)
   const logEndRef = useRef<HTMLDivElement>(null)
 
-  const fetcher = useCallback(() => api.serviceLogs(id, tail, since), [id, tail, since])
+  const fetcher = useCallback(() => api.serviceLogs(id, tail, since, container), [id, tail, since, container])
   const { data, error, loading, refresh } = useApi(fetcher, autoRefresh ? 10000 : 0)
 
   const handleClear = () => {
@@ -928,6 +929,18 @@ function LogsTab({ id }: { id: string }) {
               />
               Auto-refresh
             </label>
+            {containerNames.length > 1 && (
+              <select
+                value={container}
+                onChange={(e) => setContainer(e.target.value)}
+                className="text-xs bg-surface border border-border rounded px-2 py-1 text-gray-300"
+              >
+                <option value="">All containers</option>
+                {containerNames.map((name) => (
+                  <option key={name} value={name}>{name.replace('truffels-', '')}</option>
+                ))}
+              </select>
+            )}
             <select
               value={tail}
               onChange={(e) => setTail(Number(e.target.value))}

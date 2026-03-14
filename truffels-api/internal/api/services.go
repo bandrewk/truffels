@@ -328,8 +328,9 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	since := r.URL.Query().Get("since")
+	container := r.URL.Query().Get("container")
 
-	logs, err := s.compose.Logs(id, tail, since)
+	logs, err := s.compose.Logs(id, tail, since, container)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

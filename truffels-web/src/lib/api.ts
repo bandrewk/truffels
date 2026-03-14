@@ -59,6 +59,7 @@ export interface ServiceTemplate {
   read_only?: boolean
   floating_tag?: boolean
   update_source?: UpdateSource
+  stack_containers?: string[]
 }
 
 export interface SyncInfo {
@@ -387,9 +388,10 @@ export const api = {
   services: () => get<ServiceInstance[]>('/services'),
   service: (id: string) => get<ServiceInstance>(`/services/${id}`),
   serviceAction: (id: string, action: string) => post<{ status: string }>(`/services/${id}/action`, { action }),
-  serviceLogs: (id: string, tail = 200, since = '') => {
+  serviceLogs: (id: string, tail = 200, since = '', container = '') => {
     const params = new URLSearchParams({ tail: String(tail) })
     if (since) params.set('since', since)
+    if (container) params.set('container', container)
     return get<{ logs: string }>(`/services/${id}/logs?${params}`)
   },
   serviceConfig: (id: string) => get<ConfigResponse>(`/services/${id}/config`),

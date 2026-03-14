@@ -983,6 +983,52 @@ func TestStripANSI(t *testing.T) {
 	}
 }
 
+// --- handleComposeLogs with container filter ---
+
+func TestHandleComposeLogs_ContainerFilter_Allowed(t *testing.T) {
+	body, _ := json.Marshal(logsRequest{ServiceID: "ckstats", Tail: 100, Container: "truffels-ckstats-db"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/logs", bytes.NewReader(body))
+
+	handleComposeLogs(w, r)
+
+	// docker logs will fail in CI, but should NOT be 400 or 403
+	if w.Code == 400 || w.Code == 403 {
+		t.Fatalf("expected non-4xx for allowed container, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleComposeLogs_ContainerFilter_Denied(t *testing.T) {
+	body, _ := json.Marshal(logsRequest{ServiceID: "ckstats", Tail: 100, Container: "evil-container"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/logs", bytes.NewReader(body))
+
+	handleComposeLogs(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403 for disallowed container, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "container not allowed: evil-container" {
+		t.Fatalf("expected 'container not allowed' error, got %q", resp["error"])
+	}
+}
+
+func TestHandleComposeLogs_EmptyContainer_UsesCompose(t *testing.T) {
+	// Empty container field should use compose logs path (existing behavior)
+	body, _ := json.Marshal(logsRequest{ServiceID: "bitcoind", Tail: 50, Container: ""})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/logs", bytes.NewReader(body))
+
+	handleComposeLogs(w, r)
+
+	// Should not be 403 (compose path, not container path)
+	if w.Code == 403 {
+		t.Fatalf("empty container should use compose path, got 403")
+	}
+}
+
 // --- version in health ---
 
 func TestHealthIncludesVersion(t *testing.T) {

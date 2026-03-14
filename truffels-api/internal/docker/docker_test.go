@@ -83,7 +83,7 @@ func TestComposeClient_Logs(t *testing.T) {
 	defer srv.Close()
 
 	client := NewComposeClient(srv.URL)
-	logs, err := client.Logs("electrs", 100, "")
+	logs, err := client.Logs("electrs", 100, "", "")
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
