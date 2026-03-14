@@ -114,6 +114,7 @@ type logsRequest struct {
 	ServiceID string `json:"service_id"`
 	Tail      int    `json:"tail"`
 	Since     string `json:"since,omitempty"`
+	Container string `json:"container,omitempty"`
 }
 
 type inspectRequest struct {
@@ -213,6 +214,31 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Tail <= 0 || req.Tail > 1000 {
 		req.Tail = 200
+	}
+
+	// If a specific container is requested, use docker logs directly
+	if req.Container != "" {
+		if !allowedContainers[req.Container] {
+			writeJSON(w, 403, map[string]string{"error": "container not allowed: " + req.Container})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		shellCmd := fmt.Sprintf("docker logs --tail %d %s 2>&1 | tail -c 65536", req.Tail, req.Container)
+		if req.Since != "" {
+			shellCmd = fmt.Sprintf("docker logs --tail %d --since %s %s 2>&1 | tail -c 65536", req.Tail, req.Since, req.Container)
+		}
+		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		cleaned := stripANSI(out.String())
+		writeJSON(w, 200, map[string]string{"logs": cleaned})
+		return
 	}
 
 	dir := composeDir(req.ServiceID)

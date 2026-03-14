@@ -29,6 +29,7 @@ type mockAgentState struct {
 	composeErr      string                          // if set, compose actions return this error
 	lastAction      string
 	lastServiceID   string
+	lastContainer   string
 }
 
 func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
@@ -65,11 +66,13 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 		case strings.HasPrefix(r.URL.Path, "/v1/compose/"):
 			var req struct {
 				ServiceID string `json:"service_id"`
+				Container string `json:"container"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			action := strings.TrimPrefix(r.URL.Path, "/v1/compose/")
 			state.lastAction = action
 			state.lastServiceID = req.ServiceID
+			state.lastContainer = req.Container
 
 			if state.composeErr != "" {
 				w.WriteHeader(500)
@@ -501,6 +504,38 @@ func TestServiceLogs_ComposeFails(t *testing.T) {
 
 	if w.Code != 500 {
 		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestServiceLogs_ContainerParam(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/bitcoind/logs?tail=50&container=truffels-bitcoind", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if agentState.lastContainer != "truffels-bitcoind" {
+		t.Fatalf("expected container 'truffels-bitcoind' passed to agent, got %q", agentState.lastContainer)
+	}
+}
+
+func TestServiceLogs_NoContainerParam(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/bitcoind/logs?tail=50", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if agentState.lastContainer != "" {
+		t.Fatalf("expected empty container when not specified, got %q", agentState.lastContainer)
 	}
 }
 

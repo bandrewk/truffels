@@ -26,6 +26,7 @@ type ServiceTemplate struct {
 	FloatingTag      bool          `json:"floating_tag,omitempty"`
 	RequiresUnpruned bool          `json:"requires_unpruned,omitempty"`
 	UpdateSource     *UpdateSource `json:"update_source,omitempty"`
+	StackContainers  []string      `json:"stack_containers,omitempty"`
 }
 
 type ContainerState struct {

@@ -48,6 +48,21 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 	// Fixed topological order for the dependency graph
 	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db", "mempool", "ckstats", "proxy", "truffels-agent", "truffels-api", "truffels-web"}
 
+	// Compute stack containers: all containers sharing the same compose dir
+	byDir := map[string][]string{}
+	for _, svc := range r.services {
+		for _, c := range svc.ContainerNames {
+			byDir[svc.ComposeDir] = append(byDir[svc.ComposeDir], c)
+		}
+	}
+	for id, svc := range r.services {
+		stack := byDir[svc.ComposeDir]
+		if len(stack) > 1 {
+			svc.StackContainers = stack
+			r.services[id] = svc
+		}
+	}
+
 	return r
 }
 
