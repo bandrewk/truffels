@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -228,11 +229,19 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": out.String()})
+	cleaned := stripANSI(out.String())
+
+	// If compose logs returned empty, fall back to docker logs for each container.
+	// This handles services like ckpool whose \r-heavy output breaks --tail.
+	if cleaned == "" && err == nil {
+		cleaned = fallbackContainerLogs(ctx, req.ServiceID, req.Tail, req.Since)
+	}
+
+	if err != nil && cleaned == "" {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": cleaned})
 		return
 	}
-	writeJSON(w, 200, map[string]string{"logs": out.String()})
+	writeJSON(w, 200, map[string]string{"logs": cleaned})
 }
 
 func handleInspect(w http.ResponseWriter, r *http.Request) {
@@ -1096,6 +1105,74 @@ docker compose -f %s up -d --remove-orphans
 	}
 
 	writeJSON(w, 202, map[string]string{"status": "accepted", "message": "detached compose up scheduled"})
+}
+
+// serviceContainers maps service IDs to their container names for fallback log retrieval.
+var serviceContainers = map[string][]string{
+	"bitcoind":        {"truffels-bitcoind"},
+	"electrs":         {"truffels-electrs"},
+	"ckpool":          {"truffels-ckpool"},
+	"mempool":         {"truffels-mempool-backend", "truffels-mempool-frontend"},
+	"ckstats":         {"truffels-ckstats", "truffels-ckstats-cron"},
+	"proxy":           {"truffels-proxy"},
+	"mempool-db":      {"truffels-mempool-db"},
+	"ckstats-db":      {"truffels-ckstats-db"},
+	"truffels-agent":  {"truffels-agent"},
+	"truffels-api":    {"truffels-api"},
+	"truffels-web":    {"truffels-web"},
+}
+
+// fallbackContainerLogs uses `docker logs` directly when `docker compose logs` returns empty.
+// This handles containers whose \r-heavy output breaks compose's --tail.
+func fallbackContainerLogs(ctx context.Context, serviceID string, tail int, since string) string {
+	containers, ok := serviceContainers[serviceID]
+	if !ok {
+		return ""
+	}
+
+	var result strings.Builder
+	for _, name := range containers {
+		args := []string{"logs", "--tail", strconv.Itoa(tail)}
+		if since != "" {
+			args = append(args, "--since", since)
+		}
+		args = append(args, name)
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			continue
+		}
+		cleaned := stripANSI(out.String())
+		// Split on \n, take last N lines
+		lines := strings.Split(strings.TrimRight(cleaned, "\n"), "\n")
+		if len(lines) > tail {
+			lines = lines[len(lines)-tail:]
+		}
+		if len(containers) > 1 {
+			// Prefix with container name for multi-container services
+			for i, line := range lines {
+				if line != "" {
+					lines[i] = name + "  | " + line
+				}
+			}
+		}
+		result.WriteString(strings.Join(lines, "\n"))
+		result.WriteString("\n")
+	}
+	return strings.TrimRight(result.String(), "\n")
+}
+
+// ansiPattern matches ANSI escape sequences (colors, cursor control, erase).
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// stripANSI removes ANSI escape sequences and carriage returns from log output.
+// This handles programs like ckpool that use \x1B[2K\r (erase line + CR) for spinners.
+func stripANSI(s string) string {
+	s = ansiPattern.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

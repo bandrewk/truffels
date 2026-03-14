@@ -958,6 +958,27 @@ func TestHandleComposeBuild_WithBuildArgs(t *testing.T) {
 	}
 }
 
+// --- stripANSI ---
+
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"\x1b[2K\r[2026-03-14] 150TH/s", "[2026-03-14] 150TH/s"},
+		{"\x1b[31mred\x1b[0m", "red"},
+		{"no escapes here", "no escapes here"},
+		{"\x1b[2K\rline1\n\x1b[2K\rline2", "line1\nline2"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := stripANSI(tt.input)
+		if got != tt.want {
+			t.Errorf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 // --- version in health ---
 
 func TestHealthIncludesVersion(t *testing.T) {
