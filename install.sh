@@ -731,17 +731,29 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 }
 
 :80 {
-	# ckstats — basePath handles /ckstats prefix internally
+	# Shared security headers (non-CSP)
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# ckstats — Next.js requires unsafe-inline for SSR hydration scripts
 	handle /ckstats* {
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-ckstats:3000
 	}
 
 	# Truffels control plane
 	handle /admin* {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-web:8080
 	}
 
 	handle /api/truffels/* {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-api:8080
 	}
 
@@ -749,19 +761,13 @@ tee "$CONFIG_DIR/proxy/Caddyfile" >/dev/null <<'CADDYFILE'
 	# the mempool frontend nginx, which handles /api/ → /api/v1/ rewrite.
 	# Do NOT route /api/* directly to mempool-backend — Esplora-style paths will 404.
 	handle /ws {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-mempool-frontend:8080
 	}
 
 	handle {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-mempool-frontend:8080
-	}
-
-	header {
-		X-Content-Type-Options nosniff
-		X-Frame-Options SAMEORIGIN
-		Referrer-Policy no-referrer
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		-Server
 	}
 }
 CADDYFILE
