@@ -970,6 +970,10 @@ func TestStripANSI(t *testing.T) {
 		{"no escapes here", "no escapes here"},
 		{"\x1b[2K\rline1\n\x1b[2K\rline2", "line1\nline2"},
 		{"", ""},
+		// ckpool spinner: CR-separated updates become newline-separated
+		{"data1\x1b[2K\rdata2\x1b[2K\rdata3", "data1\ndata2\ndata3"},
+		// Real Windows-style \r\n preserved as \n
+		{"line1\r\nline2\r\n", "line1\nline2\n"},
 	}
 	for _, tt := range tests {
 		got := stripANSI(tt.input)
