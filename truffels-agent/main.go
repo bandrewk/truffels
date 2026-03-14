@@ -1167,12 +1167,18 @@ func fallbackContainerLogs(ctx context.Context, serviceID string, tail int, sinc
 // ansiPattern matches ANSI escape sequences (colors, cursor control, erase).
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-// stripANSI removes ANSI escape sequences and carriage returns from log output.
-// This handles programs like ckpool that use \x1B[2K\r (erase line + CR) for spinners.
+// stripANSI removes ANSI escape sequences and converts carriage returns to newlines.
+// This handles programs like ckpool that use \x1B[2K\r (erase line + CR) for spinners,
+// turning each spinner update into its own line.
 func stripANSI(s string) string {
 	s = ansiPattern.ReplaceAllString(s, "")
-	s = strings.ReplaceAll(s, "\r", "")
-	return s
+	s = strings.ReplaceAll(s, "\r\n", "\n") // preserve real line endings
+	s = strings.ReplaceAll(s, "\r", "\n")   // convert CR-only to newline
+	// Clean up empty lines from the conversion
+	for strings.Contains(s, "\n\n") {
+		s = strings.ReplaceAll(s, "\n\n", "\n")
+	}
+	return strings.TrimLeft(s, "\n")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
