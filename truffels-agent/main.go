@@ -1132,15 +1132,16 @@ func fallbackContainerLogs(ctx context.Context, serviceID string, tail int, sinc
 
 	var result strings.Builder
 	for _, name := range containers {
-		args := []string{"logs", "--tail", strconv.Itoa(tail)}
+		// For CR-based output (e.g. ckpool spinner), the entire output is one Docker log
+		// entry with no newlines. --tail is useless and --since doesn't work (timestamp is
+		// from the first write). Use shell pipe to grab only the last 64KB.
+		shellCmd := fmt.Sprintf("docker logs %s 2>&1 | tail -c 65536", name)
 		if since != "" {
-			args = append(args, "--since", since)
+			shellCmd = fmt.Sprintf("docker logs --since %s %s 2>&1 | tail -c 65536", since, name)
 		}
-		args = append(args, name)
-		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
 		var out bytes.Buffer
 		cmd.Stdout = &out
-		cmd.Stderr = &out
 		if err := cmd.Run(); err != nil {
 			continue
 		}
