@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091  # sourced files (os-release, rpc.env) not available at lint time
 # Project Truffels — Automated Installation Script
 # Installs and configures the full Docker-managed Bitcoin infrastructure stack.
 #
@@ -898,13 +899,9 @@ timeout 300 bash -c 'until docker inspect truffels-bitcoind --format="{{.State.H
     || warn "bitcoind not healthy yet — it may still be syncing. Continuing anyway."
 
 if [[ "$PRUNE_SIZE" -eq 0 ]]; then
-    log "Starting electrs..."
-    cd "$COMPOSE_DIR/electrs" && docker compose up -d
-
-    log "Starting mempool..."
-    cd "$COMPOSE_DIR/mempool" && docker compose up -d
+    log "Skipping electrs and mempool — Bitcoin Core is still syncing (will be disabled)."
 else
-    log "Skipping electrs and mempool (incompatible with pruned mode)."
+    log "Skipping electrs and mempool (incompatible with pruned mode — will be disabled)."
 fi
 
 # ckpool and ckstats require Bitcoin Core to be fully synced.
@@ -920,8 +917,7 @@ sleep 5
 docker compose -f "$COMPOSE_DIR/ckstats/docker-compose.yml" run --rm ckstats pnpm migration:run
 # Stop ckstats-db until ckpool/ckstats are started together
 cd "$COMPOSE_DIR/ckstats" && docker compose stop ckstats-db
-log "Skipping ckpool and ckstats — Bitcoin Core is still syncing."
-log "Start them from the web UI once Bitcoin Core is fully synced."
+log "Skipping ckpool and ckstats — Bitcoin Core is still syncing (will be disabled)."
 
 log "Starting reverse proxy..."
 cd "$COMPOSE_DIR/proxy" && docker compose up -d
@@ -1076,24 +1072,40 @@ cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build
 log "Starting truffels control plane..."
 cd "$COMPOSE_DIR/truffels" && docker compose up -d
 
-# Disable pruning-incompatible services in the API database
-if [[ "$PRUNE_SIZE" -gt 0 ]]; then
-    log "Disabling electrs and mempool (incompatible with pruned mode)..."
-    db_path="$DATA_DIR/truffels/truffels.db"
-    # Wait for API to create the database
-    timeout 30 bash -c "until [[ -f '$db_path' ]]; do sleep 2; done" \
-        || warn "API database not found — disable electrs/mempool manually via the web UI."
-    if [[ -f "$db_path" ]]; then
-        python3 -c "
+# Disable dependent services — Bitcoin Core must fully sync before any can run.
+# electrs and mempool are additionally incompatible with pruned mode.
+log "Disabling dependent services (Bitcoin Core must be fully synced first)..."
+db_path="$DATA_DIR/truffels/truffels.db"
+# Wait for API to create the database
+timeout 30 bash -c "until [[ -f '$db_path' ]]; do sleep 2; done" \
+    || warn "API database not found — disable services manually via the web UI."
+if [[ -f "$db_path" ]]; then
+    python3 -c "
 import sqlite3
 db = sqlite3.connect('$db_path')
-for svc in ('electrs', 'mempool'):
+for svc in ('electrs', 'mempool', 'ckpool', 'ckstats'):
     db.execute('INSERT INTO services (id, enabled) VALUES (?, 0) ON CONFLICT(id) DO UPDATE SET enabled=0', (svc,))
 db.commit()
 db.close()
 "
-    fi
 fi
+
+echo ""
+log "========================================================================="
+log "Dependent services have been disabled (Bitcoin Core must fully sync first):"
+log "  - ckpool    — enable via web UI after Bitcoin Core is fully synced"
+log "  - ckstats   — enable via web UI after Bitcoin Core is fully synced"
+if [[ "$PRUNE_SIZE" -eq 0 ]]; then
+    log "  - electrs   — enable via web UI after Bitcoin Core is fully synced"
+    log "  - mempool   — enable via web UI after Bitcoin Core is fully synced"
+else
+    log "  - electrs   — INCOMPATIBLE with pruned mode (cannot be enabled)"
+    log "  - mempool   — INCOMPATIBLE with pruned mode (cannot be enabled)"
+fi
+log ""
+log "Enable services at: http://<your-pi-ip>/admin → Services → Enable"
+log "========================================================================="
+echo ""
 
 # --- Step 9c: Swap file (NVMe only) ------------------------------------------
 if [[ "$STORAGE_TYPE" == "sd" ]]; then
