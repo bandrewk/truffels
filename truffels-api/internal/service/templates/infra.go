@@ -63,7 +63,7 @@ var TruffelsAgent = model.ServiceTemplate{
 	ReadOnly:       false,
 	UpdateSource: &model.UpdateSource{
 		Type:       model.SourceGitHubRelease,
-		Repo:       "bandrewk/Project-Truffels",
+		Repo:       "bandrewk/truffels",
 		Images:     []string{"truffels/agent"},
 		NeedsBuild: true,
 	},
@@ -81,7 +81,7 @@ var TruffelsAPI = model.ServiceTemplate{
 	ReadOnly:       false,
 	UpdateSource: &model.UpdateSource{
 		Type:       model.SourceGitHubRelease,
-		Repo:       "bandrewk/Project-Truffels",
+		Repo:       "bandrewk/truffels",
 		Images:     []string{"truffels/api"},
 		NeedsBuild: true,
 	},
@@ -99,7 +99,7 @@ var TruffelsWeb = model.ServiceTemplate{
 	ReadOnly:       false,
 	UpdateSource: &model.UpdateSource{
 		Type:       model.SourceGitHubRelease,
-		Repo:       "bandrewk/Project-Truffels",
+		Repo:       "bandrewk/truffels",
 		Images:     []string{"truffels/web"},
 		NeedsBuild: true,
 	},

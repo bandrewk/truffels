@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   - Raspberry Pi 5 (8GB) running Raspberry Pi OS Lite 64-bit
-#   - NVMe boot with ext4
+#   - NVMe or SD card boot with ext4 (SD card supported with limitations)
 #   - Memory cgroups enabled: add 'cgroup_enable=memory' to
 #     /boot/firmware/cmdline.txt (same line, space-separated) and reboot.
 #     The script will check this and abort if not active.
@@ -103,12 +103,46 @@ print(f'RPC_PASSWORD={password}')
 "
 }
 
+# --- Storage detection --------------------------------------------------------
+detect_storage() {
+    local root_dev
+    root_dev=$(findmnt -n -o SOURCE / | sed 's/\[.*\]//')
+    if [[ "$root_dev" == /dev/nvme* ]]; then
+        STORAGE_TYPE="nvme"
+    elif [[ "$root_dev" == /dev/mmcblk* ]]; then
+        STORAGE_TYPE="sd"
+    else
+        STORAGE_TYPE="other"
+    fi
+
+    # Get total size of the root filesystem in GB
+    STORAGE_TOTAL_GB=$(df --output=size / | tail -1 | awk '{printf "%.0f", $1/1024/1024}')
+}
+
 # --- Preflight ----------------------------------------------------------------
 require_root
 check_arch
 check_cgroups
+detect_storage
+
+if [[ "$STORAGE_TYPE" == "sd" ]]; then
+    warn "SD card detected as root storage."
+    warn "SD cards have limited write endurance and slower I/O."
+    warn "Write-heavy services (databases) will wear out the card faster."
+    warn "Performance will be significantly lower than NVMe."
+    if [[ "$STORAGE_TOTAL_GB" -lt 500 ]]; then
+        warn "Storage is only ${STORAGE_TOTAL_GB}GB — full blockchain (~650GB) will not fit."
+        warn "Pruning mode is strongly recommended (or required)."
+        if [[ -z "${TRUFFELS_PRUNE_SIZE:-}" ]]; then
+            TRUFFELS_PRUNE_SIZE=550
+            warn "Auto-setting TRUFFELS_PRUNE_SIZE=550 (minimum pruned mode)."
+        fi
+    fi
+    echo ""
+fi
 
 log "Starting Project Truffels installation..."
+log "Storage type: $STORAGE_TYPE (${STORAGE_TOTAL_GB}GB)"
 
 # --- Step 1: Docker -----------------------------------------------------------
 if [[ "$SKIP_DOCKER" == false ]]; then
@@ -958,7 +992,7 @@ services:
       TRUFFELS_HOST_PROC: "/host/proc"
       TRUFFELS_HOST_SYS: "/host/sys"
       TRUFFELS_AGENT_URL: "http://truffels-agent:9090"
-      TRUFFELS_GITHUB_REPO: "${TRUFFELS_GITHUB_REPO:-bandrewk/Project-Truffels}"
+      TRUFFELS_GITHUB_REPO: "${TRUFFELS_GITHUB_REPO:-bandrewk/truffels}"
     deploy:
       resources:
         limits:
@@ -1022,8 +1056,10 @@ cd "$COMPOSE_DIR/truffels" && docker compose build web --quiet
 log "Starting truffels control plane..."
 cd "$COMPOSE_DIR/truffels" && docker compose up -d
 
-# --- Step 9c: NVMe swap ------------------------------------------------------
-if [[ ! -f "$TRUFFELS_BASE/swapfile" ]]; then
+# --- Step 9c: Swap file (NVMe only) ------------------------------------------
+if [[ "$STORAGE_TYPE" == "sd" ]]; then
+    log "Skipping swap file on SD card (write endurance). Using zram only."
+elif [[ ! -f "$TRUFFELS_BASE/swapfile" ]]; then
     log "Creating 4GB NVMe swap file..."
     fallocate -l 4G "$TRUFFELS_BASE/swapfile"
     chmod 600 "$TRUFFELS_BASE/swapfile"

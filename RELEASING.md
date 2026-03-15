@@ -19,7 +19,7 @@ All configurable via environment variables:
 | Variable | Default | Where | Purpose |
 |----------|---------|-------|---------|
 | `TRUFFELS_VERSION` | `v0.2.0` | install.sh | Image tags and build args |
-| `TRUFFELS_GITHUB_REPO` | `bandrewk/Project-Truffels` | API container env | GitHub Releases API target |
+| `TRUFFELS_GITHUB_REPO` | `bandrewk/truffels` | API container env | GitHub Releases API target |
 | `TRUFFELS_REPO_SRC` | `/home/truffel/Project-Truffels` | install.sh | Host path to git repo (mounted as `/repo` in agent) |
 
 **If you move or rename the GitHub repo**, update `TRUFFELS_GITHUB_REPO` in the API container's environment (either in the compose file or in install.sh). No code changes needed.
