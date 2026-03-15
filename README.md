@@ -108,6 +108,10 @@ Contributions are welcome. Please open an issue first to discuss what you'd like
 
 This project uses [gitflow](https://nvie.com/posts/a-successful-git-branching-model/): branch from `develop`, PR back to `develop`. The `main` branch is for releases only.
 
+## Support Development
+
+**BTC:** `bc1q5sl35at30wtftl4je7p0pwwxhwtekfe23602tj`
+
 ## License
 
 [AGPL-3.0](LICENSE)
