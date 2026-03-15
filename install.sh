@@ -195,6 +195,9 @@ fi
 log "Creating directory layout..."
 mkdir -p "$TRUFFELS_BASE"/{compose,config,data,logs,backups,secrets,tmp}
 mkdir -p "$DATA_DIR"/{bitcoin/blockchain,ckpool/logs,electrs/db,mempool/mysql,ckstats/postgres,truffels}
+# Pre-create ckpool log subdirs with world-readable perms so caps-dropped ckstats-cron can read them
+mkdir -p "$DATA_DIR"/ckpool/logs/{pool,users}
+chmod 0755 "$DATA_DIR"/ckpool/logs/{pool,users}
 mkdir -p "$CONFIG_DIR"/{bitcoin,electrs,ckpool,ckstats,proxy,nftables}
 mkdir -p "$COMPOSE_DIR"/{bitcoin,electrs,ckpool,mempool,ckstats,proxy,truffels}
 chmod 0755 "$TRUFFELS_BASE"
@@ -213,7 +216,8 @@ if [[ -n "$RESTORE_PATH" ]]; then
 fi
 
 # Fix ownership — all data should be owned by uid 1000
-chown -R 1000:1000 "$DATA_DIR"
+# Exclude ckstats/postgres (needs uid 70 for PostgreSQL Alpine)
+find "$DATA_DIR" -path "$DATA_DIR/ckstats/postgres" -prune -o -print0 | xargs -0 chown 1000:1000
 
 # --- Step 4: Docker networks --------------------------------------------------
 log "Creating Docker networks..."
@@ -840,7 +844,7 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/api/truffels/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -892,16 +896,22 @@ log "Waiting for bitcoind to become healthy..."
 timeout 300 bash -c 'until docker inspect truffels-bitcoind --format="{{.State.Health.Status}}" 2>/dev/null | grep -q healthy; do sleep 5; done' \
     || warn "bitcoind not healthy yet — it may still be syncing. Continuing anyway."
 
-log "Starting electrs..."
-cd "$COMPOSE_DIR/electrs" && docker compose up -d
+if [[ "$PRUNE_SIZE" -eq 0 ]]; then
+    log "Starting electrs..."
+    cd "$COMPOSE_DIR/electrs" && docker compose up -d
+
+    log "Starting mempool..."
+    cd "$COMPOSE_DIR/mempool" && docker compose up -d
+else
+    log "Skipping electrs and mempool (incompatible with pruned mode)."
+fi
 
 log "Starting ckpool..."
 cd "$COMPOSE_DIR/ckpool" && docker compose up -d
 
-log "Starting mempool..."
-cd "$COMPOSE_DIR/mempool" && docker compose up -d
-
 log "Starting ckstats..."
+# Ensure ckpool log dirs are world-readable (ckstats-cron runs root with cap_drop ALL)
+chmod -R o+rX "$DATA_DIR/ckpool/logs" 2>/dev/null || true
 # Ensure postgres data dir has correct ownership (uid 70 = postgres in Alpine)
 chown -R 70:70 "$DATA_DIR/ckstats/postgres" 2>/dev/null || true
 cd "$COMPOSE_DIR/ckstats" && docker compose up -d ckstats-db
@@ -1062,6 +1072,25 @@ cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build
 
 log "Starting truffels control plane..."
 cd "$COMPOSE_DIR/truffels" && docker compose up -d
+
+# Disable pruning-incompatible services in the API database
+if [[ "$PRUNE_SIZE" -gt 0 ]]; then
+    log "Disabling electrs and mempool (incompatible with pruned mode)..."
+    db_path="$DATA_DIR/truffels/truffels.db"
+    # Wait for API to create the database
+    timeout 30 bash -c "until [[ -f '$db_path' ]]; do sleep 2; done" \
+        || warn "API database not found — disable electrs/mempool manually via the web UI."
+    if [[ -f "$db_path" ]]; then
+        python3 -c "
+import sqlite3
+db = sqlite3.connect('$db_path')
+for svc in ('electrs', 'mempool'):
+    db.execute('INSERT INTO services (id, enabled) VALUES (?, 0) ON CONFLICT(id) DO UPDATE SET enabled=0', (svc,))
+db.commit()
+db.close()
+"
+    fi
+fi
 
 # --- Step 9c: Swap file (NVMe only) ------------------------------------------
 if [[ "$STORAGE_TYPE" == "sd" ]]; then
