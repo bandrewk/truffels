@@ -188,6 +188,24 @@ func (e *Engine) checkTemp(tempC float64) {
 }
 
 func (e *Engine) checkService(tmpl model.ServiceTemplate) {
+	enabled, _ := e.store.IsServiceEnabled(tmpl.ID)
+	// For read-only services (DBs, proxy), suppress exited alerts if all
+	// dependent services are disabled — the user can't control these directly.
+	if tmpl.ReadOnly && enabled {
+		if deps := e.registry.Dependents(tmpl.ID); len(deps) > 0 {
+			allDisabled := true
+			for _, depID := range deps {
+				depEnabled, _ := e.store.IsServiceEnabled(depID)
+				if depEnabled {
+					allDisabled = false
+					break
+				}
+			}
+			if allDisabled {
+				enabled = false
+			}
+		}
+	}
 	threshold := e.getSettingInt("restart_loop_count", 5)
 	windowMin := e.getSettingInt("restart_loop_window_min", 10)
 	maxRetries := e.getSettingInt("restart_loop_max_retries", 0)
@@ -204,8 +222,12 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			e.upsert(alertType, tmpl.ID, model.SeverityCritical,
 				"Container %s is unhealthy", name)
 		} else if cs.Status == "exited" || cs.Status == "not_found" {
-			e.upsert(alertType, tmpl.ID, model.SeverityWarning,
-				"Container %s is %s", name, cs.Status)
+			if enabled {
+				e.upsert(alertType, tmpl.ID, model.SeverityWarning,
+					"Container %s is %s", name, cs.Status)
+			} else {
+				e.resolve(alertType, tmpl.ID)
+			}
 		} else {
 			e.resolve(alertType, tmpl.ID)
 		}
@@ -246,6 +268,11 @@ func (e *Engine) checkDependencyHealth() {
 
 	for _, tmpl := range e.registry.All() {
 		if len(tmpl.Dependencies) == 0 {
+			continue
+		}
+		enabled, _ := e.store.IsServiceEnabled(tmpl.ID)
+		if !enabled {
+			e.resolve("upstream_unhealthy", tmpl.ID)
 			continue
 		}
 

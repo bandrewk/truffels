@@ -1,12 +1,16 @@
 package alerts
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
+	"truffels-api/internal/service"
 	"truffels-api/internal/store"
 )
 
@@ -398,5 +402,354 @@ func TestCheckTemp_CustomCritical(t *testing.T) {
 	}
 	if alerts[0].Severity != model.SeverityCritical {
 		t.Fatalf("expected critical, got %q", alerts[0].Severity)
+	}
+}
+
+// --- Disabled service alert suppression ---
+
+// setupMockAgent creates a mock agent HTTP server that returns the given container states
+// and sets the docker package's global agentClient. Returns cleanup function.
+func setupMockAgent(t *testing.T, states map[string]model.ContainerState) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Containers []string `json:"containers"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		var result []model.ContainerState
+		for _, name := range req.Containers {
+			if cs, ok := states[name]; ok {
+				result = append(result, cs)
+			} else {
+				result = append(result, model.ContainerState{Name: name, Status: "not_found", Health: "unknown"})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	t.Cleanup(srv.Close)
+	docker.NewAgentInspector(srv.URL)
+}
+
+func newTestEngineWithRegistry(t *testing.T, tmpls []model.ServiceTemplate) (*Engine, *store.Store) {
+	t.Helper()
+	s := newTestStore(t)
+	reg := service.NewTestRegistry(tmpls)
+	e := &Engine{
+		store:              s,
+		registry:           reg,
+		lastRestartCounts:  make(map[string]int),
+		restartHistory:     make(map[string][]time.Time),
+		autoStopped:        make(map[string]bool),
+		prevStates:         make(map[string]model.ContainerState),
+		prevContainerStats: make(map[string]docker.ContainerResourceStats),
+	}
+	return e, s
+}
+
+func TestCheckService_DisabledExited_NoAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-electrs": {Name: "truffels-electrs", Status: "exited", Health: ""},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	// Disable the service
+	_ = s.EnsureService("electrs")
+	_ = s.SetServiceEnabled("electrs", false)
+
+	e.checkService(tmpl)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for disabled+exited service, got %d: %v", len(alerts), alerts)
+	}
+}
+
+func TestCheckService_EnabledExited_Alerts(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-electrs": {Name: "truffels-electrs", Status: "exited", Health: ""},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	// Service is enabled by default
+	e.checkService(tmpl)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for enabled+exited service, got %d", len(alerts))
+	}
+	if alerts[0].Severity != model.SeverityWarning {
+		t.Fatalf("expected warning, got %q", alerts[0].Severity)
+	}
+}
+
+func TestCheckService_DisabledUnhealthy_StillAlerts(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-electrs": {Name: "truffels-electrs", Status: "running", Health: "unhealthy"},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	_ = s.EnsureService("electrs")
+	_ = s.SetServiceEnabled("electrs", false)
+
+	e.checkService(tmpl)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for disabled but unhealthy (running) service, got %d", len(alerts))
+	}
+	if alerts[0].Severity != model.SeverityCritical {
+		t.Fatalf("expected critical, got %q", alerts[0].Severity)
+	}
+}
+
+func TestCheckService_DisabledExited_ResolvesExistingAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-electrs": {Name: "truffels-electrs", Status: "exited", Health: ""},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	// Create an existing alert (as if service was enabled before)
+	e.upsert("service_unhealthy", "electrs", model.SeverityWarning, "Container truffels-electrs is exited")
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("setup: expected 1 alert, got %d", len(alerts))
+	}
+
+	// Now disable and re-check — should resolve
+	_ = s.EnsureService("electrs")
+	_ = s.SetServiceEnabled("electrs", false)
+	e.checkService(tmpl)
+
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected alert resolved after disabling service, got %d", len(alerts))
+	}
+}
+
+func TestCheckService_DisabledNotFound_NoAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-ckpool": {Name: "truffels-ckpool", Status: "not_found", Health: ""},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "ckpool",
+		DisplayName:    "ckpool",
+		ContainerNames: []string{"truffels-ckpool"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	_ = s.EnsureService("ckpool")
+	_ = s.SetServiceEnabled("ckpool", false)
+
+	e.checkService(tmpl)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for disabled+not_found service, got %d", len(alerts))
+	}
+}
+
+// --- Dependency health: disabled services ---
+
+func TestCheckDependencyHealth_DisabledService_NoAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+	})
+
+	bitcoind := model.ServiceTemplate{
+		ID:             "bitcoind",
+		DisplayName:    "Bitcoin Core",
+		ContainerNames: []string{"truffels-bitcoind"},
+	}
+	electrs := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+		Dependencies:   []string{"bitcoind"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
+
+	// Disable electrs — it shouldn't get upstream_unhealthy alerts
+	_ = s.EnsureService("electrs")
+	_ = s.SetServiceEnabled("electrs", false)
+
+	e.checkDependencyHealth()
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for disabled dependent, got %d: %v", len(alerts), alerts)
+	}
+}
+
+func TestCheckDependencyHealth_EnabledService_Alerts(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+	})
+
+	bitcoind := model.ServiceTemplate{
+		ID:             "bitcoind",
+		DisplayName:    "Bitcoin Core",
+		ContainerNames: []string{"truffels-bitcoind"},
+	}
+	electrs := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+		Dependencies:   []string{"bitcoind"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
+
+	// electrs is enabled by default
+	e.checkDependencyHealth()
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 upstream_unhealthy alert, got %d", len(alerts))
+	}
+	if alerts[0].Type != "upstream_unhealthy" {
+		t.Fatalf("expected upstream_unhealthy, got %q", alerts[0].Type)
+	}
+}
+
+func TestCheckDependencyHealth_DisabledService_ResolvesExisting(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+	})
+
+	bitcoind := model.ServiceTemplate{
+		ID:             "bitcoind",
+		DisplayName:    "Bitcoin Core",
+		ContainerNames: []string{"truffels-bitcoind"},
+	}
+	electrs := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+		Dependencies:   []string{"bitcoind"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
+
+	// Create an existing upstream_unhealthy alert
+	e.upsert("upstream_unhealthy", "electrs", model.SeverityWarning, "Upstream bitcoind is unhealthy")
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("setup: expected 1 alert, got %d", len(alerts))
+	}
+
+	// Disable electrs and re-check — should resolve
+	_ = s.EnsureService("electrs")
+	_ = s.SetServiceEnabled("electrs", false)
+	e.checkDependencyHealth()
+
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected alert resolved after disabling, got %d", len(alerts))
+	}
+}
+
+// --- Read-only service alert suppression ---
+
+func TestCheckService_ReadOnlyExited_AllDependentsDisabled_NoAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-ckstats-db": {Name: "truffels-ckstats-db", Status: "exited", Health: ""},
+	})
+
+	ckstatsDB := model.ServiceTemplate{
+		ID:             "ckstats-db",
+		DisplayName:    "ckstats DB",
+		ContainerNames: []string{"truffels-ckstats-db"},
+		ReadOnly:       true,
+	}
+	ckstats := model.ServiceTemplate{
+		ID:             "ckstats",
+		DisplayName:    "ckstats",
+		ContainerNames: []string{"truffels-ckstats"},
+		Dependencies:   []string{"ckstats-db"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB, ckstats})
+
+	// Disable ckstats (the only dependent of ckstats-db)
+	_ = s.EnsureService("ckstats")
+	_ = s.SetServiceEnabled("ckstats", false)
+
+	e.checkService(ckstatsDB)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for read-only service with all dependents disabled, got %d: %v", len(alerts), alerts)
+	}
+}
+
+func TestCheckService_ReadOnlyExited_SomeDependentsEnabled_Alerts(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-ckstats-db": {Name: "truffels-ckstats-db", Status: "exited", Health: ""},
+	})
+
+	ckstatsDB := model.ServiceTemplate{
+		ID:             "ckstats-db",
+		DisplayName:    "ckstats DB",
+		ContainerNames: []string{"truffels-ckstats-db"},
+		ReadOnly:       true,
+	}
+	ckstats := model.ServiceTemplate{
+		ID:             "ckstats",
+		DisplayName:    "ckstats",
+		ContainerNames: []string{"truffels-ckstats"},
+		Dependencies:   []string{"ckstats-db"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB, ckstats})
+
+	// ckstats is enabled by default — DB being exited is a real problem
+	e.checkService(ckstatsDB)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert for read-only service with enabled dependents, got %d", len(alerts))
+	}
+}
+
+func TestCheckService_ReadOnlyRunning_NoAlertRegardless(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-ckstats-db": {Name: "truffels-ckstats-db", Status: "running", Health: "healthy"},
+	})
+
+	ckstatsDB := model.ServiceTemplate{
+		ID:             "ckstats-db",
+		DisplayName:    "ckstats DB",
+		ContainerNames: []string{"truffels-ckstats-db"},
+		ReadOnly:       true,
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB})
+
+	e.checkService(ckstatsDB)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for healthy read-only service, got %d", len(alerts))
 	}
 }

@@ -2096,3 +2096,190 @@ func TestDependencyIssues_PrunedNode(t *testing.T) {
 		t.Fatalf("expected 'requires unpruned' in dependency issues, got %v", svc.DependencyIssues)
 	}
 }
+
+// mockBtcRPCWithProgress creates a mock Bitcoin Core RPC that returns the given pruned flag
+// and verification progress (0.0–1.0).
+func mockBtcRPCWithProgress(t *testing.T, pruned bool, progress float64) *bitcoin.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, _ := json.Marshal(map[string]interface{}{
+			"chain":                "main",
+			"blocks":               890123,
+			"headers":              890123,
+			"bestblockhash":        "0000000000000000000abc",
+			"difficulty":           92049594548004.64,
+			"verificationprogress": progress,
+			"size_on_disk":         650000000000,
+			"pruned":               pruned,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": json.RawMessage(result),
+			"error":  nil,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return bitcoin.NewClient(srv.Listener.Addr().String(), "", "")
+}
+
+func TestServiceAction_Start_CkpoolBlockedBySync(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.85)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckpool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 conflict, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["error"], "fully synced") {
+		t.Fatalf("expected error about sync, got %q", body["error"])
+	}
+}
+
+func TestServiceAction_Start_CkpoolAllowedWhenSynced(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.9999)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckpool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServiceAction_Start_CkpoolSyncCheckSkippedWhenNoRPC(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	// btcRPC is nil — should not block start
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckpool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (graceful skip), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServiceAction_Start_ElectrsNoSyncCheck(t *testing.T) {
+	// electrs has RequiresSynced=false, so it should start even during IBD
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.50)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/electrs/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (electrs has no sync requirement), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServiceAction_Start_CkpoolSyncBoundary(t *testing.T) {
+	// Just below 0.9999 should block
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.9998)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "POST", "/api/truffels/services/ckpool/action",
+		`{"action":"start"}`)
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 409 {
+		t.Fatalf("expected 409 at 99.98%% sync, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDependencyIssues_SyncingNode(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.75)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/ckpool", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var svc model.ServiceInstance
+	_ = json.Unmarshal(w.Body.Bytes(), &svc)
+
+	found := false
+	for _, issue := range svc.DependencyIssues {
+		if strings.Contains(issue, "synced") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'requires fully synced' in dependency issues, got %v", svc.DependencyIssues)
+	}
+}
+
+func TestDependencyIssues_SyncedNode_NoIssue(t *testing.T) {
+	agentState := &mockAgentState{
+		containerStates: map[string]model.ContainerState{
+			"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "running", Health: "healthy"},
+		},
+	}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+	srv.btcRPC = mockBtcRPCWithProgress(t, false, 0.9999)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/ckpool", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var svc model.ServiceInstance
+	_ = json.Unmarshal(w.Body.Bytes(), &svc)
+
+	for _, issue := range svc.DependencyIssues {
+		if strings.Contains(issue, "synced") {
+			t.Fatalf("expected no sync issue when fully synced, got %v", svc.DependencyIssues)
+		}
+	}
+}
