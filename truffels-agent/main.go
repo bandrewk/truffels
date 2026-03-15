@@ -562,11 +562,13 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	args := []string{"compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
+	dockerArgs := []string{"docker", "compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
 	for k, v := range req.BuildArgs {
-		args = append(args, "--build-arg", k+"="+v)
+		dockerArgs = append(dockerArgs, "--build-arg", k+"="+v)
 	}
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	// Run via nsenter so build-context paths resolve on the host filesystem
+	nsArgs := append([]string{"-t", "1", "-m", "--"}, dockerArgs...)
+	cmd := exec.CommandContext(ctx, "nsenter", nsArgs...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
