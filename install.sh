@@ -454,6 +454,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    ports:
+      - "50001:50001"
     networks:
       bitcoin-backend:
     volumes:
@@ -1153,6 +1155,9 @@ table inet truffels_firewall {
 
     # ckpool stratum (LAN miners)
     tcp dport 3333 accept
+
+    # electrs Electrum protocol (LAN wallets)
+    tcp dport 50001 accept
 
     # ICMP ping
     ip protocol icmp accept

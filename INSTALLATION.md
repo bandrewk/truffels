@@ -86,6 +86,7 @@ sudo ./install.sh --restore-from /path/to/backup  # Restore data from backup
 - **Block explorer (mempool):** `http://<your-pi-ip>/`
 - **Mining stats:** `http://<your-pi-ip>/ckstats/`
 - **Stratum (miners):** `<your-pi-ip>:3333`
+- **Electrum (wallets):** `<your-pi-ip>:50001` (TCP, no SSL)
 
 On first install, all dependent services (electrs, mempool, ckpool, ckstats) are **disabled** until Bitcoin Core has fully synced. Enable them via the web UI once sync is complete.
 
@@ -108,6 +109,7 @@ NVMe is strongly recommended for full nodes and production use.
 | 80 | Caddy (web UI + block explorer) | LAN |
 | 3333 | ckpool stratum | LAN |
 | 8333 | Bitcoin P2P | LAN |
+| 50001 | electrs Electrum protocol | LAN |
 
 No services are exposed to the internet by default.
 
