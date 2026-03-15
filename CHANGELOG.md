@@ -5,6 +5,16 @@ All notable changes to Project Truffels will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.2] - 2026-03-15
+
+### Fixed
+- Self-update fails with "git fetch failed: exit status 128" due to Git safe.directory mismatch in agent container
+
+**Note:** Existing v0.2.1 installs must manually rebuild the agent to get this fix:
+```bash
+cd /srv/truffels/compose/truffels && sudo docker compose build agent && sudo docker compose up -d agent
+```
+
 ## [v0.2.1] - 2026-03-15
 
 ### Added

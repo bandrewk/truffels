@@ -19,5 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update \
     && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
+RUN git config --global --add safe.directory /repo
 COPY --from=builder /truffels-agent /usr/local/bin/truffels-agent
 ENTRYPOINT ["truffels-agent"]
