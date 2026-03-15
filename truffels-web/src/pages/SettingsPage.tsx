@@ -140,6 +140,8 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
   const [depMode, setDepMode] = useState(settings.dep_handling_mode)
   const [admissionDiskMinGB, setAdmissionDiskMinGB] = useState(settings.admission_disk_min_gb)
   const [admissionTempMax, setAdmissionTempMax] = useState(settings.admission_temp_max)
+  const [showMemory, setShowMemory] = useState(settings.services_show_memory)
+  const [showPorts, setShowPorts] = useState(settings.services_show_ports)
 
   const changed = restartCount !== settings.restart_loop_count
     || windowMin !== settings.restart_loop_window_min
@@ -147,9 +149,34 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
     || depMode !== settings.dep_handling_mode
     || admissionDiskMinGB !== settings.admission_disk_min_gb
     || admissionTempMax !== settings.admission_temp_max
+    || showMemory !== settings.services_show_memory
+    || showPorts !== settings.services_show_ports
 
   return (
     <div className="space-y-6">
+      <Card>
+        <CardTitle>Service Overview</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Control which details are shown on service cards.
+        </p>
+        <div className="space-y-3">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox" checked={showMemory} onChange={(e) => setShowMemory(e.target.checked)}
+              className="accent-accent w-4 h-4"
+            />
+            <span className="text-sm text-white font-medium">Show memory limits</span>
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox" checked={showPorts} onChange={(e) => setShowPorts(e.target.checked)}
+              className="accent-accent w-4 h-4"
+            />
+            <span className="text-sm text-white font-medium">Show ports</span>
+          </label>
+        </div>
+      </Card>
+
       <Card>
         <CardTitle>Restart Loop Detection</CardTitle>
         <p className="text-sm text-gray-400 mb-4">
@@ -267,6 +294,8 @@ function ServiceHandlingTab({ settings, saving, onSave }: {
             dep_handling_mode: depMode,
             admission_disk_min_gb: admissionDiskMinGB,
             admission_temp_max: admissionTempMax,
+            services_show_memory: showMemory,
+            services_show_ports: showPorts,
           })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >

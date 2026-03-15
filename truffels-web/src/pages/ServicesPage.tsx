@@ -36,9 +36,17 @@ function serviceUptime(containers: { started_at: string }[]): string {
   return `${days}d ${hours % 24}h`
 }
 
+function friendlyIssue(issue: string): string {
+  if (issue.includes('fully synced')) return 'needs full sync'
+  if (issue.includes('unpruned')) return 'needs unpruned'
+  return issue
+}
+
 export default function ServicesPage() {
   const fetcher = useCallback(() => api.services(), [])
   const { data, error, loading } = useApi(fetcher, 10000)
+  const settingsFetcher = useCallback(() => api.settings(), [])
+  const { data: settings } = useApi(settingsFetcher)
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
@@ -65,14 +73,21 @@ export default function ServicesPage() {
               </div>
               <p className="text-sm text-gray-400 mb-3">{svc.template.description}</p>
               <div className="flex flex-wrap gap-2 text-xs">
-                {svc.template.port && (
+                {(settings?.services_show_ports !== false) && svc.template.port && (
                   <span className="px-2 py-0.5 rounded bg-surface-overlay text-gray-400">
                     {svc.template.port}
                   </span>
                 )}
-                <span className="px-2 py-0.5 rounded bg-surface-overlay text-gray-400">
-                  {svc.template.memory_limit} mem
-                </span>
+                {settings?.services_show_memory && (
+                  <span className="px-2 py-0.5 rounded bg-surface-overlay text-gray-400">
+                    {svc.template.memory_limit} mem
+                  </span>
+                )}
+                {svc.dependency_issues?.map((issue) => (
+                  <span key={issue} className="px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">
+                    {friendlyIssue(issue)}
+                  </span>
+                ))}
                 {svc.template.dependencies?.map((dep) => (
                   <span key={dep} className="px-2 py-0.5 rounded bg-accent/10 text-accent text-xs">
                     needs {dep}

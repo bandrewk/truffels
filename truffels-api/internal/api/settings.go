@@ -18,6 +18,8 @@ var settingsDefaults = map[string]string{
 	"admission_temp_max":             "80",
 	"update_check_interval_hours":    "24",
 	"update_check_enabled":           "true",
+	"services_show_memory":           "false",
+	"services_show_ports":            "true",
 }
 
 type settingsResponse struct {
@@ -31,6 +33,8 @@ type settingsResponse struct {
 	AdmissionTempMax          float64 `json:"admission_temp_max"`
 	UpdateCheckIntervalHours int     `json:"update_check_interval_hours"`
 	UpdateCheckEnabled       bool    `json:"update_check_enabled"`
+	ServicesShowMemory       bool    `json:"services_show_memory"`
+	ServicesShowPorts         bool    `json:"services_show_ports"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +49,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		AdmissionTempMax:          s.getSettingFloat("admission_temp_max", 80),
 		UpdateCheckIntervalHours: s.getSettingInt("update_check_interval_hours", 24),
 		UpdateCheckEnabled:       s.getSettingStr("update_check_enabled", "true") == "true",
+		ServicesShowMemory:       s.getSettingStr("services_show_memory", "false") == "true",
+		ServicesShowPorts:         s.getSettingStr("services_show_ports", "true") == "true",
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
