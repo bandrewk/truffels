@@ -468,7 +468,7 @@ func TestCheckLatestVersion_GitHubRelease(t *testing.T) {
 
 	src := &model.UpdateSource{
 		Type: model.SourceGitHubRelease,
-		Repo: "bandrewk/Project-Truffels",
+		Repo: "bandrewk/truffels",
 	}
 	got, err := CheckLatestVersion(src)
 	if err != nil {

@@ -11,7 +11,7 @@ type Config struct {
 	HostProc     string
 	HostSys      string
 	DataRoot     string
-	GitHubRepo   string // owner/repo for self-update checks (e.g. "bandrewk/Project-Truffels")
+	GitHubRepo   string // owner/repo for self-update checks (e.g. "bandrewk/truffels")
 }
 
 func Load() *Config {
@@ -24,7 +24,7 @@ func Load() *Config {
 		HostProc:    envOr("TRUFFELS_HOST_PROC", "/proc"),
 		HostSys:     envOr("TRUFFELS_HOST_SYS", "/sys"),
 		DataRoot:    envOr("TRUFFELS_DATA_ROOT", "/srv/truffels/data"),
-		GitHubRepo:  envOr("TRUFFELS_GITHUB_REPO", "bandrewk/Project-Truffels"),
+		GitHubRepo:  envOr("TRUFFELS_GITHUB_REPO", "bandrewk/truffels"),
 	}
 }
 
