@@ -67,6 +67,28 @@ All product data lives under `/srv/truffels/` on NVMe:
 - Display subsystem failures must never affect service management
 - V1 is Bitcoin-only — no altcoin support
 
+## Building and Deploying Code Changes
+
+**No builds on the host OS.** Go, Node, pnpm, etc. are NOT installed on the host. All builds happen inside Docker (multi-stage Dockerfiles).
+
+When you modify source code for `truffels-api`, `truffels-web`, or `truffels-agent`, you MUST rebuild and restart the containers for changes to take effect:
+
+```bash
+# Rebuild (from compose dir, use --no-cache if Docker serves stale layers)
+cd /srv/truffels/compose/truffels && sudo docker compose build [api|web|agent]
+
+# Restart
+cd /srv/truffels/compose/truffels && sudo docker compose up -d [api|web|agent]
+```
+
+The build context for each service points to the repo checkout at `/home/truffel/Project-Truffels/truffels-{api,web,agent}`. Changes to source files are only picked up on rebuild — there is no hot-reload or volume-mounted source code.
+
+**Compose file locations:**
+- Truffels services: `/srv/truffels/compose/truffels/docker-compose.yml`
+- Bitcoin/electrs/ckpool/mempool/ckstats/proxy: `/srv/truffels/compose/{bitcoin,electrs,ckpool,mempool,ckstats,proxy}/docker-compose.yml`
+
+**Do NOT** run `go build`, `pnpm build`, `npm`, `npx`, or any build tooling directly on the host.
+
 ## Host Rules
 
 The host provides only: boot, kernel, networking, Docker, systemd, journald, nftables, SSH, SPI/GPIO. Product logic must not live on the host. Memory cgroups must be enabled before Docker installation.
