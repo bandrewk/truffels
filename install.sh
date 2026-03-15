@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091  # sourced files (os-release, rpc.env) not available at lint time
 # Project Truffels — Automated Installation Script
 # Installs and configures the full Docker-managed Bitcoin infrastructure stack.
 #
