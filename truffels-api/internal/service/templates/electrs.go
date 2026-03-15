@@ -8,6 +8,7 @@ var Electrs = model.ServiceTemplate{
 	Description:    "Electrum Rust Server — Bitcoin address index for wallets and block explorers",
 	ContainerNames: []string{"truffels-electrs"},
 	Dependencies:   []string{"bitcoind"},
+	Port:           "50001 (Electrum)",
 	MemoryLimit:    "2048M",
 	ConfigPath:       "electrs/electrs.toml",
 	RequiresUnpruned: true,
