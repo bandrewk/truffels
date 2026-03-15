@@ -74,6 +74,7 @@ export interface ServiceInstance {
   enabled: boolean
   containers: ContainerState[]
   sync_info?: SyncInfo
+  dependency_issues?: string[]
 }
 
 export interface Alert {
@@ -368,6 +369,8 @@ export interface Settings {
   admission_temp_max: number
   update_check_interval_hours: number
   update_check_enabled: boolean
+  services_show_memory: boolean
+  services_show_ports: boolean
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
