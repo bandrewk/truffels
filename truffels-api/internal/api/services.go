@@ -208,6 +208,15 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Sync check: block services that need a fully-synced Bitcoin Core
+		if tmpl.RequiresSynced && s.btcRPC != nil {
+			if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.VerificationProgress < 0.9999 {
+				pct := bcInfo.VerificationProgress * 100
+				writeError(w, http.StatusConflict,
+					fmt.Sprintf("%s requires Bitcoin Core to be fully synced (currently %.2f%%)", tmpl.DisplayName, pct))
+				return
+			}
+		}
 		// Admission control: check system resources
 		if s.collector != nil {
 			host := s.collector.Collect()
@@ -447,6 +456,12 @@ func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate) []string {
 	if tmpl.RequiresUnpruned && s.btcRPC != nil {
 		if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.Pruned {
 			issues = append(issues, "requires unpruned Bitcoin Core")
+		}
+	}
+	if tmpl.RequiresSynced && s.btcRPC != nil {
+		if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.VerificationProgress < 0.9999 {
+			pct := bcInfo.VerificationProgress * 100
+			issues = append(issues, fmt.Sprintf("requires Bitcoin Core fully synced (%.2f%%)", pct))
 		}
 	}
 	for _, depID := range tmpl.Dependencies {

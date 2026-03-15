@@ -906,10 +906,9 @@ else
     log "Skipping electrs and mempool (incompatible with pruned mode)."
 fi
 
-log "Starting ckpool..."
-cd "$COMPOSE_DIR/ckpool" && docker compose up -d
-
-log "Starting ckstats..."
+# ckpool and ckstats require Bitcoin Core to be fully synced.
+# Prepare ckstats DB and run migrations now, but don't start the services.
+log "Preparing ckstats database (ckpool and ckstats will start after Bitcoin Core is fully synced)..."
 # Ensure ckpool log dirs are world-readable (ckstats-cron runs root with cap_drop ALL)
 chmod -R o+rX "$DATA_DIR/ckpool/logs" 2>/dev/null || true
 # Ensure postgres data dir has correct ownership (uid 70 = postgres in Alpine)
@@ -918,7 +917,10 @@ cd "$COMPOSE_DIR/ckstats" && docker compose up -d ckstats-db
 sleep 5
 # Run migrations
 docker compose -f "$COMPOSE_DIR/ckstats/docker-compose.yml" run --rm ckstats pnpm migration:run
-docker compose -f "$COMPOSE_DIR/ckstats/docker-compose.yml" up -d
+# Stop ckstats-db until ckpool/ckstats are started together
+cd "$COMPOSE_DIR/ckstats" && docker compose stop ckstats-db
+log "Skipping ckpool and ckstats — Bitcoin Core is still syncing."
+log "Start them from the web UI once Bitcoin Core is fully synced."
 
 log "Starting reverse proxy..."
 cd "$COMPOSE_DIR/proxy" && docker compose up -d
@@ -1200,5 +1202,6 @@ log " Configs:  $CONFIG_DIR/"
 log " Data:     $DATA_DIR/"
 log ""
 log " Note: electrs reindexing may take 8-12 hours."
-log " Note: ckpool requires bitcoind fully synced."
+log " Note: ckpool and ckstats are NOT running yet."
+log "       Start them from the web UI once Bitcoin Core is fully synced."
 log ""
