@@ -33,6 +33,7 @@
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRUFFELS_BASE="/srv/truffels"
 COMPOSE_DIR="$TRUFFELS_BASE/compose"
 CONFIG_DIR="$TRUFFELS_BASE/config"
@@ -97,9 +98,9 @@ username = '$username'
 salt = os.urandom(16).hex()
 password = os.urandom(32).hex()
 password_hmac = hmac.new(bytearray(salt, 'utf-8'), bytearray(password, 'utf-8'), 'SHA256').hexdigest()
-print(f'RPCAUTH_LINE=rpcauth={username}:{salt}\${password_hmac}')
-print(f'RPC_USER={username}')
-print(f'RPC_PASSWORD={password}')
+print(f'rpcauth={username}:{salt}\${password_hmac}')
+print(username)
+print(password)
 "
 }
 
@@ -261,7 +262,11 @@ fi
 
 if [[ ! -f "$SECRETS_DIR/rpc.env" ]]; then
     log "Generating RPC credentials..."
-    eval "$(generate_rpcauth truffels)"
+    {
+        read -r RPCAUTH_LINE
+        read -r RPC_USER
+        read -r RPC_PASSWORD
+    } < <(generate_rpcauth truffels)
     tee "$SECRETS_DIR/rpc.env" >/dev/null <<RPC
 RPC_USER=$RPC_USER
 RPC_PASSWORD=$RPC_PASSWORD
@@ -391,7 +396,7 @@ chmod 750 "$SECRETS_DIR"
 chown root:1000 "$SECRETS_DIR"
 chmod 640 "$SECRETS_DIR"/*.env
 chown root:1000 "$SECRETS_DIR"/*.env
-chmod 640 "$CONFIG_DIR"/bitcoin/bitcoin.conf "$CONFIG_DIR"/electrs/electrs.toml \
+chmod 644 "$CONFIG_DIR"/bitcoin/bitcoin.conf "$CONFIG_DIR"/electrs/electrs.toml \
           "$CONFIG_DIR"/ckpool/ckpool.conf "$CONFIG_DIR"/ckstats/.env
 
 # --- Step 6: Compose files ----------------------------------------------------
@@ -619,10 +624,10 @@ MEMPOOLDC
 # ckstats Dockerfile
 tee "$COMPOSE_DIR/ckstats/Dockerfile" >/dev/null <<'CKSTATSDKR'
 FROM node:20-slim AS builder
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9 --activate
 WORKDIR /app
 COPY ckpoolstats/package.json ckpoolstats/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 RUN pnpm add dotenv
 COPY ckpoolstats/ ./
 RUN sed -i "s|fetch('/api/|fetch('/ckstats/api/|g" components/Header.tsx && \
@@ -631,7 +636,7 @@ RUN sed -i "s|fetch('/api/|fetch('/ckstats/api/|g" components/Header.tsx && \
 RUN pnpm build
 
 FROM node:20-slim
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9 --activate
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cron postgresql-client \
     && rm -rf /var/lib/apt/lists/*
@@ -678,7 +683,7 @@ services:
         limits:
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000/ckstats\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
+      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000/\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -897,6 +902,8 @@ log "Starting mempool..."
 cd "$COMPOSE_DIR/mempool" && docker compose up -d
 
 log "Starting ckstats..."
+# Ensure postgres data dir has correct ownership (uid 70 = postgres in Alpine)
+chown -R 70:70 "$DATA_DIR/ckstats/postgres" 2>/dev/null || true
 cd "$COMPOSE_DIR/ckstats" && docker compose up -d ckstats-db
 sleep 5
 # Run migrations
@@ -910,10 +917,10 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 log "Writing truffels control plane compose..."
 
 TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.2.0}"
-TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-/home/truffel/Project-Truffels}"
-TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-/home/truffel/Project-Truffels/truffels-api}"
-TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-/home/truffel/Project-Truffels/truffels-web}"
-TRUFFELS_AGENT_SRC="${TRUFFELS_AGENT_SRC:-/home/truffel/Project-Truffels/truffels-agent}"
+TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
+TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
+TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"
+TRUFFELS_AGENT_SRC="${TRUFFELS_AGENT_SRC:-$TRUFFELS_REPO_SRC/truffels-agent}"
 
 tee "$COMPOSE_DIR/truffels/docker-compose.yml" >/dev/null <<TRUFFELSDC
 services:
@@ -1045,13 +1052,13 @@ networks:
 TRUFFELSDC
 
 log "Building truffels-agent image..."
-cd "$COMPOSE_DIR/truffels" && docker compose build agent --quiet
+cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build agent --quiet
 
 log "Building truffels-api image..."
-cd "$COMPOSE_DIR/truffels" && docker compose build api --quiet
+cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build api --quiet
 
 log "Building truffels-web image..."
-cd "$COMPOSE_DIR/truffels" && docker compose build web --quiet
+cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build web --quiet
 
 log "Starting truffels control plane..."
 cd "$COMPOSE_DIR/truffels" && docker compose up -d
