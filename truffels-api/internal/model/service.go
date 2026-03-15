@@ -25,6 +25,7 @@ type ServiceTemplate struct {
 	ReadOnly       bool          `json:"read_only,omitempty"`
 	FloatingTag      bool          `json:"floating_tag,omitempty"`
 	RequiresUnpruned bool          `json:"requires_unpruned,omitempty"`
+	RequiresSynced   bool          `json:"requires_synced,omitempty"`
 	UpdateSource     *UpdateSource `json:"update_source,omitempty"`
 	StackContainers  []string      `json:"stack_containers,omitempty"`
 }

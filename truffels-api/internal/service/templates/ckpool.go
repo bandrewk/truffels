@@ -8,6 +8,7 @@ var Ckpool = model.ServiceTemplate{
 	Description:    "Solo mining pool connected to Bitcoin Core",
 	ContainerNames: []string{"truffels-ckpool"},
 	Dependencies:   []string{"bitcoind"},
+	RequiresSynced: true,
 	MemoryLimit:    "256M",
 	ConfigPath:     "ckpool/ckpool.conf",
 	Port:           "3333 (stratum)",
