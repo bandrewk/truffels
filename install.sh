@@ -552,6 +552,7 @@ services:
     env_file:
       - /srv/truffels/secrets/mempool-backend.env
     environment:
+      NODE_OPTIONS: "--max-old-space-size=768"
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
       ELECTRUM_PORT: "50001"
