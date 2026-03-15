@@ -77,3 +77,15 @@ jobs:
       - run: pnpm tsc --noEmit
       - run: pnpm test
       - run: pnpm build
+
+  install:
+    name: Install Script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install BATS and ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck
+      - name: ShellCheck
+        run: shellcheck install.sh
+      - name: BATS tests
+        run: bats tests/install.bats
