@@ -25,9 +25,9 @@ Truffels turns a Raspberry Pi 5 into a fully operational Bitcoin node with minin
 - **Agent** — privileged Docker mediator (no direct socket access from UI)
 - **Caddy** — reverse proxy
 
-## Screenshots
+## Demo
 
-<!-- TODO: Add screenshots -->
+![Truffels Demo](docs/screenshots/demo.gif)
 
 ## Features
 
