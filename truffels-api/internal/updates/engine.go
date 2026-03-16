@@ -706,7 +706,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 	}
 
 	// Step 3: Rewrite compose image tags for all truffels services
-	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, check.CurrentVersion, check.LatestVersion); err != nil {
+	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, "", check.LatestVersion); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
@@ -737,6 +737,10 @@ func (e *Engine) reconcileStuckUpdates() {
 	if err != nil {
 		slog.Warn("reconcile: failed to query stuck updates", "err", err)
 		return
+	}
+	if len(logs) > 0 {
+		slog.Info("reconcile: waiting for services to stabilize before health check", "count", len(logs))
+		time.Sleep(e.healthWait)
 	}
 	for _, l := range logs {
 		tmpl, ok := e.registry.Get(l.ServiceID)

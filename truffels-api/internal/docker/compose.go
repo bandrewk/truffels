@@ -18,7 +18,7 @@ func NewComposeClient(agentURL string) *ComposeClient {
 	return &ComposeClient{
 		agentURL: agentURL,
 		httpClient: &http.Client{
-			Timeout: 3 * time.Minute,
+			Timeout: 6 * time.Minute,
 		},
 	}
 }
@@ -84,7 +84,7 @@ func (c *ComposeClient) Pull(image string) (string, error) {
 	body, _ := json.Marshal(map[string]string{"image": image})
 	slog.Info("agent pull", "image", image)
 
-	longClient := &http.Client{Timeout: 10 * time.Minute}
+	longClient := &http.Client{Timeout: 20 * time.Minute}
 	resp, err := longClient.Post(c.agentURL+"/v1/image/pull", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("agent pull: %w", err)
@@ -127,7 +127,7 @@ func (c *ComposeClient) Build(serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent build", "service", serviceID)
 
-	longClient := &http.Client{Timeout: 10 * time.Minute}
+	longClient := &http.Client{Timeout: 20 * time.Minute}
 	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("agent build: %w", err)
@@ -306,7 +306,7 @@ func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]str
 	body, _ := json.Marshal(buildReq{ServiceID: serviceID, BuildArgs: buildArgs})
 	slog.Info("agent build with args", "service", serviceID, "args", buildArgs)
 
-	longClient := &http.Client{Timeout: 10 * time.Minute}
+	longClient := &http.Client{Timeout: 20 * time.Minute}
 	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("agent build: %w", err)
@@ -343,13 +343,17 @@ func (c *ComposeClient) ComposeUpDetached(serviceID string) error {
 }
 
 // RewriteTags rewrites image tags in a compose file via the agent.
+// oldTag is optional — if empty, the agent matches any current tag (idempotent).
 func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, newTag string) error {
-	body, _ := json.Marshal(map[string]interface{}{
+	req := map[string]interface{}{
 		"service_id": serviceID,
 		"images":     images,
-		"old_tag":    oldTag,
 		"new_tag":    newTag,
-	})
+	}
+	if oldTag != "" {
+		req["old_tag"] = oldTag
+	}
+	body, _ := json.Marshal(req)
 	slog.Info("agent rewrite tags", "service", serviceID, "old", oldTag, "new", newTag)
 
 	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/rewrite-tags", "application/json", bytes.NewReader(body))

@@ -1123,7 +1123,6 @@ func TestHandleComposeRewriteTags_MissingFields(t *testing.T) {
 	body, _ := json.Marshal(rewriteTagsRequest{
 		ServiceID: "mempool",
 		Images:    []string{},
-		OldTag:    "v1",
 		NewTag:    "v2",
 	})
 	w := httptest.NewRecorder()
@@ -1194,7 +1193,6 @@ func TestRewriteTags_UpdatesVersionArgs(t *testing.T) {
 	body, _ := json.Marshal(rewriteTagsRequest{
 		ServiceID: "truffels-agent",
 		Images:    []string{"truffels/agent", "truffels/api", "truffels/web"},
-		OldTag:    "v0.2.2",
 		NewTag:    "v0.3.0",
 	})
 	w := httptest.NewRecorder()
@@ -1219,7 +1217,7 @@ func TestRewriteTags_UpdatesVersionArgs(t *testing.T) {
 	}
 }
 
-func TestRewriteTags_NoMatchReturnsError(t *testing.T) {
+func TestRewriteTags_IdempotentMatchesAnyTag(t *testing.T) {
 	dir := t.TempDir()
 	composeRoot = dir
 
@@ -1230,10 +1228,45 @@ func TestRewriteTags_NoMatchReturnsError(t *testing.T) {
 `
 	_ = os.WriteFile(dir+"/truffels/docker-compose.yml", []byte(original), 0644)
 
+	// OldTag omitted — should match any current tag and rewrite to new
 	body, _ := json.Marshal(rewriteTagsRequest{
 		ServiceID: "truffels-agent",
 		Images:    []string{"truffels/agent"},
-		OldTag:    "v0.9.9",
+		NewTag:    "v1.0.0",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(dir + "/truffels/docker-compose.yml")
+	content := string(data)
+	if !strings.Contains(content, "truffels/agent:v1.0.0") {
+		t.Errorf("expected tag updated to v1.0.0, got:\n%s", content)
+	}
+	if strings.Contains(content, "v0.1.0") {
+		t.Errorf("old tag should be gone, got:\n%s", content)
+	}
+}
+
+func TestRewriteTags_NoMatchReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/truffels", 0755)
+	// Image name doesn't match any in the file
+	original := `services:
+  agent:
+    image: truffels/agent:v0.1.0
+`
+	_ = os.WriteFile(dir+"/truffels/docker-compose.yml", []byte(original), 0644)
+
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "truffels-agent",
+		Images:    []string{"truffels/nonexistent"},
 		NewTag:    "v1.0.0",
 	})
 	w := httptest.NewRecorder()
