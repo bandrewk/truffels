@@ -1181,6 +1181,7 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := string(data)
+	matched := 0
 	for _, img := range req.Images {
 		// Match any current tag for this image (idempotent — works regardless of what tag is in the file)
 		pattern := fmt.Sprintf(`(image:\s*)%s:[^\s@]+(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img))
@@ -1188,6 +1189,9 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "compile regex for " + img + ": " + err.Error()})
 			return
+		}
+		if re.MatchString(content) {
+			matched++
 		}
 		replacement := fmt.Sprintf("${1}%s:%s", img, req.NewTag)
 		content = re.ReplaceAllString(content, replacement)
@@ -1197,8 +1201,14 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 	versionRe := regexp.MustCompile(`(VERSION:\s+)\S+`)
 	content = versionRe.ReplaceAllString(content, "${1}"+req.NewTag)
 
+	if matched == 0 {
+		writeJSON(w, 400, map[string]string{"error": "no image tags matched in compose file"})
+		return
+	}
+
+	// Already at target version — no write needed, return success
 	if content == string(data) {
-		writeJSON(w, 400, map[string]string{"error": "no tags matched — compose file unchanged"})
+		writeJSON(w, 200, map[string]string{"status": "ok", "note": "already at target version"})
 		return
 	}
 
