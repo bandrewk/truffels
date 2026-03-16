@@ -137,6 +137,7 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	updating := make(map[string]bool)
 	sources := make(map[string]*model.UpdateSource)
+	displayNames := make(map[string]string)
 	type floatingService struct {
 		ID             string `json:"id"`
 		DisplayName    string `json:"display_name"`
@@ -151,6 +152,9 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		if tmpl.UpdateSource != nil {
 			sources[tmpl.ID] = tmpl.UpdateSource
+		}
+		if tmpl.DisplayName != "" {
+			displayNames[tmpl.ID] = tmpl.DisplayName
 		}
 		if tmpl.FloatingTag {
 			fs := floatingService{ID: tmpl.ID, DisplayName: tmpl.DisplayName}
@@ -179,5 +183,6 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		"updating":         updating,
 		"sources":          sources,
 		"floating_services": floating,
+		"display_names":    displayNames,
 	})
 }
