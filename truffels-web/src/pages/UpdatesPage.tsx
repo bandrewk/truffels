@@ -197,6 +197,7 @@ export default function UpdatesPage() {
   const pendingCount = status?.pending_count || 0
   const sources = status?.sources || {}
   const floatingServices = status?.floating_services || []
+  const displayNames = status?.display_names || {}
 
   return (
     <div className="space-y-6">
@@ -232,7 +233,7 @@ export default function UpdatesPage() {
         {checks.map((c: UpdateCheck) => {
           const floating = floatingServices.find(f => f.id === c.service_id)
           const isDigest = c.current_version?.startsWith('sha256:') || c.latest_version?.startsWith('sha256:')
-          const displayName = floating?.display_name || c.service_id
+          const displayName = displayNames[c.service_id] || floating?.display_name || c.service_id
           const imgName = floating?.image ? floating.image.split(':')[0] : ''
           return (
             <Card key={c.service_id}>
@@ -354,7 +355,7 @@ export default function UpdatesPage() {
               return (
                 <li key={c.service_id} className="flex items-center gap-2">
                   <span className="text-accent">&#8226;</span>
-                  <span className="font-medium">{fs?.display_name || c.service_id}</span>
+                  <span className="font-medium">{displayNames[c.service_id] || fs?.display_name || c.service_id}</span>
                   <span className="text-gray-500 font-mono text-xs">{truncDigest(c.current_version)} &rarr; {truncDigest(c.latest_version)}</span>
                 </li>
               )

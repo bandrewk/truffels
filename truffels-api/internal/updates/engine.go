@@ -163,6 +163,14 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		}
 	}
 
+	// For Docker Hub / GitHub Release sources, fall back to last-known version when container is stopped
+	if currentVersion == "" && (src.Type == model.SourceDockerHub || src.Type == model.SourceGitHubRelease) {
+		prev, _ := e.store.GetLatestUpdateCheck(tmpl.ID)
+		if prev != nil && prev.CurrentVersion != "" {
+			currentVersion = prev.CurrentVersion
+		}
+	}
+
 	// Check latest upstream version
 	latestVersion, err := CheckLatestVersion(src)
 

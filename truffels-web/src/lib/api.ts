@@ -224,6 +224,7 @@ export interface UpdateStatus {
   updating: Record<string, boolean>
   sources: Record<string, UpdateSource>
   floating_services?: FloatingService[]
+  display_names?: Record<string, string>
 }
 
 export interface MonitoringContainer {
