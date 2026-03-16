@@ -1,7 +1,7 @@
 FROM golang:1.24-bookworm AS builder
 WORKDIR /src
 COPY go.mod ./
-RUN go mod download
+RUN go mod download || (sleep 2 && go mod download) || (sleep 5 && go mod download)
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /truffels-agent .
