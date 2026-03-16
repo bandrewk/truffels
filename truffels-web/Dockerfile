@@ -5,7 +5,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --no-frozen-lockfile || (sleep 2 && pnpm install --no-frozen-lockfile) || (sleep 5 && pnpm install --no-frozen-lockfile)
 COPY . .
 ARG VERSION=dev
 ENV VITE_APP_VERSION=${VERSION}
