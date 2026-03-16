@@ -2,10 +2,12 @@ package updates
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,6 +28,7 @@ type mockAgentOpts struct {
 	downFail    bool
 	buildFail   bool
 	unhealthy   bool // if true, inspect returns unhealthy containers
+	composeDirs map[string]string // service_id -> compose dir path for rewrite-tags
 }
 
 func newMockAgent(opts mockAgentOpts) *httptest.Server {
@@ -60,6 +63,27 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 				w.WriteHeader(500)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
 				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/compose/rewrite-tags":
+			var req struct {
+				ServiceID string   `json:"service_id"`
+				Images    []string `json:"images"`
+				OldTag    string   `json:"old_tag"`
+				NewTag    string   `json:"new_tag"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if dir, ok := opts.composeDirs[req.ServiceID]; ok {
+				composePath := filepath.Join(dir, "docker-compose.yml")
+				data, _ := os.ReadFile(composePath)
+				content := string(data)
+				for _, img := range req.Images {
+					pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+					re, _ := regexp.Compile(pattern)
+					content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
+				}
+				_ = os.WriteFile(composePath, []byte(content), 0644)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
@@ -385,10 +409,11 @@ func TestApplyUpdate_FloatingTag_SkipsComposeRewrite(t *testing.T) {
 // --- ApplyUpdate: standard tag-based (pull + rewrite + rollback) ---
 
 func TestApplyUpdate_Standard_Success(t *testing.T) {
-	agent := newMockAgent(mockAgentOpts{})
+	cd := t.TempDir()
+	agent := newMockAgent(mockAgentOpts{composeDirs: map[string]string{"mempool": cd}})
 	defer agent.Close()
 
-	composeDir := t.TempDir()
+	composeDir := cd
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
 	_ = os.WriteFile(composePath, []byte(`services:
   backend:
@@ -437,6 +462,7 @@ func TestApplyUpdate_Standard_Success(t *testing.T) {
 }
 
 func TestApplyUpdate_Standard_StartFails_Rollback(t *testing.T) {
+	cd := t.TempDir()
 	// Agent that fails on first up call, then succeeds (rollback up)
 	upCalls := 0
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,13 +481,31 @@ func TestApplyUpdate_Standard_StartFails_Rollback(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case "/v1/compose/down":
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/v1/compose/rewrite-tags":
+			var req struct {
+				ServiceID string   `json:"service_id"`
+				Images    []string `json:"images"`
+				OldTag    string   `json:"old_tag"`
+				NewTag    string   `json:"new_tag"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			composePath := filepath.Join(cd, "docker-compose.yml")
+			data, _ := os.ReadFile(composePath)
+			content := string(data)
+			for _, img := range req.Images {
+				pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+				re, _ := regexp.Compile(pattern)
+				content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
+			}
+			_ = os.WriteFile(composePath, []byte(content), 0644)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		default:
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
 	}))
 	defer agent.Close()
 
-	composeDir := t.TempDir()
+	composeDir := cd
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
 	_ = os.WriteFile(composePath, []byte(`services:
   backend:
@@ -740,6 +784,27 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 			w.WriteHeader(202)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 
+		case "/v1/compose/rewrite-tags":
+			var req struct {
+				ServiceID string   `json:"service_id"`
+				Images    []string `json:"images"`
+				OldTag    string   `json:"old_tag"`
+				NewTag    string   `json:"new_tag"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if dir, ok := opts.composeDirs[req.ServiceID]; ok {
+				composePath := filepath.Join(dir, "docker-compose.yml")
+				data, _ := os.ReadFile(composePath)
+				content := string(data)
+				for _, img := range req.Images {
+					pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+					re, _ := regexp.Compile(pattern)
+					content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
+				}
+				_ = os.WriteFile(composePath, []byte(content), 0644)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		case "/v1/image/inspect":
 			info := docker.ImageInfo{
 				Image: "truffels/agent:v0.1.0",
@@ -770,10 +835,11 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 }
 
 func TestApplySelfUpdate_Success(t *testing.T) {
-	agent := newSelfUpdateMockAgent(mockAgentOpts{})
+	cd := t.TempDir()
+	agent := newSelfUpdateMockAgent(mockAgentOpts{composeDirs: map[string]string{"truffels": cd}})
 	defer agent.Close()
 
-	composeDir := t.TempDir()
+	composeDir := cd
 	composePath := filepath.Join(composeDir, "docker-compose.yml")
 	_ = os.WriteFile(composePath, []byte(`services:
   agent:

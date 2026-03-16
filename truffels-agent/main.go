@@ -80,6 +80,7 @@ func main() {
 	mux.HandleFunc("POST /v1/system/tuning", handleSystemTuningSet)
 	mux.HandleFunc("POST /v1/git/checkout", handleGitCheckout)
 	mux.HandleFunc("POST /v1/compose/up-detached", handleComposeUpDetached)
+	mux.HandleFunc("POST /v1/compose/rewrite-tags", handleComposeRewriteTags)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -1134,6 +1135,59 @@ docker compose -f %s up -d --remove-orphans
 	}
 
 	writeJSON(w, 202, map[string]string{"status": "accepted", "message": "detached compose up scheduled"})
+}
+
+// --- Compose Rewrite Tags ---
+
+type rewriteTagsRequest struct {
+	ServiceID string   `json:"service_id"`
+	Images    []string `json:"images"`
+	OldTag    string   `json:"old_tag"`
+	NewTag    string   `json:"new_tag"`
+}
+
+func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
+	var req rewriteTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return
+	}
+	if len(req.Images) == 0 || req.OldTag == "" || req.NewTag == "" {
+		writeJSON(w, 400, map[string]string{"error": "images, old_tag, and new_tag are required"})
+		return
+	}
+
+	slog.Info("rewrite compose tags", "service", req.ServiceID, "old", req.OldTag, "new", req.NewTag)
+
+	composePath := composeDir(req.ServiceID) + "/docker-compose.yml"
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "read compose file: " + err.Error()})
+		return
+	}
+
+	content := string(data)
+	for _, img := range req.Images {
+		pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "compile regex for " + img + ": " + err.Error()})
+			return
+		}
+		replacement := fmt.Sprintf("${1}%s:%s", img, req.NewTag)
+		content = re.ReplaceAllString(content, replacement)
+	}
+
+	if err := os.WriteFile(composePath, []byte(content), 0644); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "write compose file: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // serviceContainers maps service IDs to their container names for fallback log retrieval.

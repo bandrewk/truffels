@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -1027,6 +1029,98 @@ func TestHandleComposeLogs_EmptyContainer_UsesCompose(t *testing.T) {
 	// Should not be 403 (compose path, not container path)
 	if w.Code == 403 {
 		t.Fatalf("empty container should use compose path, got 403")
+	}
+}
+
+// --- handleComposeRewriteTags ---
+
+func TestHandleComposeRewriteTags_Success(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	// Create a fake compose subdir matching the allowlist mapping
+	_ = os.MkdirAll(dir+"/mempool", 0755)
+	original := `services:
+  backend:
+    image: mempool/backend:v3.2.0
+  frontend:
+    image: mempool/frontend:v3.2.0@sha256:abc123
+`
+	_ = os.WriteFile(dir+"/mempool/docker-compose.yml", []byte(original), 0644)
+
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "mempool",
+		Images:    []string{"mempool/backend", "mempool/frontend"},
+		OldTag:    "v3.2.0",
+		NewTag:    "v3.2.1",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	data, _ := os.ReadFile(dir + "/mempool/docker-compose.yml")
+	content := string(data)
+	if !strings.Contains(content, "mempool/backend:v3.2.1") {
+		t.Errorf("expected backend updated to v3.2.1, got:\n%s", content)
+	}
+	if !strings.Contains(content, "mempool/frontend:v3.2.1") {
+		t.Errorf("expected frontend updated to v3.2.1 (digest stripped), got:\n%s", content)
+	}
+	if strings.Contains(content, "v3.2.0") {
+		t.Errorf("old version should not remain, got:\n%s", content)
+	}
+	if strings.Contains(content, "sha256") {
+		t.Errorf("digest should be stripped, got:\n%s", content)
+	}
+}
+
+func TestHandleComposeRewriteTags_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "hacker",
+		Images:    []string{"img"},
+		OldTag:    "v1",
+		NewTag:    "v2",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeRewriteTags_MissingFields(t *testing.T) {
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "mempool",
+		Images:    []string{},
+		OldTag:    "v1",
+		NewTag:    "v2",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeRewriteTags_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader([]byte("bad")))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 

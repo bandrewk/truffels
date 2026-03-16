@@ -1062,6 +1062,9 @@ networks:
     external: true
 TRUFFELSDC
 
+# Ensure all compose files are owned by truffel (API runs as uid 1000, needs write access for updates)
+chown -R 1000:1000 "$COMPOSE_DIR"
+
 log "Building truffels-agent image..."
 cd "$COMPOSE_DIR/truffels" && BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build agent --quiet
 

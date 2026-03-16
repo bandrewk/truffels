@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"strconv"
 	"sync"
 	"syscall"
@@ -442,8 +441,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 
 	// Step 1b: Update compose file image tags (skip for floating-tag and custom builds)
 	if !src.NeedsBuild && !tmpl.FloatingTag {
-		composePath := tmpl.ComposeDir + "/docker-compose.yml"
-		if err := updateComposeImageTags(composePath, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
+		if err := e.compose.RewriteTags(serviceID, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
 			e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
 			return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
@@ -580,8 +578,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 		}
 	}
 	// Rewrite compose tags
-	composePath := tmpl.ComposeDir + "/docker-compose.yml"
-	if err := updateComposeImageTags(composePath, src.Images, currentVersion, prevVersion); err != nil {
+	if err := e.compose.RewriteTags(serviceID, src.Images, currentVersion, prevVersion); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "rollback compose rewrite failed: "+err.Error())
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
@@ -620,8 +617,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, currentVersion, newVersion string) {
 	if !src.NeedsBuild {
 		// Revert compose file to old version
-		composePath := tmpl.ComposeDir + "/docker-compose.yml"
-		if err := updateComposeImageTags(composePath, src.Images, newVersion, currentVersion); err != nil {
+		if err := e.compose.RewriteTags(serviceID, src.Images, newVersion, currentVersion); err != nil {
 			slog.Error("rollback: compose rewrite failed", "service", serviceID, "err", err)
 		}
 		for _, img := range src.Images {
@@ -647,34 +643,6 @@ func (e *Engine) checkHealth(tmpl model.ServiceTemplate) bool {
 		}
 	}
 	return true
-}
-
-// updateComposeImageTags rewrites image tags in a docker-compose.yml file.
-// For each image in images, it replaces "image: <name>:<oldTag>..." with "image: <name>:<newTag>".
-// This handles digest-pinned images (e.g. "image: mempool/backend:v3.2.0@sha256:...").
-func updateComposeImageTags(composePath string, images []string, oldTag, newTag string) error {
-	data, err := os.ReadFile(composePath)
-	if err != nil {
-		return fmt.Errorf("read compose file: %w", err)
-	}
-
-	content := string(data)
-	for _, img := range images {
-		// Match "image: <img>:<oldTag>" optionally followed by "@sha256:..."
-		pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(oldTag))
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return fmt.Errorf("compile regex for %s: %w", img, err)
-		}
-		replacement := fmt.Sprintf("${1}%s:%s", img, newTag)
-		content = re.ReplaceAllString(content, replacement)
-	}
-
-	if err := os.WriteFile(composePath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("write compose file: %w", err)
-	}
-	slog.Info("compose file updated", "path", composePath, "images", images, "version", newTag)
-	return nil
 }
 
 // applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
@@ -711,7 +679,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 	}
 
 	// Step 3: Rewrite compose image tags for all truffels services
-	if err := updateComposeImageTags(composePath, tmpl.UpdateSource.Images, check.CurrentVersion, check.LatestVersion); err != nil {
+	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
