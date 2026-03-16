@@ -1279,7 +1279,36 @@ func TestRewriteTags_NoMatchReturnsError(t *testing.T) {
 	}
 	var resp map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if !strings.Contains(resp["error"], "no tags matched") {
-		t.Errorf("expected 'no tags matched' error, got: %s", resp["error"])
+	if !strings.Contains(resp["error"], "no image tags matched") {
+		t.Errorf("expected 'no image tags matched' error, got: %s", resp["error"])
+	}
+}
+
+func TestRewriteTags_AlreadyAtTargetReturnsOK(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/truffels", 0755)
+	original := `services:
+  agent:
+    image: truffels/agent:v1.0.0
+    build:
+      args:
+        VERSION: v1.0.0
+`
+	_ = os.WriteFile(dir+"/truffels/docker-compose.yml", []byte(original), 0644)
+
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "truffels-agent",
+		Images:    []string{"truffels/agent"},
+		NewTag:    "v1.0.0",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 for already-at-target, got %d: %s", w.Code, w.Body.String())
 	}
 }

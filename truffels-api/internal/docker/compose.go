@@ -316,7 +316,16 @@ func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]str
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent build: %s", ar.Error)
+		msg := ar.Error
+		// Include last ~500 chars of build output for debugging
+		if ar.Output != "" {
+			out := ar.Output
+			if len(out) > 500 {
+				out = "..." + out[len(out)-500:]
+			}
+			msg += "\n" + out
+		}
+		return fmt.Errorf("agent build: %s", msg)
 	}
 	return nil
 }
