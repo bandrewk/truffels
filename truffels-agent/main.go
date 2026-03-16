@@ -1056,8 +1056,8 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Fetch tags
-	fetchCmd := exec.CommandContext(ctx, "git", "-C", req.RepoDir, "fetch", "--tags")
+	// Fetch tags (safe.directory needed: agent runs as root, repo owned by uid 1000)
+	fetchCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags")
 	var fetchOut bytes.Buffer
 	fetchCmd.Stdout = &fetchOut
 	fetchCmd.Stderr = &fetchOut
@@ -1067,7 +1067,7 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Checkout tag
-	checkoutCmd := exec.CommandContext(ctx, "git", "-C", req.RepoDir, "checkout", req.Tag)
+	checkoutCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag)
 	var checkoutOut bytes.Buffer
 	checkoutCmd.Stdout = &checkoutOut
 	checkoutCmd.Stderr = &checkoutOut
