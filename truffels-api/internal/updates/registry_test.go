@@ -426,11 +426,11 @@ func TestCheckGitHubRelease_DevChannel(t *testing.T) {
 		if r.URL.Path != "/repos/owner/repo/releases" {
 			t.Errorf("expected /repos/owner/repo/releases, got %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("per_page") != "1" {
-			t.Errorf("expected per_page=1, got %s", r.URL.Query().Get("per_page"))
+		if r.URL.Query().Get("per_page") != "20" {
+			t.Errorf("expected per_page=20, got %s", r.URL.Query().Get("per_page"))
 		}
 		releases := []map[string]interface{}{
-			{"tag_name": "v0.3.0-dev.1", "prerelease": true},
+			{"tag_name": "v0.3.0-dev.1", "prerelease": true, "published_at": "2026-03-16T10:00:00Z"},
 		}
 		_ = json.NewEncoder(w).Encode(releases)
 	}))
