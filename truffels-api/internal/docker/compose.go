@@ -430,6 +430,27 @@ func (c *ComposeClient) DockerPrune() (string, error) {
 	return result.Reclaimed, nil
 }
 
+// DockerPruneBuildCache runs only docker builder prune via the agent.
+func (c *ComposeClient) DockerPruneBuildCache() (string, error) {
+	longClient := &http.Client{Timeout: 6 * time.Minute}
+	resp, err := longClient.Post(c.agentURL+"/v1/docker/prune-buildcache", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return "", fmt.Errorf("agent docker prune buildcache: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Status    string `json:"status"`
+		Error     string `json:"error"`
+		Reclaimed string `json:"reclaimed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("agent docker prune buildcache: %s", result.Error)
+	}
+	return result.Reclaimed, nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)

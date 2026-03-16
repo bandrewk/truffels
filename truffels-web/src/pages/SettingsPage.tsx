@@ -482,20 +482,22 @@ function SystemInfoTab() {
   const { data, error, loading, refresh } = useApi(fetcher)
   const [pruning, setPruning] = useState(false)
   const [prunePassword, setPrunePassword] = useState('')
-  const [pruneConfirm, setPruneConfirm] = useState(false)
+  const [pruneConfirm, setPruneConfirm] = useState<'buildcache' | 'all' | null>(null)
   const [pruneMsg, setPruneMsg] = useState('')
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
   if (!data) return null
 
-  async function handlePrune() {
+  async function handlePrune(mode: 'buildcache' | 'all') {
     if (!prunePassword) { setPruneMsg('Password required'); return }
     setPruning(true); setPruneMsg('')
     try {
-      const result = await api.dockerPrune(prunePassword)
+      const result = mode === 'buildcache'
+        ? await api.dockerPruneBuildCache(prunePassword)
+        : await api.dockerPrune(prunePassword)
       setPruneMsg(`Pruned: ${result.reclaimed}`)
-      setPruneConfirm(false)
+      setPruneConfirm(null)
       setPrunePassword('')
       refresh()
     } catch (e: any) {
@@ -619,8 +621,9 @@ function SystemInfoTab() {
             {pruneConfirm ? (
               <div className="space-y-3">
                 <p className="text-sm text-yellow-400">
-                  This removes all unused images, build cache, and stopped containers.
-                  Rollback to previous versions will not be available until the next update.
+                  {pruneConfirm === 'buildcache'
+                    ? 'This clears the Docker build cache. Safe — does not affect running containers or rollback images.'
+                    : 'This removes all unused images, build cache, and stopped containers. Rollback to previous versions will not be available until the next update.'}
                 </p>
                 <div className="flex items-center gap-3">
                   <input
@@ -631,14 +634,14 @@ function SystemInfoTab() {
                     className="px-3 py-1.5 bg-surface-overlay border border-border rounded text-sm text-white placeholder-gray-600 max-w-xs"
                   />
                   <button
-                    onClick={handlePrune}
+                    onClick={() => handlePrune(pruneConfirm)}
                     disabled={pruning || !prunePassword}
                     className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded disabled:opacity-50"
                   >
-                    {pruning ? 'Pruning...' : 'Confirm Purge'}
+                    {pruning ? 'Pruning...' : pruneConfirm === 'buildcache' ? 'Confirm Clear' : 'Confirm Purge'}
                   </button>
                   <button
-                    onClick={() => { setPruneConfirm(false); setPruneMsg('') }}
+                    onClick={() => { setPruneConfirm(null); setPruneMsg('') }}
                     className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200"
                   >
                     Cancel
@@ -646,12 +649,20 @@ function SystemInfoTab() {
                 </div>
               </div>
             ) : (
-              <button
-                onClick={() => setPruneConfirm(true)}
-                className="px-4 py-2 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-sm font-medium rounded transition-colors"
-              >
-                Purge Unused
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setPruneConfirm('buildcache')}
+                  className="px-4 py-2 bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30 text-sm font-medium rounded transition-colors"
+                >
+                  Clear Build Cache
+                </button>
+                <button
+                  onClick={() => setPruneConfirm('all')}
+                  className="px-4 py-2 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-sm font-medium rounded transition-colors"
+                >
+                  Purge All Unused
+                </button>
+              </div>
             )}
             {pruneMsg && (
               <p className={`text-sm mt-2 ${pruneMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>

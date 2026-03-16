@@ -1384,6 +1384,51 @@ func TestHandleImageRemove_AllowedPrefixes(t *testing.T) {
 	}
 }
 
+// --- formatSize ---
+
+func TestFormatSize(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"111.2GB", "111.2 GB"},
+		{"1.8T", "1.8 T"},
+		{"0B", "0 B"},
+		{"8.0M", "8.0 M"},
+		{"52%", "52%"},
+		{"111.2 GB", "111.2 GB"}, // idempotent
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := formatSize(tt.input)
+		if got != tt.want {
+			t.Errorf("formatSize(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// --- handleDockerPruneBuildCache ---
+
+func TestHandleDockerPruneBuildCache_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/docker/prune-buildcache", bytes.NewReader([]byte("{}")))
+
+	handleDockerPruneBuildCache(w, r)
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	// Either "ok" (docker available) or error (docker not available in CI)
+	if body["status"] != "ok" && body["error"] == "" {
+		t.Fatalf("expected status ok or error field, got %v", body)
+	}
+}
+
 // --- handleDockerPrune ---
 
 func TestHandleDockerPrune_ReturnsJSON(t *testing.T) {

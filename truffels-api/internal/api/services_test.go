@@ -110,6 +110,9 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 
 		case r.URL.Path == "/v1/docker/prune" && r.Method == "POST":
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 100MB"})
+
+		case r.URL.Path == "/v1/docker/prune-buildcache" && r.Method == "POST":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 50MB"})
 		}
 	}))
 }
