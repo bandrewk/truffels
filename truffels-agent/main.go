@@ -340,7 +340,7 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("pulling image", "image", req.Image)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "docker", "pull", req.Image)
@@ -561,7 +561,7 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	dir := composeDir(req.ServiceID)
 	slog.Info("building service", "service", req.ServiceID, "dir", dir)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	dockerArgs := []string{"docker", "compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
@@ -605,7 +605,7 @@ func runCompose(composeDir string, args ...string) error {
 	fullArgs := append([]string{"compose", "-f", composeDir + "/docker-compose.yml"}, args...)
 	slog.Info("docker compose", "dir", composeDir, "args", strings.Join(args, " "))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
@@ -1114,7 +1114,7 @@ func handleComposeUpDetached(w http.ResponseWriter, r *http.Request) {
 	// The sleep ensures the HTTP response is sent before the agent container is replaced.
 	script := fmt.Sprintf(`#!/bin/sh
 sleep 3
-docker compose -f %s down --timeout 30
+docker compose -f %s down --timeout 60
 docker compose -f %s up -d
 `, composePath, composePath)
 
@@ -1143,7 +1143,7 @@ docker compose -f %s up -d
 type rewriteTagsRequest struct {
 	ServiceID string   `json:"service_id"`
 	Images    []string `json:"images"`
-	OldTag    string   `json:"old_tag"`
+	OldTag    string   `json:"old_tag,omitempty"` // optional — if empty, matches any current tag
 	NewTag    string   `json:"new_tag"`
 }
 
@@ -1157,8 +1157,8 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
 		return
 	}
-	if len(req.Images) == 0 || req.OldTag == "" || req.NewTag == "" {
-		writeJSON(w, 400, map[string]string{"error": "images, old_tag, and new_tag are required"})
+	if len(req.Images) == 0 || req.NewTag == "" {
+		writeJSON(w, 400, map[string]string{"error": "images and new_tag are required"})
 		return
 	}
 
@@ -1173,7 +1173,8 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 
 	content := string(data)
 	for _, img := range req.Images {
-		pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+		// Match any current tag for this image (idempotent — works regardless of what tag is in the file)
+		pattern := fmt.Sprintf(`(image:\s*)%s:[^\s@]+(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img))
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "compile regex for " + img + ": " + err.Error()})
@@ -1183,8 +1184,9 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 		content = re.ReplaceAllString(content, replacement)
 	}
 
-	// Also rewrite VERSION build args (used by truffels self-update)
-	content = strings.ReplaceAll(content, "VERSION: "+req.OldTag, "VERSION: "+req.NewTag)
+	// Rewrite VERSION build args — match any version value (idempotent)
+	versionRe := regexp.MustCompile(`(VERSION:\s+)\S+`)
+	content = versionRe.ReplaceAllString(content, "${1}"+req.NewTag)
 
 	if content == string(data) {
 		writeJSON(w, 400, map[string]string{"error": "no tags matched — compose file unchanged"})
