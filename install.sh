@@ -927,7 +927,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.2.3}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.2.4}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"
@@ -952,7 +952,7 @@ services:
       truffels-core:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /srv/truffels/compose:/srv/truffels/compose:ro
+      - /srv/truffels/compose:/srv/truffels/compose:rw
       - /srv/truffels/config:/srv/truffels/config:ro
       - /srv/truffels/secrets:/srv/truffels/secrets:ro
       - $TRUFFELS_REPO_SRC:/repo:rw
