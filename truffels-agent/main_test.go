@@ -945,6 +945,29 @@ func TestHandleComposeUpDetached_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestHandleComposeUpDetached_ValidService(t *testing.T) {
+	body, _ := json.Marshal(composeUpDetachedRequest{ServiceID: "truffels-agent"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/up-detached", bytes.NewReader(body))
+
+	handleComposeUpDetached(w, r)
+
+	// 202 if nsenter works, 500 if not (expected in CI)
+	if w.Code != 202 && w.Code != 500 {
+		t.Fatalf("expected 202 or 500, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not valid JSON: %v", err)
+	}
+	if _, ok := resp["status"]; !ok {
+		if _, ok2 := resp["error"]; !ok2 {
+			t.Fatal("response missing both 'status' and 'error' fields")
+		}
+	}
+}
+
 // --- handleComposeBuild with build args ---
 
 func TestHandleComposeBuild_WithBuildArgs(t *testing.T) {

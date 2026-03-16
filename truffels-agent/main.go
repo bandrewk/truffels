@@ -1113,9 +1113,10 @@ func handleComposeUpDetached(w http.ResponseWriter, r *http.Request) {
 	// Write a self-update script that runs on the host via nsenter.
 	// The sleep ensures the HTTP response is sent before the agent container is replaced.
 	script := fmt.Sprintf(`#!/bin/sh
-sleep 2
-docker compose -f %s up -d --remove-orphans
-`, composePath)
+sleep 3
+docker compose -f %s down --timeout 30
+docker compose -f %s up -d
+`, composePath, composePath)
 
 	scriptPath := "/tmp/truffels-self-update.sh"
 	// Write script via nsenter into host filesystem
