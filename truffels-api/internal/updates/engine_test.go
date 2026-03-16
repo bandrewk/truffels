@@ -773,6 +773,100 @@ func TestRunPreflight_DependentWarning(t *testing.T) {
 	}
 }
 
+// --- checkService skip logic for non-existent containers ---
+
+func TestCheckService_SkipsWhenContainerMissing(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{imageInspectFail: true})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-electrs"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceDockerHub,
+			Images: []string{"getumbrel/electrs"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// No prior check exists — container doesn't exist → should skip
+	eng.checkService(tmpl)
+
+	check, err := st.GetLatestUpdateCheck("electrs")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if check != nil {
+		t.Errorf("expected no update check row for missing container, got current=%q latest=%q",
+			check.CurrentVersion, check.LatestVersion)
+	}
+}
+
+func TestCheckService_CleansStaleCheckWhenContainerMissing(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{imageInspectFail: true})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-electrs"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceDockerHub,
+			Images: []string{"getumbrel/electrs"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// Seed a stale check with blank current version (the bug scenario)
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "electrs",
+		CurrentVersion: "",
+		LatestVersion:  "v0.11.0",
+		HasUpdate:      false,
+	})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("electrs")
+	if check != nil {
+		t.Errorf("expected stale check to be cleaned up, but it still exists")
+	}
+}
+
+func TestCheckService_DoesNotSkipGitHubSource(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{imageInspectFail: true})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "ckpool",
+		DisplayName:    "ckpool",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-ckpool"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceBitbucket,
+			Repo:   "ckolivas/ckpool",
+			Branch: "master",
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	eng.checkService(tmpl)
+
+	// Bitbucket source should NOT be skipped — it initializes current=latest
+	check, _ := st.GetLatestUpdateCheck("ckpool")
+	// The check should exist (even if both versions are empty due to mock,
+	// the point is it wasn't skipped by the guard)
+	if check == nil {
+		t.Error("expected check to exist for Bitbucket source even with no container")
+	}
+}
+
 func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 	agent := newMockAgent(mockAgentOpts{})
 	defer agent.Close()

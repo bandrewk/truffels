@@ -28,7 +28,8 @@ type mockAgentOpts struct {
 	downFail    bool
 	buildFail   bool
 	unhealthy   bool // if true, inspect returns unhealthy containers
-	composeDirs map[string]string // service_id -> compose dir path for rewrite-tags
+	imageInspectFail bool   // if true, /v1/image/inspect returns 500
+	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
 }
 
 func newMockAgent(opts mockAgentOpts) *httptest.Server {
@@ -88,6 +89,11 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/image/inspect":
+			if opts.imageInspectFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no such container"})
+				return
+			}
 			info := docker.ImageInfo{
 				Image:  "mariadb:lts",
 				Digest: "sha256:olddigest123",

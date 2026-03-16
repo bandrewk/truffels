@@ -179,6 +179,12 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		}
 	}
 
+	// Container doesn't exist and no stored version — skip (e.g. pruned mode)
+	if currentVersion == "" && src.Type != model.SourceGitHub && src.Type != model.SourceBitbucket {
+		_ = e.store.DeleteUpdateCheck(tmpl.ID)
+		return
+	}
+
 	// Check latest upstream version
 	latestVersion, err := CheckLatestVersion(src, e.getUpdateChannel())
 
