@@ -115,7 +115,9 @@ func (e *Engine) loop() {
 
 func (e *Engine) checkAll() {
 	slog.Info("update check starting")
+	registered := make(map[string]bool)
 	for _, tmpl := range e.registry.All() {
+		registered[tmpl.ID] = true
 		if tmpl.UpdateSource == nil {
 			// Clean up stale checks and alerts for services that lost their UpdateSource
 			_ = e.store.DeleteUpdateCheck(tmpl.ID)
@@ -123,6 +125,15 @@ func (e *Engine) checkAll() {
 			continue
 		}
 		e.checkService(tmpl)
+	}
+	// Purge update_checks for service IDs no longer in the registry (e.g. after consolidation)
+	if checks, err := e.store.GetAllUpdateChecks(); err == nil {
+		for _, c := range checks {
+			if !registered[c.ServiceID] {
+				slog.Info("purging stale update check", "service", c.ServiceID)
+				_ = e.store.DeleteUpdateCheck(c.ServiceID)
+			}
+		}
 	}
 	slog.Info("update check complete")
 }
