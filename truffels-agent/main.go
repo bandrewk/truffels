@@ -569,9 +569,7 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	for k, v := range req.BuildArgs {
 		dockerArgs = append(dockerArgs, "--build-arg", k+"="+v)
 	}
-	for _, svc := range req.Services {
-		dockerArgs = append(dockerArgs, svc)
-	}
+	dockerArgs = append(dockerArgs, req.Services...)
 	// Run via nsenter so build-context paths resolve on the host filesystem
 	nsArgs := append([]string{"-t", "1", "-m", "--"}, dockerArgs...)
 	cmd := exec.CommandContext(ctx, "nsenter", nsArgs...)
