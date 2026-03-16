@@ -179,6 +179,33 @@ func (s *Server) handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reclaimed": reclaimed})
 }
 
+// --- Docker Build Cache Prune ---
+
+func (s *Server) handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	ok, err := s.auth.CheckPassword(body.Password)
+	if err != nil || !ok {
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+
+	reclaimed, err := s.compose.DockerPruneBuildCache()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	_ = s.store.LogAudit("docker_prune_buildcache", "", "Build cache prune: "+reclaimed, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reclaimed": reclaimed})
+}
+
 // --- System Info ---
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {

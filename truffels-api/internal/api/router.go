@@ -92,6 +92,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/system/tuning", s.handleSystemTuningGet)
 			r.Post("/system/tuning", s.handleSystemTuningSet)
 			r.Post("/system/docker-prune", s.handleDockerPrune)
+			r.Post("/system/docker-prune-buildcache", s.handleDockerPruneBuildCache)
 
 			r.Get("/updates", s.handleGetUpdates)
 			r.Post("/updates/check", s.handleCheckUpdates)

@@ -54,6 +54,16 @@ var composeRoot string
 
 var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
 
+// sizeSpaceRe matches the boundary between a digit (or dot) and a letter (unit suffix).
+var sizeSpaceRe = regexp.MustCompile(`(\d)([A-Za-z])`)
+
+// formatSize inserts a space between the numeric part and the unit suffix.
+// "111.2GB" → "111.2 GB", "1.8T" → "1.8 T", "52%" → "52%" (percentages unchanged).
+// Already-spaced values are returned as-is (idempotent).
+func formatSize(s string) string {
+	return sizeSpaceRe.ReplaceAllString(s, "$1 $2")
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -83,6 +93,7 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/rewrite-tags", handleComposeRewriteTags)
 	mux.HandleFunc("POST /v1/image/remove", handleImageRemove)
 	mux.HandleFunc("POST /v1/docker/prune", handleDockerPrune)
+	mux.HandleFunc("POST /v1/docker/prune-buildcache", handleDockerPruneBuildCache)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -454,6 +465,31 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(reclaimedParts) > 0 {
 		reclaimed = strings.Join(reclaimedParts, "; ")
+	}
+
+	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
+}
+
+func handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Request) {
+	slog.Info("docker build cache prune requested")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "builder", "prune", "-a", "-f")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "builder prune failed: " + err.Error()})
+		return
+	}
+
+	reclaimed := "unknown"
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "reclaimed") {
+			reclaimed = strings.TrimSpace(line)
+			break
+		}
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
@@ -890,9 +926,9 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 			Device: fields[0],
 			Mount:  fields[1],
 			FSType: fields[2],
-			Size:   fields[3],
-			Used:   fields[4],
-			Free:   fields[5],
+			Size:   formatSize(fields[3]),
+			Used:   formatSize(fields[4]),
+			Free:   formatSize(fields[5]),
 			UsePct: fields[6],
 		})
 	}
@@ -920,8 +956,8 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 				dockerStorage = append(dockerStorage, dockerStorageItem{
 					Type:        item.Type,
 					Count:       count,
-					TotalSize:   item.Size,
-					Reclaimable: item.Reclaimable,
+					TotalSize:   formatSize(item.Size),
+					Reclaimable: formatSize(item.Reclaimable),
 				})
 			}
 		}
@@ -1098,7 +1134,7 @@ func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tuningResponse{
 		PersistentJournal: persistent,
 		Swappiness:        swappiness,
-		JournalDiskUsage:  usage,
+		JournalDiskUsage:  formatSize(usage),
 		Boots:             boots,
 	})
 }

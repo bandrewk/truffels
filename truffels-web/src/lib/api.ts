@@ -444,4 +444,6 @@ export const api = {
     post<{ status: string }>('/system/tuning', { action, value }),
   dockerPrune: (password: string) =>
     post<{ status: string; reclaimed: string }>('/system/docker-prune', { password }),
+  dockerPruneBuildCache: (password: string) =>
+    post<{ status: string; reclaimed: string }>('/system/docker-prune-buildcache', { password }),
 }

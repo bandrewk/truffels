@@ -692,6 +692,45 @@ func TestDockerPrune_AuditLog(t *testing.T) {
 	}
 }
 
+// --- Docker Build Cache Prune ---
+
+func TestDockerPruneBuildCache_WrongPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune-buildcache",
+		`{"password":"wrongpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDockerPruneBuildCache_CorrectPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune-buildcache",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+	if body["reclaimed"] == "" {
+		t.Fatal("expected reclaimed field")
+	}
+}
+
 // --- Backup Download path traversal ---
 
 func TestBackupDownload_PathTraversal(t *testing.T) {
