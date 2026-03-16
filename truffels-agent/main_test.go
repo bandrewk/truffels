@@ -99,7 +99,8 @@ func TestDecodeAndValidate_MalformedJSON(t *testing.T) {
 func TestAllowedServices(t *testing.T) {
 	expected := []string{
 		"bitcoind", "electrs", "ckpool", "mempool", "ckstats",
-		"proxy", "truffels-agent", "truffels-api", "truffels-web",
+		"proxy", "mempool-db", "ckstats-db",
+		"truffels", "truffels-agent", "truffels-api", "truffels-web",
 	}
 	for _, id := range expected {
 		if _, ok := allowedServices[id]; !ok {

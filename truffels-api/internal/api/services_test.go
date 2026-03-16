@@ -555,8 +555,8 @@ func TestListServices(t *testing.T) {
 
 	var services []model.ServiceInstance
 	_ = json.Unmarshal(w.Body.Bytes(), &services)
-	if len(services) != 11 {
-		t.Fatalf("expected 11 services, got %d", len(services))
+	if len(services) != 9 {
+		t.Fatalf("expected 9 services, got %d", len(services))
 	}
 }
 

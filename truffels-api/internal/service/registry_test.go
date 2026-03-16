@@ -8,8 +8,8 @@ import (
 func TestNewRegistry_AllServices(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose", "")
 	all := r.All()
-	if len(all) != 11 {
-		t.Fatalf("expected 11 services, got %d", len(all))
+	if len(all) != 9 {
+		t.Fatalf("expected 9 services, got %d", len(all))
 	}
 }
 
@@ -18,7 +18,7 @@ func TestRegistry_TopologicalOrder(t *testing.T) {
 	all := r.All()
 	expected := []string{
 		"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db",
-		"mempool", "ckstats", "proxy", "truffels-agent", "truffels-api", "truffels-web",
+		"mempool", "ckstats", "proxy", "truffels",
 	}
 	for i, svc := range all {
 		if svc.ID != expected[i] {
@@ -55,10 +55,10 @@ func TestRegistry_ComposeDir(t *testing.T) {
 		t.Fatalf("expected bitcoin compose dir, got %q", btc.ComposeDir)
 	}
 
-	// truffels-api has explicit ComposeDir "truffels"
-	api, _ := r.Get("truffels-api")
-	if api.ComposeDir != "/srv/truffels/compose/truffels" {
-		t.Fatalf("expected truffels compose dir, got %q", api.ComposeDir)
+	// truffels has explicit ComposeDir "truffels"
+	tr, _ := r.Get("truffels")
+	if tr.ComposeDir != "/srv/truffels/compose/truffels" {
+		t.Fatalf("expected truffels compose dir, got %q", tr.ComposeDir)
 	}
 
 	// electrs uses ID as default dir name
@@ -137,7 +137,7 @@ func TestRegistry_Dependents(t *testing.T) {
 
 func TestRegistry_Dependents_NoDependents(t *testing.T) {
 	r := NewRegistry("/srv/truffels/compose", "")
-	deps := r.Dependents("truffels-web")
+	deps := r.Dependents("truffels")
 	if len(deps) != 0 {
 		t.Fatalf("expected 0 dependents, got %d", len(deps))
 	}
@@ -156,7 +156,7 @@ func TestRegistry_ReadOnlyServices(t *testing.T) {
 		}
 	}
 
-	manageable := []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "truffels-agent", "truffels-api", "truffels-web"}
+	manageable := []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "truffels"}
 	for _, id := range manageable {
 		svc, _ := r.Get(id)
 		if svc.ReadOnly {
@@ -178,7 +178,7 @@ func TestRegistry_FloatingTagServices(t *testing.T) {
 	}
 
 	// Other services should not be floating
-	nonFloating := []string{"bitcoind", "electrs", "proxy", "ckstats-db", "truffels-api"}
+	nonFloating := []string{"bitcoind", "electrs", "proxy", "ckstats-db", "truffels"}
 	for _, id := range nonFloating {
 		s, _ := r.Get(id)
 		if s.FloatingTag {

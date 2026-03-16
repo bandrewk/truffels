@@ -118,8 +118,9 @@ func (e *Engine) checkAll() {
 	slog.Info("update check starting")
 	for _, tmpl := range e.registry.All() {
 		if tmpl.UpdateSource == nil {
-			// Clean up stale checks for services that lost their UpdateSource
+			// Clean up stale checks and alerts for services that lost their UpdateSource
 			_ = e.store.DeleteUpdateCheck(tmpl.ID)
+			_ = e.store.ResolveAlerts("update_failed", tmpl.ID)
 			continue
 		}
 		e.checkService(tmpl)
@@ -391,14 +392,7 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	src := tmpl.UpdateSource
 
 	// For github_release sources (truffels self-update), use a dedicated flow.
-	// All three truffels services share one compose stack, so if any sibling
-	// is already being updated we skip (the ongoing update covers all three).
 	if src.Type == model.SourceGitHubRelease {
-		for _, sib := range []string{"truffels-agent", "truffels-api", "truffels-web"} {
-			if sib != serviceID && e.IsUpdating(sib) {
-				return &UpdateError{Msg: "sibling service " + sib + " is already updating the truffels stack"}
-			}
-		}
 		return e.applySelfUpdate(serviceID, tmpl, check, logID)
 	}
 
@@ -716,40 +710,14 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 		return &UpdateError{Msg: "build failed: " + err.Error()}
 	}
 
-	// Step 3: Rewrite compose image tags for all three services
-	allImages := []string{"truffels/agent", "truffels/api", "truffels/web"}
-	if err := updateComposeImageTags(composePath, allImages, check.CurrentVersion, check.LatestVersion); err != nil {
+	// Step 3: Rewrite compose image tags for all truffels services
+	if err := updateComposeImageTags(composePath, tmpl.UpdateSource.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
 	}
 
-	// Step 4: Create update logs for sibling services (so they all show as updated)
-	for _, sib := range []string{"truffels-agent", "truffels-api", "truffels-web"} {
-		if sib == serviceID {
-			continue
-		}
-		sibLog := &model.UpdateLog{
-			ServiceID:   sib,
-			FromVersion: check.CurrentVersion,
-			ToVersion:   check.LatestVersion,
-			Status:      model.UpdateRestarting,
-		}
-		sibLogID, err := e.store.CreateUpdateLog(sibLog)
-		if err == nil {
-			// These will be reconciled on startup
-			_ = e.store.UpdateLogStatus(sibLogID, model.UpdateRestarting, "", check.CurrentVersion)
-		}
-		// Update version checks for siblings
-		_ = e.store.UpsertUpdateCheck(&model.UpdateCheck{
-			ServiceID:      sib,
-			CurrentVersion: check.CurrentVersion,
-			LatestVersion:  check.LatestVersion,
-			HasUpdate:      true,
-		})
-	}
-
-	// Step 5: Detached restart — agent calls docker compose up -d via nsenter
+	// Step 4: Detached restart — agent calls docker compose up -d via nsenter
 	// This replaces all containers including the agent itself
 	_ = e.store.UpdateLogStatus(logID, model.UpdateRestarting, "", check.CurrentVersion)
 

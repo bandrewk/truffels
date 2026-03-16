@@ -5,6 +5,17 @@ All notable changes to Project Truffels will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.2] - 2026-03-16
+
+### Fixed
+- Consolidated truffels-agent, truffels-api, and truffels-web into a single "truffels" entry on the updates page (closes #3)
+
+### Changed
+- Service count reduced from 11 to 9 (3 truffels services → 1 unified)
+- Port label simplified to "8080 (API + web), 9090 (agent)"
+- Removed sibling-checking logic in update engine
+- Added nil-guard in alerts engine for safer dependency checks
+
 ## [v0.2.1] - 2026-03-15
 
 ### Added

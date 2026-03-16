@@ -27,6 +27,7 @@ var allowedServices = map[string]string{
 	"proxy":           "proxy",
 	"mempool-db":      "mempool",
 	"ckstats-db":      "ckstats",
+	"truffels":        "truffels",
 	"truffels-agent":  "truffels",
 	"truffels-api":    "truffels",
 	"truffels-web":    "truffels",

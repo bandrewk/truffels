@@ -21,9 +21,7 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 		templates.Proxy,
 		templates.MempoolDB,
 		templates.CkstatsDB,
-		templates.TruffelsAgent,
-		templates.TruffelsAPI,
-		templates.TruffelsWeb,
+		templates.Truffels,
 	}
 
 	r := &Registry{
@@ -46,7 +44,7 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 	}
 
 	// Fixed topological order for the dependency graph
-	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db", "mempool", "ckstats", "proxy", "truffels-agent", "truffels-api", "truffels-web"}
+	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db", "mempool", "ckstats", "proxy", "truffels"}
 
 	// Compute stack containers: all containers sharing the same compose dir
 	byDir := map[string][]string{}
