@@ -703,14 +703,16 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
 	}
 
-	// Step 3: Build with VERSION arg (builds all services in the truffels stack)
+	// Step 3: Build with VERSION arg — build each service sequentially to avoid
+	// I/O contention on slower storage (SD cards) causing TLS timeouts during go mod download.
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
 	buildArgs := map[string]string{"VERSION": check.LatestVersion}
-	// Use the first truffels service ID to trigger the full compose build
-	if err := e.compose.BuildWithArgs("truffels-agent", buildArgs); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
-		return &UpdateError{Msg: "build failed: " + err.Error()}
+	for _, svc := range []string{"agent", "api", "web"} {
+		if err := e.compose.BuildWithArgs("truffels-agent", buildArgs, svc); err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed ("+svc+"): "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "build failed ("+svc+"): "+err.Error())
+			return &UpdateError{Msg: "build failed (" + svc + "): " + err.Error()}
+		}
 	}
 
 	// Step 4: Detached restart — agent calls docker compose up -d via nsenter
