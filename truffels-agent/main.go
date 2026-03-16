@@ -1115,7 +1115,7 @@ func handleComposeUpDetached(w http.ResponseWriter, r *http.Request) {
 	script := fmt.Sprintf(`#!/bin/sh
 sleep 3
 docker compose -f %s down --timeout 60
-docker compose -f %s up -d
+docker compose -f %s up -d --build
 `, composePath, composePath)
 
 	scriptPath := "/tmp/truffels-self-update.sh"
