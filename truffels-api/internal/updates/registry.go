@@ -257,9 +257,12 @@ func checkGitHubRelease(repo, channel string) (string, error) {
 	return result.TagName, nil
 }
 
-// checkGitHubReleaseDev fetches the most recent release (including pre-releases).
+// checkGitHubReleaseDev fetches the most recent release (including pre-releases)
+// by published_at timestamp. We fetch multiple results because GitHub sorts by
+// tag creation date (lexicographic), which mis-orders multi-digit suffixes
+// (e.g. dev.10 sorts before dev.2).
 func checkGitHubReleaseDev(repo string) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=1", repo)
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=20", repo)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
@@ -275,7 +278,8 @@ func checkGitHubReleaseDev(repo string) (string, error) {
 	}
 
 	var results []struct {
-		TagName string `json:"tag_name"`
+		TagName     string `json:"tag_name"`
+		PublishedAt string `json:"published_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
 		return "", fmt.Errorf("github release decode: %w", err)
@@ -285,11 +289,19 @@ func checkGitHubReleaseDev(repo string) (string, error) {
 		return "", fmt.Errorf("github release: no releases found for %s", repo)
 	}
 
-	if results[0].TagName == "" {
+	// Find the release with the most recent published_at timestamp.
+	latest := results[0]
+	for _, r := range results[1:] {
+		if r.PublishedAt > latest.PublishedAt {
+			latest = r
+		}
+	}
+
+	if latest.TagName == "" {
 		return "", fmt.Errorf("github release: empty tag_name for %s", repo)
 	}
 
-	return results[0].TagName, nil
+	return latest.TagName, nil
 }
 
 // matchTagFilter checks if a tag matches the filter pattern.
