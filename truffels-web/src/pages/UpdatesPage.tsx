@@ -33,7 +33,7 @@ function BitbucketIcon() {
 function SourceLinks({ source }: { source?: UpdateSource }) {
   if (!source) return null
 
-  if (source.type === 'dockerhub') {
+  if (source.type === 'dockerhub' || source.type === 'docker_digest') {
     const images = source.images || []
     return (
       <div className="flex items-center gap-1.5 flex-wrap">
