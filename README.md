@@ -49,7 +49,7 @@ Truffels turns a Raspberry Pi 5 into a fully operational Bitcoin node with minin
 | PSU       | Official 27W USB-C                            |
 | OS        | Raspberry Pi OS Lite 64-bit                   |
 
-If using the Geekworm X1001 NVMe HAT, connect the extra 5V power cable to the Pi's GPIO pins — without it the NVMe may brown-out under sustained load.
+If using the Geekworm X1001 NVMe HAT, connect the extra 5V power cable to the Pi's GPIO pins — without it the NVMe may lose power under sustained load and cause crashes or data corruption.
 
 **NVMe is strongly recommended.** Running from an SD card is incredibly slow — initial sync, block explorer indexing, and general responsiveness suffer dramatically. SD card boot is technically supported for pruned nodes or quick testing, but not recommended for daily use.
 
