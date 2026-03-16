@@ -1057,7 +1057,7 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Fetch tags (safe.directory needed: agent runs as root, repo owned by uid 1000)
-	fetchCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags")
+	fetchCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags", "--force")
 	var fetchOut bytes.Buffer
 	fetchCmd.Stdout = &fetchOut
 	fetchCmd.Stderr = &fetchOut
@@ -1084,7 +1084,7 @@ func isValidTag(tag string) bool {
 		return false
 	}
 	for _, c := range tag[1:] {
-		if c != '.' && (c < '0' || c > '9') {
+		if c != '.' && c != '-' && (c < '0' || c > '9') && (c < 'a' || c > 'z') {
 			return false
 		}
 	}
@@ -1180,6 +1180,14 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 		}
 		replacement := fmt.Sprintf("${1}%s:%s", img, req.NewTag)
 		content = re.ReplaceAllString(content, replacement)
+	}
+
+	// Also rewrite VERSION build args (used by truffels self-update)
+	content = strings.ReplaceAll(content, "VERSION: "+req.OldTag, "VERSION: "+req.NewTag)
+
+	if content == string(data) {
+		writeJSON(w, 400, map[string]string{"error": "no tags matched — compose file unchanged"})
+		return
 	}
 
 	if err := os.WriteFile(composePath, []byte(content), 0644); err != nil {

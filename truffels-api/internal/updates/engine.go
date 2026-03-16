@@ -70,6 +70,14 @@ func (e *Engine) isCheckEnabled() bool {
 	return val == "true"
 }
 
+func (e *Engine) getUpdateChannel() string {
+	val, err := e.store.GetSetting("update_channel")
+	if err != nil || val == "" {
+		return "stable"
+	}
+	return val
+}
+
 func (e *Engine) getCheckInterval() time.Duration {
 	val, err := e.store.GetSetting("update_check_interval_hours")
 	if err == nil && val != "" {
@@ -172,7 +180,7 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	}
 
 	// Check latest upstream version
-	latestVersion, err := CheckLatestVersion(src)
+	latestVersion, err := CheckLatestVersion(src, e.getUpdateChannel())
 
 	check := &model.UpdateCheck{
 		ServiceID:      tmpl.ID,

@@ -370,9 +370,11 @@ function UpdatesTab({ settings, saving, onSave }: {
 }) {
   const [enabled, setEnabled] = useState(settings.update_check_enabled)
   const [interval, setInterval] = useState(settings.update_check_interval_hours)
+  const [channel, setChannel] = useState(settings.update_channel || 'stable')
 
   const changed = interval !== settings.update_check_interval_hours
     || enabled !== settings.update_check_enabled
+    || channel !== (settings.update_channel || 'stable')
 
   return (
     <div className="space-y-6">
@@ -408,10 +410,31 @@ function UpdatesTab({ settings, saving, onSave }: {
         <p className="text-xs text-gray-500 mt-2">Min 1 hour, max 168 hours (7 days). Default is 24 hours.</p>
       </Card>
 
+      <Card>
+        <CardTitle>Release Channel</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Controls which Truffels releases are offered for self-update.
+          The dev channel includes pre-releases for testing.
+        </p>
+        <select
+          value={channel}
+          onChange={(e) => setChannel(e.target.value)}
+          className="px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white max-w-xs"
+        >
+          <option value="stable">Stable</option>
+          <option value="dev">Dev (pre-releases)</option>
+        </select>
+        {channel === 'dev' && (
+          <p className="text-xs text-yellow-400 mt-2">
+            Pre-releases may contain bugs. Use for testing only.
+          </p>
+        )}
+      </Card>
+
       <div className="flex justify-end">
         <button
           disabled={!changed || saving || (enabled && (interval < 1 || interval > 168))}
-          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval })}
+          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval, update_channel: channel })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}

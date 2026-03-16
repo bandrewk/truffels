@@ -107,7 +107,7 @@ func TestCheckLatestVersion_DockerHub_PicksFirstStableTag(t *testing.T) {
 		}),
 	}
 
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCheckLatestVersion_DockerHub_FiltersUnstableTags(t *testing.T) {
 		Type:   model.SourceDockerHub,
 		Images: []string{"test/image"},
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCheckLatestVersion_DockerHub_NoSuitableTags(t *testing.T) {
 		Type:   model.SourceDockerHub,
 		Images: []string{"test/image"},
 	}
-	_, err := CheckLatestVersion(src)
+	_, err := CheckLatestVersion(src, "stable")
 	if err == nil {
 		t.Fatal("expected error for no suitable tags")
 	}
@@ -203,7 +203,7 @@ func TestCheckLatestVersion_DockerHub_NoImages(t *testing.T) {
 		Type:   model.SourceDockerHub,
 		Images: []string{},
 	}
-	_, err := CheckLatestVersion(src)
+	_, err := CheckLatestVersion(src, "stable")
 	if err == nil {
 		t.Fatal("expected error for no images")
 	}
@@ -228,7 +228,7 @@ func TestCheckLatestVersion_GitHub_CommitSHA(t *testing.T) {
 		Repo:   "owner/repo",
 		Branch: "main",
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestCheckLatestVersion_GitHub_HTTPError(t *testing.T) {
 		Repo:   "owner/repo",
 		Branch: "main",
 	}
-	_, err := CheckLatestVersion(src)
+	_, err := CheckLatestVersion(src, "stable")
 	if err == nil {
 		t.Fatal("expected error for HTTP 404")
 	}
@@ -282,7 +282,7 @@ func TestCheckLatestVersion_Bitbucket_CommitHash(t *testing.T) {
 		Repo:   "owner/repo",
 		Branch: "master",
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestCheckLatestVersion_UnknownSourceType(t *testing.T) {
 	src := &model.UpdateSource{
 		Type: "ftp",
 	}
-	_, err := CheckLatestVersion(src)
+	_, err := CheckLatestVersion(src, "stable")
 	if err == nil {
 		t.Fatal("expected error for unknown source type")
 	}
@@ -343,7 +343,7 @@ func TestCheckLatestVersion_DockerDigest_Success(t *testing.T) {
 		Images:    []string{"mariadb"},
 		TagFilter: "lts",
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestCheckLatestVersion_DockerDigest_NoImages(t *testing.T) {
 		Type:   model.SourceDockerDigest,
 		Images: []string{},
 	}
-	_, err := CheckLatestVersion(src)
+	_, err := CheckLatestVersion(src, "stable")
 	if err == nil {
 		t.Fatal("expected error for no images")
 	}
@@ -388,7 +388,7 @@ func TestCheckLatestVersion_DockerDigest_DefaultTag(t *testing.T) {
 		Images: []string{"nginx"},
 		// TagFilter empty — should default to "latest"
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestCheckLatestVersion_DockerDigest_DefaultTag(t *testing.T) {
 
 // ---------- GitHub Release ----------
 
-func TestCheckGitHubRelease_Success(t *testing.T) {
+func TestCheckGitHubRelease_StableChannel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/owner/repo/releases/latest" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -412,12 +412,59 @@ func TestCheckGitHubRelease_Success(t *testing.T) {
 	httpClient = newRedirectClient(srv)
 	defer func() { httpClient = original }()
 
-	got, err := checkGitHubRelease("owner/repo")
+	got, err := checkGitHubRelease("owner/repo", "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != "v0.3.0" {
 		t.Errorf("expected v0.3.0, got %s", got)
+	}
+}
+
+func TestCheckGitHubRelease_DevChannel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/releases" {
+			t.Errorf("expected /repos/owner/repo/releases, got %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("per_page") != "1" {
+			t.Errorf("expected per_page=1, got %s", r.URL.Query().Get("per_page"))
+		}
+		releases := []map[string]interface{}{
+			{"tag_name": "v0.3.0-dev.1", "prerelease": true},
+		}
+		_ = json.NewEncoder(w).Encode(releases)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := checkGitHubRelease("owner/repo", "dev")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v0.3.0-dev.1" {
+		t.Errorf("expected v0.3.0-dev.1, got %s", got)
+	}
+}
+
+func TestCheckGitHubRelease_DevChannel_EmptyReleases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	_, err := checkGitHubRelease("owner/repo", "dev")
+	if err == nil {
+		t.Fatal("expected error for empty releases")
+	}
+	if !strings.Contains(err.Error(), "no releases found") {
+		t.Errorf("expected 'no releases found' in error, got: %s", err)
 	}
 }
 
@@ -431,7 +478,7 @@ func TestCheckGitHubRelease_NoReleases(t *testing.T) {
 	httpClient = newRedirectClient(srv)
 	defer func() { httpClient = original }()
 
-	_, err := checkGitHubRelease("owner/repo")
+	_, err := checkGitHubRelease("owner/repo", "stable")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -450,7 +497,7 @@ func TestCheckGitHubRelease_EmptyTag(t *testing.T) {
 	httpClient = newRedirectClient(srv)
 	defer func() { httpClient = original }()
 
-	_, err := checkGitHubRelease("owner/repo")
+	_, err := checkGitHubRelease("owner/repo", "stable")
 	if err == nil {
 		t.Fatal("expected error for empty tag")
 	}
@@ -470,7 +517,7 @@ func TestCheckLatestVersion_GitHubRelease(t *testing.T) {
 		Type: model.SourceGitHubRelease,
 		Repo: "bandrewk/truffels",
 	}
-	got, err := CheckLatestVersion(src)
+	got, err := CheckLatestVersion(src, "stable")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -906,13 +906,13 @@ func TestHandleGitCheckout_MalformedJSON(t *testing.T) {
 }
 
 func TestIsValidTag(t *testing.T) {
-	valid := []string{"v0.1.0", "v1.0", "v0.2.0", "v10.20.30"}
+	valid := []string{"v0.1.0", "v1.0", "v0.2.0", "v10.20.30", "v0.3.0-dev.1", "v1.0.0-rc.2"}
 	for _, tag := range valid {
 		if !isValidTag(tag) {
 			t.Errorf("expected %q to be valid", tag)
 		}
 	}
-	invalid := []string{"", "v", "latest", "main", "0.2.0", "v0.2.0-beta", "v0.2.0; rm -rf /"}
+	invalid := []string{"", "v", "latest", "main", "0.2.0", "v0.2.0; rm -rf /", "v0.2.0\necho pwned", "v0.2.0 DROP TABLE"}
 	for _, tag := range invalid {
 		if isValidTag(tag) {
 			t.Errorf("expected %q to be invalid", tag)
@@ -1139,5 +1139,91 @@ func TestHealthIncludesVersion(t *testing.T) {
 	if body["version"] != "dev" {
 		// Default should be "dev" when not built with ldflags
 		t.Fatalf("expected 'dev', got %q", body["version"])
+	}
+}
+
+// --- handleComposeRewriteTags: VERSION args + change detection ---
+
+func TestRewriteTags_UpdatesVersionArgs(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/truffels", 0755)
+	original := `services:
+  agent:
+    build:
+      args:
+        VERSION: v0.2.2
+    image: truffels/agent:v0.2.2
+  api:
+    build:
+      args:
+        VERSION: v0.2.2
+    image: truffels/api:v0.2.2
+  web:
+    build:
+      args:
+        VERSION: v0.2.2
+    image: truffels/web:v0.2.2
+`
+	_ = os.WriteFile(dir+"/truffels/docker-compose.yml", []byte(original), 0644)
+
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "truffels-agent",
+		Images:    []string{"truffels/agent", "truffels/api", "truffels/web"},
+		OldTag:    "v0.2.2",
+		NewTag:    "v0.3.0",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	data, _ := os.ReadFile(dir + "/truffels/docker-compose.yml")
+	content := string(data)
+	if strings.Contains(content, "v0.2.2") {
+		t.Errorf("old version should not remain, got:\n%s", content)
+	}
+	if !strings.Contains(content, "VERSION: v0.3.0") {
+		t.Errorf("expected VERSION args updated to v0.3.0, got:\n%s", content)
+	}
+	if !strings.Contains(content, "truffels/agent:v0.3.0") {
+		t.Errorf("expected image tag updated to v0.3.0, got:\n%s", content)
+	}
+}
+
+func TestRewriteTags_NoMatchReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/truffels", 0755)
+	original := `services:
+  agent:
+    image: truffels/agent:v0.1.0
+`
+	_ = os.WriteFile(dir+"/truffels/docker-compose.yml", []byte(original), 0644)
+
+	body, _ := json.Marshal(rewriteTagsRequest{
+		ServiceID: "truffels-agent",
+		Images:    []string{"truffels/agent"},
+		OldTag:    "v0.9.9",
+		NewTag:    "v1.0.0",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/rewrite-tags", bytes.NewReader(body))
+
+	handleComposeRewriteTags(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for no match, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "no tags matched") {
+		t.Errorf("expected 'no tags matched' error, got: %s", resp["error"])
 	}
 }

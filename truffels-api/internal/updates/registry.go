@@ -13,7 +13,9 @@ import (
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // CheckLatestVersion queries the upstream source for the latest available version.
-func CheckLatestVersion(src *model.UpdateSource) (string, error) {
+// The channel parameter is only used for SourceGitHubRelease: "dev" includes pre-releases,
+// "stable" (or anything else) uses the /releases/latest endpoint which excludes pre-releases.
+func CheckLatestVersion(src *model.UpdateSource, channel string) (string, error) {
 	switch src.Type {
 	case model.SourceDockerHub:
 		if len(src.Images) == 0 {
@@ -34,7 +36,7 @@ func CheckLatestVersion(src *model.UpdateSource) (string, error) {
 	case model.SourceBitbucket:
 		return checkBitbucket(src.Repo, src.Branch)
 	case model.SourceGitHubRelease:
-		return checkGitHubRelease(src.Repo)
+		return checkGitHubRelease(src.Repo, channel)
 	default:
 		return "", fmt.Errorf("unknown source type: %s", src.Type)
 	}
@@ -216,7 +218,13 @@ func checkBitbucket(repo, branch string) (string, error) {
 }
 
 // checkGitHubRelease returns the latest release tag name from GitHub.
-func checkGitHubRelease(repo string) (string, error) {
+// When channel is "dev", it fetches the most recent release (including pre-releases).
+// Otherwise it uses /releases/latest which excludes pre-releases.
+func checkGitHubRelease(repo, channel string) (string, error) {
+	if channel == "dev" {
+		return checkGitHubReleaseDev(repo)
+	}
+
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 
 	req, _ := http.NewRequest("GET", url, nil)
@@ -247,6 +255,41 @@ func checkGitHubRelease(repo string) (string, error) {
 	}
 
 	return result.TagName, nil
+}
+
+// checkGitHubReleaseDev fetches the most recent release (including pre-releases).
+func checkGitHubReleaseDev(repo string) (string, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=1", repo)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github release request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("github release: HTTP %d for %s", resp.StatusCode, repo)
+	}
+
+	var results []struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return "", fmt.Errorf("github release decode: %w", err)
+	}
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("github release: no releases found for %s", repo)
+	}
+
+	if results[0].TagName == "" {
+		return "", fmt.Errorf("github release: empty tag_name for %s", repo)
+	}
+
+	return results[0].TagName, nil
 }
 
 // matchTagFilter checks if a tag matches the filter pattern.
