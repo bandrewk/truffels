@@ -544,6 +544,7 @@ func parseNetIO(s string) (int64, int64) {
 type buildRequest struct {
 	ServiceID string            `json:"service_id"`
 	BuildArgs map[string]string `json:"build_args,omitempty"`
+	Services  []string          `json:"services,omitempty"` // compose service names to build (empty = all)
 }
 
 func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
@@ -567,6 +568,9 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	dockerArgs := []string{"docker", "compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
 	for k, v := range req.BuildArgs {
 		dockerArgs = append(dockerArgs, "--build-arg", k+"="+v)
+	}
+	for _, svc := range req.Services {
+		dockerArgs = append(dockerArgs, svc)
 	}
 	// Run via nsenter so build-context paths resolve on the host filesystem
 	nsArgs := append([]string{"-t", "1", "-m", "--"}, dockerArgs...)

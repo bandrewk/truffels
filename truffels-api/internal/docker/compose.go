@@ -298,13 +298,15 @@ func (c *ComposeClient) GitCheckout(repoDir, tag string) error {
 }
 
 // BuildWithArgs runs docker compose build with extra build args via the agent.
-func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]string) error {
+// Optional services parameter specifies which compose services to build (empty = all).
+func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]string, services ...string) error {
 	type buildReq struct {
 		ServiceID string            `json:"service_id"`
 		BuildArgs map[string]string `json:"build_args,omitempty"`
+		Services  []string          `json:"services,omitempty"`
 	}
-	body, _ := json.Marshal(buildReq{ServiceID: serviceID, BuildArgs: buildArgs})
-	slog.Info("agent build with args", "service", serviceID, "args", buildArgs)
+	body, _ := json.Marshal(buildReq{ServiceID: serviceID, BuildArgs: buildArgs, Services: services})
+	slog.Info("agent build with args", "service", serviceID, "args", buildArgs, "services", services)
 
 	longClient := &http.Client{Timeout: 20 * time.Minute}
 	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
