@@ -370,6 +370,7 @@ export interface Settings {
   admission_temp_max: number
   update_check_interval_hours: number
   update_check_enabled: boolean
+  update_channel: string
   services_show_memory: boolean
   services_show_ports: boolean
 }
