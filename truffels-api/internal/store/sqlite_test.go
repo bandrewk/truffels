@@ -355,6 +355,59 @@ func TestAlerts_ServiceScoped(t *testing.T) {
 	}
 }
 
+func TestAlerts_ResolveByID(t *testing.T) {
+	s := newTestStore(t)
+	_ = s.UpsertAlert(&model.Alert{
+		Type: "update_failed", Severity: model.SeverityCritical,
+		ServiceID: "truffels-api", Message: "git fetch failed",
+	})
+
+	active, _ := s.GetActiveAlerts()
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active, got %d", len(active))
+	}
+
+	err := s.ResolveAlertByID(active[0].ID)
+	if err != nil {
+		t.Fatalf("resolve by id: %v", err)
+	}
+
+	active, _ = s.GetActiveAlerts()
+	if len(active) != 0 {
+		t.Fatalf("expected 0 active after resolve, got %d", len(active))
+	}
+
+	all, _ := s.GetAllAlerts(10)
+	if len(all) != 1 || !all[0].Resolved {
+		t.Fatal("expected resolved alert in all")
+	}
+}
+
+func TestAlerts_ResolveByID_AlreadyResolved(t *testing.T) {
+	s := newTestStore(t)
+	_ = s.UpsertAlert(&model.Alert{
+		Type: "update_failed", Severity: model.SeverityCritical,
+		ServiceID: "truffels-api", Message: "git fetch failed",
+	})
+
+	active, _ := s.GetActiveAlerts()
+	id := active[0].ID
+
+	_ = s.ResolveAlertByID(id)
+	err := s.ResolveAlertByID(id)
+	if err == nil {
+		t.Fatal("expected error for already resolved alert")
+	}
+}
+
+func TestAlerts_ResolveByID_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.ResolveAlertByID(99999)
+	if err == nil {
+		t.Fatal("expected error for nonexistent alert")
+	}
+}
+
 func TestAlerts_GetAllLimit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {

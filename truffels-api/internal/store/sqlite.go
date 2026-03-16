@@ -242,6 +242,20 @@ func (s *Store) UpsertAlert(a *model.Alert) error {
 	return err
 }
 
+// ResolveAlertByID marks a single alert as resolved by its ID.
+func (s *Store) ResolveAlertByID(id int64) error {
+	res, err := s.db.Exec(
+		`UPDATE alerts SET resolved = 1, resolved_at = datetime('now') WHERE id = ? AND resolved = 0`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("alert %d not found or already resolved", id)
+	}
+	return nil
+}
+
 // ResolveAlerts marks all active alerts of a type+service as resolved.
 func (s *Store) ResolveAlerts(alertType, serviceID string) error {
 	_, err := s.db.Exec(

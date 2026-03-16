@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -553,6 +554,59 @@ func TestSystemShutdown_AuditLog(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected system_shutdown audit entry")
+	}
+}
+
+// --- Resolve Alert ---
+
+func TestResolveAlert_Success(t *testing.T) {
+	srv, st := newTestServer(t)
+	_ = st.UpsertAlert(&model.Alert{
+		Type: "update_failed", Severity: model.SeverityCritical,
+		ServiceID: "truffels-api", Message: "git fetch failed",
+	})
+
+	active, _ := st.GetActiveAlerts()
+	id := active[0].ID
+
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "POST",
+		"/api/truffels/alerts/"+fmt.Sprintf("%d", id)+"/resolve", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	active, _ = st.GetActiveAlerts()
+	if len(active) != 0 {
+		t.Fatalf("expected 0 active after resolve, got %d", len(active))
+	}
+}
+
+func TestResolveAlert_NotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "POST",
+		"/api/truffels/alerts/99999/resolve", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 404 {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestResolveAlert_InvalidID(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "POST",
+		"/api/truffels/alerts/abc/resolve", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

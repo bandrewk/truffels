@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 
 	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
@@ -90,6 +93,20 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		alerts = []model.Alert{}
 	}
 	writeJSON(w, http.StatusOK, alerts)
+}
+
+func (s *Server) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid alert id")
+		return
+	}
+	if err := s.store.ResolveAlertByID(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // deriveState computes the overall service state from container states.
