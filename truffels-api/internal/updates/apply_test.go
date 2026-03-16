@@ -118,6 +118,9 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(states)
 
+		case "/v1/image/remove":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		default:
 			w.WriteHeader(404)
 		}

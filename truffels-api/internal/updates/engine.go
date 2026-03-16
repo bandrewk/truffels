@@ -533,6 +533,9 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 		HasUpdate:      false,
 	})
 
+	// Prune old images in the background
+	go e.pruneOldImages(serviceID, src)
+
 	return nil
 }
 
@@ -769,10 +772,82 @@ func (e *Engine) reconcileStuckUpdates() {
 				LatestVersion:  l.ToVersion,
 				HasUpdate:      false,
 			})
+			// Prune old images after successful self-update
+			if reconTmpl, reconOK := e.registry.Get(l.ServiceID); reconOK && reconTmpl.UpdateSource != nil {
+				go e.pruneOldImages(l.ServiceID, reconTmpl.UpdateSource)
+			}
 		} else {
 			slog.Error("reconcile: update appears to have failed", "service", l.ServiceID)
 			_ = e.store.UpdateLogStatus(l.ID, model.UpdateFailed, "unhealthy after self-update restart", "")
 			e.alertUpdateFailed(l.ServiceID, "unhealthy after self-update restart")
+		}
+	}
+}
+
+// pruneOldImages removes old Docker images after a successful update.
+// Keeps the current version (just updated to) and the N-1 version (for rollback).
+// Respects the update_keep_old_images setting.
+func (e *Engine) pruneOldImages(serviceID string, src *model.UpdateSource) {
+	// Check setting
+	val, err := e.store.GetSetting("update_keep_old_images")
+	if err == nil && val == "true" {
+		slog.Info("prune: skipping (update_keep_old_images=true)", "service", serviceID)
+		return
+	}
+
+	logs, err := e.store.GetUpdateLogs(serviceID, 20)
+	if err != nil {
+		slog.Warn("prune: failed to get update logs", "service", serviceID, "err", err)
+		return
+	}
+
+	// Collect versions to keep: current (latest done.ToVersion) and N-1 (first done.FromVersion)
+	keepVersions := map[string]bool{}
+	foundN1 := false
+	for _, l := range logs {
+		if l.Status != model.UpdateDone {
+			continue
+		}
+		keepVersions[l.ToVersion] = true
+		if !foundN1 {
+			keepVersions[l.FromVersion] = true
+			foundN1 = true
+		}
+		break
+	}
+
+	if len(keepVersions) == 0 {
+		return
+	}
+
+	// Collect old versions to remove
+	var removeVersions []string
+	for _, l := range logs {
+		if l.Status != model.UpdateDone {
+			continue
+		}
+		// Check both from and to versions
+		for _, v := range []string{l.FromVersion, l.ToVersion} {
+			if v == "" || keepVersions[v] {
+				continue
+			}
+			removeVersions = append(removeVersions, v)
+		}
+	}
+
+	// Deduplicate
+	seen := map[string]bool{}
+	for _, v := range removeVersions {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		for _, img := range src.Images {
+			ref := img + ":" + v
+			slog.Info("prune: removing old image", "image", ref)
+			if err := e.compose.RemoveImage(ref); err != nil {
+				slog.Warn("prune: remove image failed (best-effort)", "image", ref, "err", err)
+			}
 		}
 	}
 }

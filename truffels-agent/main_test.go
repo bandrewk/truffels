@@ -1312,3 +1312,96 @@ func TestRewriteTags_AlreadyAtTargetReturnsOK(t *testing.T) {
 		t.Fatalf("expected 200 for already-at-target, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// --- handleImageRemove ---
+
+func TestHandleImageRemove_AllowedImage(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": "truffels/api:v0.3.0-dev.1"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	// docker rmi will fail in CI (image doesn't exist), but should return 200 (best-effort)
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (best-effort), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImageRemove_DeniedImage(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": "nginx:latest"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["error"] != "image not allowed" {
+		t.Fatalf("expected 'image not allowed', got %q", body["error"])
+	}
+}
+
+func TestHandleImageRemove_EmptyImage(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": ""})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageRemove_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader([]byte("bad")))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageRemove_AllowedPrefixes(t *testing.T) {
+	allowed := []string{
+		"truffels/agent:v1.0", "mempool/backend:v3.2", "btcpayserver/bitcoin:30",
+		"getumbrel/electrs:v0.11", "caddy:2.11", "postgres:16", "mariadb:lts",
+	}
+	for _, img := range allowed {
+		reqBody, _ := json.Marshal(map[string]string{"image": img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+		handleImageRemove(w, r)
+		if w.Code == 403 {
+			t.Errorf("image %q should be allowed, got 403", img)
+		}
+	}
+}
+
+// --- handleDockerPrune ---
+
+func TestHandleDockerPrune_ReturnsJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/docker/prune", bytes.NewReader([]byte("{}")))
+
+	handleDockerPrune(w, r)
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	// docker commands will fail in CI but should still return JSON
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+}

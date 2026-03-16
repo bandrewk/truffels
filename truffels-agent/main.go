@@ -81,6 +81,8 @@ func main() {
 	mux.HandleFunc("POST /v1/git/checkout", handleGitCheckout)
 	mux.HandleFunc("POST /v1/compose/up-detached", handleComposeUpDetached)
 	mux.HandleFunc("POST /v1/compose/rewrite-tags", handleComposeRewriteTags)
+	mux.HandleFunc("POST /v1/image/remove", handleImageRemove)
+	mux.HandleFunc("POST /v1/docker/prune", handleDockerPrune)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
 
@@ -352,6 +354,109 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+}
+
+// allowedImagePrefixes controls which images can be removed via /v1/image/remove.
+var allowedImagePrefixes = []string{
+	"truffels/", "mempool/", "btcpayserver/", "getumbrel/",
+	"caddy:", "postgres:", "mariadb:",
+}
+
+func handleImageRemove(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Image string `json:"image"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Image == "" {
+		writeJSON(w, 400, map[string]string{"error": "image required"})
+		return
+	}
+
+	// Allowlist check
+	allowed := false
+	for _, prefix := range allowedImagePrefixes {
+		if strings.HasPrefix(req.Image, prefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		writeJSON(w, 403, map[string]string{"error": "image not allowed"})
+		return
+	}
+
+	slog.Info("removing image", "image", req.Image)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "rmi", req.Image)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		// Best-effort: log warning but return OK for "in use" or "not found" errors
+		errMsg := out.String()
+		slog.Warn("image remove failed (best-effort)", "image", req.Image, "err", errMsg)
+		writeJSON(w, 200, map[string]string{"status": "ok", "warning": errMsg})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
+	slog.Info("docker prune requested")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var totalReclaimed bytes.Buffer
+
+	// Builder prune
+	cmd := exec.CommandContext(ctx, "docker", "builder", "prune", "-a", "-f")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		slog.Warn("builder prune failed", "err", err)
+	}
+	totalReclaimed.WriteString(out.String())
+
+	// Image prune
+	out.Reset()
+	cmd = exec.CommandContext(ctx, "docker", "image", "prune", "-a", "-f")
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		slog.Warn("image prune failed", "err", err)
+	}
+	totalReclaimed.WriteString(out.String())
+
+	// System prune
+	out.Reset()
+	cmd = exec.CommandContext(ctx, "docker", "system", "prune", "-f")
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		slog.Warn("system prune failed", "err", err)
+	}
+	totalReclaimed.WriteString(out.String())
+
+	// Extract reclaimed sizes from output
+	reclaimed := "unknown"
+	lines := strings.Split(totalReclaimed.String(), "\n")
+	var reclaimedParts []string
+	for _, line := range lines {
+		if strings.Contains(line, "reclaimed") {
+			reclaimedParts = append(reclaimedParts, strings.TrimSpace(line))
+		}
+	}
+	if len(reclaimedParts) > 0 {
+		reclaimed = strings.Join(reclaimedParts, "; ")
+	}
+
+	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
 }
 
 type imageInspectRequest struct {
@@ -643,17 +748,25 @@ func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 
 // --- System Info ---
 
+type dockerStorageItem struct {
+	Type        string `json:"type"`
+	Count       int    `json:"count"`
+	TotalSize   string `json:"total_size"`
+	Reclaimable string `json:"reclaimable"`
+}
+
 type systemInfoResponse struct {
-	Hostname string           `json:"hostname"`
-	OS       string           `json:"os"`
-	Kernel   string           `json:"kernel"`
-	Model    string           `json:"model"`
-	CPUCores int              `json:"cpu_cores"`
-	MemTotal string           `json:"mem_total"`
-	MemFree  string           `json:"mem_free"`
-	Uptime   string           `json:"uptime"`
-	Networks []networkIfInfo  `json:"networks"`
-	Storage  []storageInfo    `json:"storage"`
+	Hostname      string              `json:"hostname"`
+	OS            string              `json:"os"`
+	Kernel        string              `json:"kernel"`
+	Model         string              `json:"model"`
+	CPUCores      int                 `json:"cpu_cores"`
+	MemTotal      string              `json:"mem_total"`
+	MemFree       string              `json:"mem_free"`
+	Uptime        string              `json:"uptime"`
+	Networks      []networkIfInfo     `json:"networks"`
+	Storage       []storageInfo       `json:"storage"`
+	DockerStorage []dockerStorageItem `json:"docker_storage,omitempty"`
 }
 
 type networkIfInfo struct {
@@ -784,17 +897,48 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Docker storage: run docker system df and parse output
+	var dockerStorage []dockerStorageItem
+	dockerCtx, dockerCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dockerCancel()
+	dockerCmd := exec.CommandContext(dockerCtx, "docker", "system", "df", "--format", "{{json .}}")
+	var dockerOut bytes.Buffer
+	dockerCmd.Stdout = &dockerOut
+	if err := dockerCmd.Run(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(dockerOut.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			var item struct {
+				Type        string `json:"Type"`
+				TotalCount  string `json:"TotalCount"`
+				Size        string `json:"Size"`
+				Reclaimable string `json:"Reclaimable"`
+			}
+			if err := json.Unmarshal([]byte(line), &item); err == nil {
+				count, _ := strconv.Atoi(item.TotalCount)
+				dockerStorage = append(dockerStorage, dockerStorageItem{
+					Type:        item.Type,
+					Count:       count,
+					TotalSize:   item.Size,
+					Reclaimable: item.Reclaimable,
+				})
+			}
+		}
+	}
+
 	writeJSON(w, 200, systemInfoResponse{
-		Hostname: hostname,
-		OS:       osRelease,
-		Kernel:   kernel,
-		Model:    model,
-		CPUCores: cpuCores,
-		MemTotal: memTotal,
-		MemFree:  memFree,
-		Uptime:   uptime,
-		Networks: networks,
-		Storage:  storage,
+		Hostname:      hostname,
+		OS:            osRelease,
+		Kernel:        kernel,
+		Model:         model,
+		CPUCores:      cpuCores,
+		MemTotal:      memTotal,
+		MemFree:       memFree,
+		Uptime:        uptime,
+		Networks:      networks,
+		Storage:       storage,
+		DockerStorage: dockerStorage,
 	})
 }
 
