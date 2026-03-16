@@ -28,6 +28,14 @@ func NewAgentInspector(agentURL string) *AgentInspector {
 	return ai
 }
 
+// SetAgentInspector replaces the global agentClient and returns the previous value.
+// Used by tests outside this package to save/restore the inspector.
+func SetAgentInspector(ai *AgentInspector) *AgentInspector {
+	old := agentClient
+	agentClient = ai
+	return old
+}
+
 type inspectRequest struct {
 	Containers []string `json:"containers"`
 }

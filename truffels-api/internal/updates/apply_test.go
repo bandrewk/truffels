@@ -786,27 +786,11 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 
 	tmpls := []model.ServiceTemplate{
 		{
-			ID: "truffels-agent", ComposeDir: composeDir,
-			ContainerNames: []string{"truffels-agent"},
+			ID: "truffels", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
 			UpdateSource: &model.UpdateSource{
 				Type: model.SourceGitHubRelease, Repo: "owner/repo",
-				Images: []string{"truffels/agent"}, NeedsBuild: true,
-			},
-		},
-		{
-			ID: "truffels-api", ComposeDir: composeDir,
-			ContainerNames: []string{"truffels-api"},
-			UpdateSource: &model.UpdateSource{
-				Type: model.SourceGitHubRelease, Repo: "owner/repo",
-				Images: []string{"truffels/api"}, NeedsBuild: true,
-			},
-		},
-		{
-			ID: "truffels-web", ComposeDir: composeDir,
-			ContainerNames: []string{"truffels-web"},
-			UpdateSource: &model.UpdateSource{
-				Type: model.SourceGitHubRelease, Repo: "owner/repo",
-				Images: []string{"truffels/web"}, NeedsBuild: true,
+				Images: []string{"truffels/agent", "truffels/api", "truffels/web"}, NeedsBuild: true,
 			},
 		},
 	}
@@ -814,13 +798,13 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 	eng, st := newTestEngine(t, agent, tmpls)
 
 	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
-		ServiceID:      "truffels-agent",
+		ServiceID:      "truffels",
 		CurrentVersion: "v0.1.0",
 		LatestVersion:  "v0.2.0",
 		HasUpdate:      true,
 	})
 
-	err := eng.ApplyUpdate("truffels-agent")
+	err := eng.ApplyUpdate("truffels")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -838,23 +822,13 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 		t.Error("expected web image tag updated to v0.2.0")
 	}
 
-	// Verify primary log is "restarting" (will be reconciled on startup)
-	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	// Verify single update log is "restarting" (will be reconciled on startup)
+	logs, _ := st.GetUpdateLogs("truffels", 5)
 	if len(logs) == 0 {
-		t.Fatal("expected update log for truffels-agent")
+		t.Fatal("expected update log for truffels")
 	}
 	if logs[0].Status != model.UpdateRestarting {
 		t.Errorf("expected status restarting, got %s", logs[0].Status)
-	}
-
-	// Verify sibling logs were created
-	apiLogs, _ := st.GetUpdateLogs("truffels-api", 5)
-	if len(apiLogs) == 0 {
-		t.Fatal("expected update log for truffels-api")
-	}
-	webLogs, _ := st.GetUpdateLogs("truffels-web", 5)
-	if len(webLogs) == 0 {
-		t.Fatal("expected update log for truffels-web")
 	}
 }
 
@@ -871,11 +845,11 @@ func TestApplySelfUpdate_BuildFailure(t *testing.T) {
 
 	tmpls := []model.ServiceTemplate{
 		{
-			ID: "truffels-agent", ComposeDir: composeDir,
-			ContainerNames: []string{"truffels-agent"},
+			ID: "truffels", ComposeDir: composeDir,
+			ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
 			UpdateSource: &model.UpdateSource{
 				Type: model.SourceGitHubRelease, Repo: "owner/repo",
-				Images: []string{"truffels/agent"}, NeedsBuild: true,
+				Images: []string{"truffels/agent", "truffels/api", "truffels/web"}, NeedsBuild: true,
 			},
 		},
 	}
@@ -883,13 +857,13 @@ func TestApplySelfUpdate_BuildFailure(t *testing.T) {
 	eng, st := newTestEngine(t, agent, tmpls)
 
 	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
-		ServiceID:      "truffels-agent",
+		ServiceID:      "truffels",
 		CurrentVersion: "v0.1.0",
 		LatestVersion:  "v0.2.0",
 		HasUpdate:      true,
 	})
 
-	err := eng.ApplyUpdate("truffels-agent")
+	err := eng.ApplyUpdate("truffels")
 	if err == nil {
 		t.Fatal("expected error for build failure")
 	}
@@ -898,7 +872,7 @@ func TestApplySelfUpdate_BuildFailure(t *testing.T) {
 	}
 
 	// Verify log shows failed
-	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	logs, _ := st.GetUpdateLogs("truffels", 5)
 	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
 		t.Error("expected failed update log")
 	}
@@ -912,8 +886,8 @@ func TestReconcileStuckUpdates_HealthyMarkedDone(t *testing.T) {
 
 	tmpls := []model.ServiceTemplate{
 		{
-			ID:             "truffels-agent",
-			ContainerNames: []string{"truffels-agent"},
+			ID:             "truffels",
+			ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
 		},
 	}
 
@@ -921,7 +895,7 @@ func TestReconcileStuckUpdates_HealthyMarkedDone(t *testing.T) {
 
 	// Create a stuck "restarting" log
 	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
-		ServiceID:   "truffels-agent",
+		ServiceID:   "truffels",
 		FromVersion: "v0.1.0",
 		ToVersion:   "v0.2.0",
 		Status:      model.UpdatePending,
@@ -932,7 +906,7 @@ func TestReconcileStuckUpdates_HealthyMarkedDone(t *testing.T) {
 	eng.reconcileStuckUpdates()
 
 	// Verify it was marked done (mock agent returns healthy containers)
-	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	logs, _ := st.GetUpdateLogs("truffels", 5)
 	if len(logs) == 0 {
 		t.Fatal("expected update log")
 	}
@@ -947,15 +921,15 @@ func TestReconcileStuckUpdates_UnhealthyMarkedFailed(t *testing.T) {
 
 	tmpls := []model.ServiceTemplate{
 		{
-			ID:             "truffels-agent",
-			ContainerNames: []string{"truffels-agent"},
+			ID:             "truffels",
+			ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
 		},
 	}
 
 	eng, st := newTestEngine(t, agent, tmpls)
 
 	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
-		ServiceID:   "truffels-agent",
+		ServiceID:   "truffels",
 		FromVersion: "v0.1.0",
 		ToVersion:   "v0.2.0",
 		Status:      model.UpdatePending,
@@ -964,7 +938,7 @@ func TestReconcileStuckUpdates_UnhealthyMarkedFailed(t *testing.T) {
 
 	eng.reconcileStuckUpdates()
 
-	logs, _ := st.GetUpdateLogs("truffels-agent", 5)
+	logs, _ := st.GetUpdateLogs("truffels", 5)
 	if len(logs) == 0 {
 		t.Fatal("expected update log")
 	}
@@ -978,7 +952,7 @@ func TestReconcileStuckUpdates_NoStuckLogs(t *testing.T) {
 	defer agent.Close()
 
 	tmpls := []model.ServiceTemplate{
-		{ID: "truffels-agent", ContainerNames: []string{"truffels-agent"}},
+		{ID: "truffels", ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"}},
 	}
 
 	eng, _ := newTestEngine(t, agent, tmpls)

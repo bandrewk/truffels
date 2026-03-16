@@ -202,7 +202,7 @@ export interface PreflightResult {
 }
 
 export interface UpdateSource {
-  type: 'dockerhub' | 'github' | 'bitbucket'
+  type: 'dockerhub' | 'github' | 'bitbucket' | 'github_release' | 'docker_digest'
   images?: string[]
   repo?: string
   branch?: string

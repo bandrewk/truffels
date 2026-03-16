@@ -51,56 +51,20 @@ var CkstatsDB = model.ServiceTemplate{
 	},
 }
 
-var TruffelsAgent = model.ServiceTemplate{
-	ID:             "truffels-agent",
-	DisplayName:    "Truffels Agent",
-	Description:    "Privileged Docker mediator",
+// Truffels is the unified entry for the truffels stack (agent + api + web).
+var Truffels = model.ServiceTemplate{
+	ID:             "truffels",
+	DisplayName:    "Truffels",
+	Description:    "Truffels stack (agent, API, web UI)",
 	ComposeDir:     "truffels",
-	ContainerNames: []string{"truffels-agent"},
+	ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
+	Port:           "8080 (API + web), 9090 (agent)",
 	Dependencies:   nil,
-	MemoryLimit:    "128M",
-	Port:           "9090 (internal)",
 	ReadOnly:       false,
 	UpdateSource: &model.UpdateSource{
 		Type:       model.SourceGitHubRelease,
 		Repo:       "bandrewk/truffels",
-		Images:     []string{"truffels/agent"},
-		NeedsBuild: true,
-	},
-}
-
-var TruffelsAPI = model.ServiceTemplate{
-	ID:             "truffels-api",
-	DisplayName:    "Truffels API",
-	Description:    "Go control plane backend",
-	ComposeDir:     "truffels",
-	ContainerNames: []string{"truffels-api"},
-	Dependencies:   nil,
-	MemoryLimit:    "256M",
-	Port:           "8080 (internal)",
-	ReadOnly:       false,
-	UpdateSource: &model.UpdateSource{
-		Type:       model.SourceGitHubRelease,
-		Repo:       "bandrewk/truffels",
-		Images:     []string{"truffels/api"},
-		NeedsBuild: true,
-	},
-}
-
-var TruffelsWeb = model.ServiceTemplate{
-	ID:             "truffels-web",
-	DisplayName:    "Truffels Web",
-	Description:    "React admin UI",
-	ComposeDir:     "truffels",
-	ContainerNames: []string{"truffels-web"},
-	Dependencies:   nil,
-	MemoryLimit:    "64M",
-	Port:           "8080 (internal)",
-	ReadOnly:       false,
-	UpdateSource: &model.UpdateSource{
-		Type:       model.SourceGitHubRelease,
-		Repo:       "bandrewk/truffels",
-		Images:     []string{"truffels/web"},
+		Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
 		NeedsBuild: true,
 	},
 }

@@ -81,6 +81,9 @@ func (e *Engine) loop() {
 }
 
 func (e *Engine) evaluate() {
+	if e.collector == nil {
+		return
+	}
 	host := e.collector.Collect()
 
 	// Disk usage alerts

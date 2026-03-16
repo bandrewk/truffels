@@ -411,6 +411,7 @@ func TestCheckTemp_CustomCritical(t *testing.T) {
 // and sets the docker package's global agentClient. Returns cleanup function.
 func setupMockAgent(t *testing.T, states map[string]model.ContainerState) {
 	t.Helper()
+	old := docker.SetAgentInspector(nil) // save current
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Containers []string `json:"containers"`
@@ -427,7 +428,10 @@ func setupMockAgent(t *testing.T, states map[string]model.ContainerState) {
 		}
 		_ = json.NewEncoder(w).Encode(result)
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(func() {
+		srv.Close()
+		docker.SetAgentInspector(old)
+	})
 	docker.NewAgentInspector(srv.URL)
 }
 
