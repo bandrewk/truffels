@@ -801,18 +801,14 @@ func (e *Engine) pruneOldImages(serviceID string, src *model.UpdateSource) {
 		return
 	}
 
-	// Collect versions to keep: current (latest done.ToVersion) and N-1 (first done.FromVersion)
+	// Collect versions to keep: current (latest done.ToVersion) and N-1 (fromVersion)
 	keepVersions := map[string]bool{}
-	foundN1 := false
 	for _, l := range logs {
 		if l.Status != model.UpdateDone {
 			continue
 		}
 		keepVersions[l.ToVersion] = true
-		if !foundN1 {
-			keepVersions[l.FromVersion] = true
-			foundN1 = true
-		}
+		keepVersions[l.FromVersion] = true
 		break
 	}
 
