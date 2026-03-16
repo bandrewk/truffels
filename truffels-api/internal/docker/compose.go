@@ -342,6 +342,30 @@ func (c *ComposeClient) ComposeUpDetached(serviceID string) error {
 	return nil
 }
 
+// RewriteTags rewrites image tags in a compose file via the agent.
+func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, newTag string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"service_id": serviceID,
+		"images":     images,
+		"old_tag":    oldTag,
+		"new_tag":    newTag,
+	})
+	slog.Info("agent rewrite tags", "service", serviceID, "old", oldTag, "new", newTag)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/rewrite-tags", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent rewrite tags: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent rewrite tags: %s", ar.Error)
+	}
+	return nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)
