@@ -69,6 +69,11 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
       icon = <BitbucketIcon />
       label = source.repo || 'Bitbucket'
       break
+    case 'github_release':
+      url = `https://github.com/${source.repo || ''}`
+      icon = <GitHubIcon />
+      label = source.repo || 'GitHub'
+      break
     default:
       return null
   }
@@ -105,16 +110,19 @@ export default function UpdatesPage() {
     setCheckMsg(null)
     try {
       await api.checkUpdates()
-      // Poll until checks are updated (max 15s)
-      const before = status?.checks?.map(c => c.checked_at).join(',') || ''
+      // Poll until ALL services have a newer checked_at (max 30s)
+      const beforeMap = new Map(
+        (status?.checks || []).map(c => [c.service_id, c.checked_at])
+      )
       let attempts = 0
       const poll = async () => {
-        while (attempts < 10) {
+        while (attempts < 20) {
           attempts++
           await new Promise(r => setTimeout(r, 1500))
           const fresh = await api.updateStatus()
-          const after = fresh.checks?.map(c => c.checked_at).join(',') || ''
-          if (after !== before) {
+          const allUpdated = (fresh.checks || []).length > 0 &&
+            (fresh.checks || []).every(c => c.checked_at !== beforeMap.get(c.service_id))
+          if (allUpdated) {
             refreshStatus()
             refreshLogs()
             const pending = fresh.pending_count || 0
@@ -214,7 +222,15 @@ export default function UpdatesPage() {
             disabled={actionPending !== null}
             className="px-4 py-2 text-sm rounded bg-surface-overlay hover:bg-surface-raised text-gray-200 transition-colors disabled:opacity-50"
           >
-            {actionPending === 'check' ? 'Checking...' : 'Check Now'}
+            {actionPending === 'check' ? (
+              <span className="inline-flex items-center gap-1.5">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Checking...
+              </span>
+            ) : 'Check Now'}
           </button>
           {pendingCount > 0 && (
             <button
