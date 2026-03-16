@@ -339,6 +339,13 @@ export interface StorageInfo {
   use_pct: string
 }
 
+export interface DockerStorageItem {
+  type: string
+  count: number
+  total_size: string
+  reclaimable: string
+}
+
 export interface SystemInfo {
   hostname: string
   os: string
@@ -350,6 +357,7 @@ export interface SystemInfo {
   uptime: string
   networks: NetworkIfInfo[]
   storage: StorageInfo[]
+  docker_storage?: DockerStorageItem[]
 }
 
 export interface SystemTuning {
@@ -373,6 +381,7 @@ export interface Settings {
   update_channel: string
   services_show_memory: boolean
   services_show_ports: boolean
+  update_keep_old_images: boolean
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
@@ -433,4 +442,6 @@ export const api = {
   systemTuning: () => get<SystemTuning>('/system/tuning'),
   setSystemTuning: (action: string, value: string) =>
     post<{ status: string }>('/system/tuning', { action, value }),
+  dockerPrune: (password: string) =>
+    post<{ status: string; reclaimed: string }>('/system/docker-prune', { password }),
 }

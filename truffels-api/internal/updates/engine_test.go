@@ -1,6 +1,9 @@
 package updates
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -917,4 +920,129 @@ func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 	if !found {
 		t.Error("expected a passing 'update_available' check")
 	}
+}
+
+// --- pruneOldImages tests ---
+
+func TestPruneOldImages_KeepsCurrentAndN1(t *testing.T) {
+	var removedImages []string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/image/remove":
+			var req struct{ Image string `json:"image"` }
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			removedImages = append(removedImages, req.Image)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/v1/inspect":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"name": "truffels-electrs", "status": "running", "health": "healthy"},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		}
+	}))
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-electrs"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceDockerHub,
+			Images: []string{"getumbrel/electrs"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// Create update history: v0.9 → v0.10 → v0.11 (current)
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "electrs", FromVersion: "v0.9.0", ToVersion: "v0.10.0", Status: model.UpdateDone,
+	})
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "electrs", FromVersion: "v0.10.0", ToVersion: "v0.11.0", Status: model.UpdateDone,
+	})
+
+	eng.pruneOldImages("electrs", tmpl.UpdateSource)
+
+	// Should keep v0.11.0 (current=toVersion) and v0.10.0 (N-1=fromVersion of most recent done)
+	// Should remove v0.9.0
+	if len(removedImages) != 1 {
+		t.Fatalf("expected 1 image removed, got %d: %v", len(removedImages), removedImages)
+	}
+	if removedImages[0] != "getumbrel/electrs:v0.9.0" {
+		t.Errorf("expected getumbrel/electrs:v0.9.0 removed, got %q", removedImages[0])
+	}
+}
+
+func TestPruneOldImages_RespectsSetting(t *testing.T) {
+	var removedImages []string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/image/remove":
+			var req struct{ Image string `json:"image"` }
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			removedImages = append(removedImages, req.Image)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/v1/inspect":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"name": "truffels-electrs", "status": "running", "health": "healthy"},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		}
+	}))
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-electrs"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceDockerHub,
+			Images: []string{"getumbrel/electrs"},
+		},
+	}
+
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// Set keep_old_images to true
+	_ = st.SetSetting("update_keep_old_images", "true")
+
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "electrs", FromVersion: "v0.9.0", ToVersion: "v0.10.0", Status: model.UpdateDone,
+	})
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "electrs", FromVersion: "v0.10.0", ToVersion: "v0.11.0", Status: model.UpdateDone,
+	})
+
+	eng.pruneOldImages("electrs", tmpl.UpdateSource)
+
+	// Should NOT remove anything when setting is true
+	if len(removedImages) != 0 {
+		t.Fatalf("expected 0 images removed when keep_old_images=true, got %d: %v", len(removedImages), removedImages)
+	}
+}
+
+func TestPruneOldImages_NoLogs(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-electrs"},
+		UpdateSource: &model.UpdateSource{
+			Type:   model.SourceDockerHub,
+			Images: []string{"getumbrel/electrs"},
+		},
+	}
+
+	eng, _ := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// Should not panic with no logs
+	eng.pruneOldImages("electrs", tmpl.UpdateSource)
 }

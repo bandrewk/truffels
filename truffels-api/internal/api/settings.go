@@ -21,6 +21,7 @@ var settingsDefaults = map[string]string{
 	"update_channel":                 "stable",
 	"services_show_memory":           "false",
 	"services_show_ports":            "true",
+	"update_keep_old_images":         "false",
 }
 
 type settingsResponse struct {
@@ -37,6 +38,7 @@ type settingsResponse struct {
 	UpdateChannel            string  `json:"update_channel"`
 	ServicesShowMemory       bool    `json:"services_show_memory"`
 	ServicesShowPorts         bool    `json:"services_show_ports"`
+	UpdateKeepOldImages      bool    `json:"update_keep_old_images"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		UpdateChannel:            s.getSettingStr("update_channel", "stable"),
 		ServicesShowMemory:       s.getSettingStr("services_show_memory", "false") == "true",
 		ServicesShowPorts:         s.getSettingStr("services_show_ports", "true") == "true",
+		UpdateKeepOldImages:      s.getSettingStr("update_keep_old_images", "false") == "true",
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -147,6 +150,33 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// --- Docker Prune ---
+
+func (s *Server) handleDockerPrune(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	ok, err := s.auth.CheckPassword(body.Password)
+	if err != nil || !ok {
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+
+	reclaimed, err := s.compose.DockerPrune()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	_ = s.store.LogAudit("docker_prune", "", "Docker prune: "+reclaimed, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reclaimed": reclaimed})
 }
 
 // --- System Info ---

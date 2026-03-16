@@ -193,18 +193,27 @@ type StorageInfo struct {
 	UsePct string `json:"use_pct"`
 }
 
+// DockerStorageItem represents a row from docker system df.
+type DockerStorageItem struct {
+	Type        string `json:"type"`
+	Count       int    `json:"count"`
+	TotalSize   string `json:"total_size"`
+	Reclaimable string `json:"reclaimable"`
+}
+
 // SystemInfo represents host system information.
 type SystemInfo struct {
-	Hostname string          `json:"hostname"`
-	OS       string          `json:"os"`
-	Kernel   string          `json:"kernel"`
-	Model    string          `json:"model"`
-	CPUCores int             `json:"cpu_cores"`
-	MemTotal string          `json:"mem_total"`
-	MemFree  string          `json:"mem_free"`
-	Uptime   string          `json:"uptime"`
-	Networks []NetworkIfInfo `json:"networks"`
-	Storage  []StorageInfo   `json:"storage"`
+	Hostname      string              `json:"hostname"`
+	OS            string              `json:"os"`
+	Kernel        string              `json:"kernel"`
+	Model         string              `json:"model"`
+	CPUCores      int                 `json:"cpu_cores"`
+	MemTotal      string              `json:"mem_total"`
+	MemFree       string              `json:"mem_free"`
+	Uptime        string              `json:"uptime"`
+	Networks      []NetworkIfInfo     `json:"networks"`
+	Storage       []StorageInfo       `json:"storage"`
+	DockerStorage []DockerStorageItem `json:"docker_storage,omitempty"`
 }
 
 // SystemInfoGet fetches host system info via the agent.
@@ -379,6 +388,46 @@ func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, n
 		return fmt.Errorf("agent rewrite tags: %s", ar.Error)
 	}
 	return nil
+}
+
+// RemoveImage removes a Docker image via the agent (best-effort).
+func (c *ComposeClient) RemoveImage(image string) error {
+	body, _ := json.Marshal(map[string]string{"image": image})
+	slog.Info("agent remove image", "image", image)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/remove", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent remove image: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent remove image: %s", ar.Error)
+	}
+	return nil
+}
+
+// DockerPrune runs a full docker cleanup via the agent (builder + image + system prune).
+func (c *ComposeClient) DockerPrune() (string, error) {
+	longClient := &http.Client{Timeout: 6 * time.Minute}
+	resp, err := longClient.Post(c.agentURL+"/v1/docker/prune", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return "", fmt.Errorf("agent docker prune: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Status    string `json:"status"`
+		Error     string `json:"error"`
+		Reclaimed string `json:"reclaimed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("agent docker prune: %s", result.Error)
+	}
+	return result.Reclaimed, nil
 }
 
 func (c *ComposeClient) composeAction(path, serviceID string) error {

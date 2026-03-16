@@ -371,10 +371,12 @@ function UpdatesTab({ settings, saving, onSave }: {
   const [enabled, setEnabled] = useState(settings.update_check_enabled)
   const [interval, setInterval] = useState(settings.update_check_interval_hours)
   const [channel, setChannel] = useState(settings.update_channel || 'stable')
+  const [keepOldImages, setKeepOldImages] = useState(settings.update_keep_old_images)
 
   const changed = interval !== settings.update_check_interval_hours
     || enabled !== settings.update_check_enabled
     || channel !== (settings.update_channel || 'stable')
+    || keepOldImages !== settings.update_keep_old_images
 
   return (
     <div className="space-y-6">
@@ -431,10 +433,28 @@ function UpdatesTab({ settings, saving, onSave }: {
         )}
       </Card>
 
+      <Card>
+        <CardTitle>Image Cleanup</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          After a successful update, old Docker images are automatically removed to save disk space.
+          Only the current version and the previous version (for rollback) are kept.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox" checked={keepOldImages} onChange={(e) => setKeepOldImages(e.target.checked)}
+            className="accent-accent w-4 h-4"
+          />
+          <div>
+            <span className="text-sm text-white font-medium">Keep old Docker images after updates</span>
+            <p className="text-xs text-gray-500">Enable this if you have plenty of disk space and want to keep all previous versions.</p>
+          </div>
+        </label>
+      </Card>
+
       <div className="flex justify-end">
         <button
           disabled={!changed || saving || (enabled && (interval < 1 || interval > 168))}
-          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval, update_channel: channel })}
+          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval, update_channel: channel, update_keep_old_images: keepOldImages })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}
@@ -459,11 +479,31 @@ const UNIT_OPTIONS = [
 
 function SystemInfoTab() {
   const fetcher = useCallback(() => api.systemInfo(), [])
-  const { data, error, loading } = useApi(fetcher)
+  const { data, error, loading, refresh } = useApi(fetcher)
+  const [pruning, setPruning] = useState(false)
+  const [prunePassword, setPrunePassword] = useState('')
+  const [pruneConfirm, setPruneConfirm] = useState(false)
+  const [pruneMsg, setPruneMsg] = useState('')
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
   if (!data) return null
+
+  async function handlePrune() {
+    if (!prunePassword) { setPruneMsg('Password required'); return }
+    setPruning(true); setPruneMsg('')
+    try {
+      const result = await api.dockerPrune(prunePassword)
+      setPruneMsg(`Pruned: ${result.reclaimed}`)
+      setPruneConfirm(false)
+      setPrunePassword('')
+      refresh()
+    } catch (e: any) {
+      setPruneMsg(`Error: ${e.message}`)
+    } finally {
+      setPruning(false)
+    }
+  }
 
   const Row = ({ label, value }: { label: string; value: string | number }) => (
     <div className="flex justify-between py-1.5 border-b border-border-subtle last:border-0">
@@ -547,6 +587,77 @@ function SystemInfoTab() {
                 <Row label="MAC" value={net.mac} />
               </div>
             ))}
+          </div>
+        </Card>
+      )}
+      {data.docker_storage && data.docker_storage.length > 0 && (
+        <Card>
+          <CardTitle>Docker Storage</CardTitle>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-border-subtle">
+                  <th className="pb-2 pr-4">Type</th>
+                  <th className="pb-2 pr-4 text-right">Count</th>
+                  <th className="pb-2 pr-4 text-right">Size</th>
+                  <th className="pb-2 text-right">Reclaimable</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.docker_storage.map((ds) => (
+                  <tr key={ds.type} className="border-b border-border-subtle last:border-0">
+                    <td className="py-1.5 pr-4 text-gray-300">{ds.type}</td>
+                    <td className="py-1.5 pr-4 text-right text-gray-300 font-mono">{ds.count}</td>
+                    <td className="py-1.5 pr-4 text-right text-gray-300 font-mono">{ds.total_size}</td>
+                    <td className="py-1.5 text-right text-gray-300 font-mono">{ds.reclaimable}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 pt-4 border-t border-border-subtle">
+            {pruneConfirm ? (
+              <div className="space-y-3">
+                <p className="text-sm text-yellow-400">
+                  This removes all unused images, build cache, and stopped containers.
+                  Rollback to previous versions will not be available until the next update.
+                </p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="password"
+                    value={prunePassword}
+                    onChange={(e) => setPrunePassword(e.target.value)}
+                    placeholder="Admin password"
+                    className="px-3 py-1.5 bg-surface-overlay border border-border rounded text-sm text-white placeholder-gray-600 max-w-xs"
+                  />
+                  <button
+                    onClick={handlePrune}
+                    disabled={pruning || !prunePassword}
+                    className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded disabled:opacity-50"
+                  >
+                    {pruning ? 'Pruning...' : 'Confirm Purge'}
+                  </button>
+                  <button
+                    onClick={() => { setPruneConfirm(false); setPruneMsg('') }}
+                    className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setPruneConfirm(true)}
+                className="px-4 py-2 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-sm font-medium rounded transition-colors"
+              >
+                Purge Unused
+              </button>
+            )}
+            {pruneMsg && (
+              <p className={`text-sm mt-2 ${pruneMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                {pruneMsg}
+              </p>
+            )}
           </div>
         </Card>
       )}

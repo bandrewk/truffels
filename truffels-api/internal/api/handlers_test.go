@@ -610,6 +610,88 @@ func TestResolveAlert_InvalidID(t *testing.T) {
 	}
 }
 
+// --- Docker Prune ---
+
+func TestDockerPrune_WrongPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune",
+		`{"password":"wrongpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDockerPrune_CorrectPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+	if body["reclaimed"] == "" {
+		t.Fatal("expected reclaimed field")
+	}
+}
+
+func TestDockerPrune_NoPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune", `{}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDockerPrune_AuditLog(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries, err := st.GetAuditLog(50)
+	if err != nil {
+		t.Fatalf("get audit log: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Action == "docker_prune" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected docker_prune audit entry")
+	}
+}
+
 // --- Backup Download path traversal ---
 
 func TestBackupDownload_PathTraversal(t *testing.T) {
