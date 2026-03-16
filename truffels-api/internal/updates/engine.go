@@ -695,7 +695,15 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 		return &UpdateError{Msg: "git checkout failed: " + err.Error()}
 	}
 
-	// Step 2: Build with VERSION arg (builds all services in the truffels stack)
+	// Step 2: Rewrite compose image tags BEFORE building so the build
+	// creates images tagged with the new version (not the old one).
+	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, "", check.LatestVersion); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
+		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+	}
+
+	// Step 3: Build with VERSION arg (builds all services in the truffels stack)
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
 	buildArgs := map[string]string{"VERSION": check.LatestVersion}
 	// Use the first truffels service ID to trigger the full compose build
@@ -703,13 +711,6 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
 		return &UpdateError{Msg: "build failed: " + err.Error()}
-	}
-
-	// Step 3: Rewrite compose image tags for all truffels services
-	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, "", check.LatestVersion); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
-		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
 	}
 
 	// Step 4: Detached restart — agent calls docker compose up -d via nsenter
