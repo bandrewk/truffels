@@ -38,7 +38,7 @@ Truffels turns a Raspberry Pi 5 into a fully operational Bitcoin node with minin
 - **Monitoring** — CPU, memory, temperature, disk, network I/O with 48h history
 - **Alerts** — restart loop detection, dependency health, disk/temp thresholds
 - **Security** — admin auth, nftables firewall, Docker capability hardening, secrets isolation
-- **CI** — 450+ tests across Go and TypeScript
+- **CI** — 500+ tests across Go and TypeScript
 
 ## Hardware
 
@@ -48,6 +48,8 @@ Truffels turns a Raspberry Pi 5 into a fully operational Bitcoin node with minin
 | Storage   | Samsung 990 PRO 2TB NVMe (via Geekworm X1001) |
 | PSU       | Official 27W USB-C                            |
 | OS        | Raspberry Pi OS Lite 64-bit                   |
+
+If using the Geekworm X1001 NVMe HAT, connect the extra 5V power cable to the Pi's GPIO pins — without it the NVMe may brown-out under sustained load.
 
 **NVMe is strongly recommended.** Running from an SD card is incredibly slow — initial sync, block explorer indexing, and general responsiveness suffer dramatically. SD card boot is technically supported for pruned nodes or quick testing, but not recommended for daily use.
 
