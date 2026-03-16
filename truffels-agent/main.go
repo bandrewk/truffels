@@ -1127,9 +1127,11 @@ docker compose -f %s up -d --build
 		return
 	}
 
-	// Execute detached via nsenter (runs on host, survives container replacement)
+	// Execute detached via nsenter (runs on host, survives container replacement).
+	// Use setsid to create a new session so the process isn't killed when the
+	// agent container stops during docker compose down.
 	execCmd := exec.Command("nsenter", "-t", "1", "-m", "-p", "--",
-		"sh", "-c", fmt.Sprintf("nohup %s > /tmp/truffels-self-update.log 2>&1 &", scriptPath))
+		"setsid", "sh", "-c", fmt.Sprintf("nohup %s > /tmp/truffels-self-update.log 2>&1 &", scriptPath))
 	if out, err := execCmd.CombinedOutput(); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "exec script failed: " + err.Error(), "output": string(out)})
 		return
