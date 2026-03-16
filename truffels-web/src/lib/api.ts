@@ -407,6 +407,7 @@ export const api = {
   electrsStats: () => get<ElectrsStats>('/services/electrs/stats'),
   host: () => get<HostMetrics>('/host'),
   alerts: (all = false) => get<Alert[]>(`/alerts${all ? '?all=true' : ''}`),
+  dismissAlert: (id: number) => post<{ status: string }>(`/alerts/${id}/resolve`),
   updates: () => get<UpdateCheck[]>('/updates'),
   updateStatus: () => get<UpdateStatus>('/updates/status'),
   checkUpdates: () => post<{ status: string }>('/updates/check'),

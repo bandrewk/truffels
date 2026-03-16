@@ -63,6 +63,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/host", s.handleHost)
 			r.Get("/alerts", s.handleAlerts)
+			r.Post("/alerts/{id}/resolve", s.handleResolveAlert)
 			r.Get("/audit", s.handleAuditLog)
 
 			r.Post("/backup/export", s.handleBackupExport)
