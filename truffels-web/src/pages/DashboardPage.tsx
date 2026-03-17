@@ -15,9 +15,10 @@ function formatUptime(seconds: number): string {
   return `${m}m`
 }
 
-function serviceUptime(containers: { started_at: string }[]): string {
-  if (!containers.length) return ''
-  const starts = containers
+function serviceUptime(containers: { started_at: string; status: string }[]): string {
+  const running = containers.filter((c) => c.status === 'running')
+  if (!running.length) return ''
+  const starts = running
     .map((c) => new Date(c.started_at).getTime())
     .filter((t) => !isNaN(t))
   if (!starts.length) return ''
