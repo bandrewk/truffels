@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/bandrewk/truffels/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/bandrewk/truffels/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/bandrewk/truffels?include_prereleases)](https://github.com/bandrewk/truffels/releases)
+[![Stable release](https://img.shields.io/github/v/release/bandrewk/truffels?label=stable&sort=semver)](https://github.com/bandrewk/truffels/releases/latest)
+[![Dev release](https://img.shields.io/github/v/release/bandrewk/truffels?include_prereleases&sort=semver&label=dev)](https://github.com/bandrewk/truffels/releases)
 
 A self-hosted Bitcoin infrastructure appliance for Raspberry Pi 5. Docker-managed, web-controlled, built for stability.
 
