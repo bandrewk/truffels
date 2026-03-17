@@ -5,6 +5,24 @@ All notable changes to Project Truffels will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] - 2026-03-17
+
+First stable release. Includes everything from v0.1.0 through v0.3.0-dev.24.
+
+### Highlights
+- Full Bitcoin node stack: bitcoind, electrs, ckpool, mempool, ckstats
+- Go control plane (API + agent) with React admin UI
+- One-command install on Raspberry Pi 5 (`install.sh`)
+- Self-update system with stable/dev channels via GitHub Releases
+- Real-time monitoring, alerting, and container metrics
+- Hardened: dropped Docker capabilities, nftables firewall, secrets isolation, audit logging
+- CI: GitHub Actions with 500+ tests, linting, and coverage
+
+### Changed since v0.2.2
+- Clean-room install validated on second Pi
+- 24 dev pre-releases rolled up into this stable cut
+- README badges updated (stable + dev)
+
 ## [v0.2.2] - 2026-03-16
 
 ### Fixed
