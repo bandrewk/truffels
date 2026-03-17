@@ -19,9 +19,10 @@ function formatUptime(startedAt: string): string {
   return `${days}d ${hours % 24}h`
 }
 
-function serviceUptime(containers: { started_at: string }[]): string {
-  if (!containers.length) return ''
-  const starts = containers
+function serviceUptime(containers: { started_at: string; status: string }[]): string {
+  const running = containers.filter((c) => c.status === 'running')
+  if (!running.length) return ''
+  const starts = running
     .map((c) => new Date(c.started_at).getTime())
     .filter((t) => !isNaN(t))
   if (!starts.length) return ''
@@ -99,7 +100,7 @@ export default function ServicesPage() {
                   <div key={c.name} className="flex items-center justify-between text-xs py-0.5">
                     <span className="text-gray-400 font-mono">{c.name}</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-500">{formatUptime(c.started_at)}</span>
+                      <span className="text-gray-500">{c.status === 'running' ? formatUptime(c.started_at) : '-'}</span>
                       <StatusBadge status={c.health || c.status} />
                     </div>
                   </div>

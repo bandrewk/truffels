@@ -411,7 +411,7 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
                   <td className="py-2 pr-4 font-mono text-gray-300">{c.name}</td>
                   <td className="py-2 pr-4"><StatusBadge status={c.status} /></td>
                   <td className="py-2 pr-4">{c.health ? <StatusBadge status={c.health} /> : <span className="text-gray-500">-</span>}</td>
-                  <td className="py-2 pr-4 text-gray-400">{formatUptime(c.started_at)}</td>
+                  <td className="py-2 pr-4 text-gray-400">{c.status === 'running' ? formatUptime(c.started_at) : '-'}</td>
                   <td className="py-2 pr-4 text-gray-400">{c.restart_count}</td>
                   <td className="py-2 text-gray-500 text-xs font-mono truncate max-w-xs">{c.image.split('@')[0]}</td>
                 </tr>

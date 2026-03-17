@@ -918,7 +918,7 @@ sleep 5
 # Run migrations
 docker compose -f "$COMPOSE_DIR/ckstats/docker-compose.yml" run --rm ckstats pnpm migration:run
 # Stop ckstats-db until ckpool/ckstats are started together
-cd "$COMPOSE_DIR/ckstats" && docker compose stop ckstats-db
+cd "$COMPOSE_DIR/ckstats" && docker compose down
 log "Skipping ckpool and ckstats — Bitcoin Core is still syncing (will be disabled)."
 
 log "Starting reverse proxy..."

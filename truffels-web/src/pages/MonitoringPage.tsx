@@ -443,7 +443,7 @@ export default function MonitoringPage() {
                   <td className="px-3 py-2 text-gray-400 font-mono text-xs">{c.name}</td>
                   <td className="px-3 py-2"><StatusBadge status={c.status} /></td>
                   <td className="px-3 py-2"><StatusBadge status={c.health || 'unknown'} /></td>
-                  <td className="px-3 py-2 text-gray-400 font-mono text-xs">{formatUptime(c.started_at)}</td>
+                  <td className="px-3 py-2 text-gray-400 font-mono text-xs">{c.status === 'running' ? formatUptime(c.started_at) : '-'}</td>
                   <td className="px-3 py-2">
                     <span className={`font-mono text-xs ${
                       c.restart_count > 3 ? 'text-red-400' : c.restart_count > 0 ? 'text-yellow-400' : 'text-gray-400'
