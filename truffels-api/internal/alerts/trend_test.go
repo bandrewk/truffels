@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"truffels-api/internal/model"
+	"truffels-api/internal/store"
 )
 
 func TestLinearRegression_FlatLine(t *testing.T) {
@@ -142,6 +143,21 @@ func TestEvaluateTrend_FlatLine(t *testing.T) {
 	}
 }
 
+// insertContainerSnap inserts a container snapshot and fixes its timestamp.
+func insertContainerSnap(t *testing.T, s *store.Store, ts time.Time, container string, memUsage, memLimit float64) {
+	t.Helper()
+	snap := model.ContainerSnapshot{
+		Container:  container,
+		MemUsageMB: memUsage,
+		MemLimitMB: memLimit,
+	}
+	if err := s.InsertContainerSnapshots([]model.ContainerSnapshot{snap}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	_, _ = s.DB().Exec(`UPDATE container_snapshots SET timestamp = ? WHERE id = (SELECT MAX(id) FROM container_snapshots)`,
+		ts.UTC().Format("2006-01-02 15:04:05"))
+}
+
 func TestEvaluateTrend_EmptyPoints(t *testing.T) {
 	result := evaluateTrend(nil, 1024)
 	if result.DataPoints != 0 {
@@ -161,15 +177,7 @@ func TestEvaluateContainerMemoryTrends_Integration(t *testing.T) {
 	for i := 0; i <= 180; i++ { // every minute for 3h
 		ts := now.Add(-time.Duration(180-i) * time.Minute)
 		mem := 500 + float64(i)*300.0/180.0 // 500 → 800 over 3h
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: mem,
-			MemLimitMB: 1024,
-		}
-		if err := s.InsertContainerSnapshots([]model.ContainerSnapshot{snap}); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		insertContainerSnap(t, s, ts, "truffels-ckpool", mem, 1024)
 	}
 
 	// Rate is 100MB/h, current ~800, limit 1024 → ~2.24h to hit
@@ -191,15 +199,7 @@ func TestEvaluateContainerMemoryTrends_NoAlert_FlatMemory(t *testing.T) {
 	now := time.Now()
 	for i := 0; i <= 120; i++ {
 		ts := now.Add(-time.Duration(120-i) * time.Minute)
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: 500, // flat
-			MemLimitMB: 1024,
-		}
-		if err := s.InsertContainerSnapshots([]model.ContainerSnapshot{snap}); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		insertContainerSnap(t, s, ts, "truffels-ckpool", 500, 1024)
 	}
 
 	alerts := evaluateContainerMemoryTrends(s, 6, 6)
@@ -267,15 +267,8 @@ func TestCheckTrends_Integration(t *testing.T) {
 	now := time.Now()
 	for i := 0; i <= 180; i++ {
 		ts := now.Add(-time.Duration(180-i) * time.Minute)
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: 500 + float64(i)*300.0/180.0,
-			MemLimitMB: 1024,
-		}
-		if err := s.InsertContainerSnapshots([]model.ContainerSnapshot{snap}); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		mem := 500 + float64(i)*300.0/180.0
+		insertContainerSnap(t, s, ts, "truffels-ckpool", mem, 1024)
 	}
 
 	e.checkTrends()
@@ -301,13 +294,8 @@ func TestCheckTrends_Disabled(t *testing.T) {
 	now := time.Now()
 	for i := 0; i <= 180; i++ {
 		ts := now.Add(-time.Duration(180-i) * time.Minute)
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: 500 + float64(i)*300.0/180.0,
-			MemLimitMB: 1024,
-		}
-		_ = s.InsertContainerSnapshots([]model.ContainerSnapshot{snap})
+		mem := 500 + float64(i)*300.0/180.0
+		insertContainerSnap(t, s, ts, "truffels-ckpool", mem, 1024)
 	}
 
 	e.checkTrends()
@@ -330,13 +318,8 @@ func TestCheckTrends_AutoResolves(t *testing.T) {
 	now := time.Now()
 	for i := 0; i <= 180; i++ {
 		ts := now.Add(-time.Duration(180-i) * time.Minute)
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: 500 + float64(i)*300.0/180.0,
-			MemLimitMB: 1024,
-		}
-		_ = s.InsertContainerSnapshots([]model.ContainerSnapshot{snap})
+		mem := 500 + float64(i)*300.0/180.0
+		insertContainerSnap(t, s, ts, "truffels-ckpool", mem, 1024)
 	}
 
 	e.checkTrends()
@@ -349,13 +332,7 @@ func TestCheckTrends_AutoResolves(t *testing.T) {
 	_, _ = s.DB().Exec(`DELETE FROM container_snapshots`)
 	for i := 0; i <= 180; i++ {
 		ts := now.Add(-time.Duration(180-i) * time.Minute)
-		snap := model.ContainerSnapshot{
-			Timestamp:  ts,
-			Container:  "truffels-ckpool",
-			MemUsageMB: 500, // flat
-			MemLimitMB: 1024,
-		}
-		_ = s.InsertContainerSnapshots([]model.ContainerSnapshot{snap})
+		insertContainerSnap(t, s, ts, "truffels-ckpool", 500, 1024)
 	}
 
 	e.checkTrends()
