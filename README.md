@@ -1,6 +1,6 @@
 # Truffels
 
-[![CI](https://github.com/bandrewk/truffels/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/bandrewk/truffels/actions/workflows/ci.yml)
+[![CI](https://github.com/bandrewk/truffels/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/bandrewk/truffels/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Stable release](https://img.shields.io/github/v/release/bandrewk/truffels?label=stable&sort=semver)](https://github.com/bandrewk/truffels/releases/latest)
 [![Dev release](https://img.shields.io/github/v/release/bandrewk/truffels?include_prereleases&sort=semver&label=dev)](https://github.com/bandrewk/truffels/releases)
@@ -36,10 +36,12 @@ Truffels turns a Raspberry Pi 5 into a fully operational Bitcoin node with minin
 - **NVMe and SD card support** — auto-detects storage, adapts accordingly
 - **Service lifecycle** — start, stop, restart, enable/disable with dependency enforcement
 - **Update system** — automatic version checking, one-click updates, rollback on failure
-- **Monitoring** — CPU, memory, temperature, disk, network I/O with 48h history
+- **Monitoring** — CPU, memory, temperature, disk, network I/O with 7-day history
+- **Trend alerts** — linear regression on CPU, memory, disk; warns before resources run out
+- **Compose reconciliation** — detects and corrects drift between running containers and declared compose files
 - **Alerts** — restart loop detection, dependency health, disk/temp thresholds
 - **Security** — admin auth, nftables firewall, Docker capability hardening, secrets isolation
-- **CI** — 500+ tests across Go and TypeScript
+- **CI** — 500+ tests across Go and TypeScript, Claude Code review on PRs
 
 ## Hardware
 
@@ -109,7 +111,7 @@ See [INSTALLATION.md](INSTALLATION.md) for the full runbook.
 
 Contributions are welcome. Please open an issue first to discuss what you'd like to change.
 
-This project uses [gitflow](https://nvie.com/posts/a-successful-git-branching-model/): branch from `develop`, PR back to `develop`. The `main` branch is for releases only.
+This project uses [gitflow](https://nvie.com/posts/a-successful-git-branching-model/): branch from `development`, PR back to `development`. The `main` branch is for releases only.
 
 ## Support Development
 
