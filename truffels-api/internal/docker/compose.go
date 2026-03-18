@@ -451,6 +451,54 @@ func (c *ComposeClient) DockerPruneBuildCache() (string, error) {
 	return result.Reclaimed, nil
 }
 
+// ComposeRead returns the content of a service's compose file via the agent.
+func (c *ComposeClient) ComposeRead(serviceID string) (string, error) {
+	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/read", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("agent compose read: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Status  string `json:"status"`
+		Error   string `json:"error"`
+		Content string `json:"content"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("agent compose read: %s", result.Error)
+	}
+	return result.Content, nil
+}
+
+// ComposeReconcile compares expected content with the compose file on disk via the agent.
+// Returns true if the file was changed.
+func (c *ComposeClient) ComposeReconcile(serviceID, expectedContent string) (bool, error) {
+	body, _ := json.Marshal(map[string]string{
+		"service_id":       serviceID,
+		"expected_content": expectedContent,
+	})
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/reconcile", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("agent compose reconcile: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Status  string `json:"status"`
+		Error   string `json:"error"`
+		Changed bool   `json:"changed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return false, fmt.Errorf("agent compose reconcile: %s", result.Error)
+	}
+	return result.Changed, nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)

@@ -1450,3 +1450,152 @@ func TestHandleDockerPrune_ReturnsJSON(t *testing.T) {
 		t.Fatalf("expected status ok, got %q", body["status"])
 	}
 }
+
+// --- Compose Read ---
+
+func TestHandleComposeRead_Success(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/ckpool", 0755)
+	content := "services:\n  ckpool:\n    image: truffels/ckpool:v1.0.0\n"
+	_ = os.WriteFile(dir+"/ckpool/docker-compose.yml", []byte(content), 0644)
+
+	body, _ := json.Marshal(serviceRequest{ServiceID: "ckpool"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/read", bytes.NewReader(body))
+
+	handleComposeRead(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["content"] != content {
+		t.Fatalf("expected content %q, got %q", content, resp["content"])
+	}
+}
+
+func TestHandleComposeRead_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(serviceRequest{ServiceID: "hacker"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/read", bytes.NewReader(body))
+
+	handleComposeRead(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeRead_FileNotFound(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	body, _ := json.Marshal(serviceRequest{ServiceID: "ckpool"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/read", bytes.NewReader(body))
+
+	handleComposeRead(w, r)
+
+	if w.Code != 500 {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+// --- Compose Reconcile ---
+
+func TestHandleComposeReconcile_NoChange(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/ckpool", 0755)
+	content := "services:\n  ckpool:\n    image: truffels/ckpool:v1.0.0\n"
+	_ = os.WriteFile(dir+"/ckpool/docker-compose.yml", []byte(content), 0644)
+
+	body, _ := json.Marshal(map[string]string{
+		"service_id":       "ckpool",
+		"expected_content": content,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/reconcile", bytes.NewReader(body))
+
+	handleComposeReconcile(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["changed"] != false {
+		t.Fatal("expected changed=false")
+	}
+}
+
+func TestHandleComposeReconcile_Changed(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/ckpool", 0755)
+	oldContent := "memory: 256M\n"
+	newContent := "memory: 1024M\n"
+	_ = os.WriteFile(dir+"/ckpool/docker-compose.yml", []byte(oldContent), 0644)
+
+	body, _ := json.Marshal(map[string]string{
+		"service_id":       "ckpool",
+		"expected_content": newContent,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/reconcile", bytes.NewReader(body))
+
+	handleComposeReconcile(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["changed"] != true {
+		t.Fatal("expected changed=true")
+	}
+
+	// Verify file was written
+	data, _ := os.ReadFile(dir + "/ckpool/docker-compose.yml")
+	if string(data) != newContent {
+		t.Fatalf("expected file to contain new content, got: %s", string(data))
+	}
+}
+
+func TestHandleComposeReconcile_InvalidService(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{
+		"service_id":       "hacker",
+		"expected_content": "anything",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/reconcile", bytes.NewReader(body))
+
+	handleComposeReconcile(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestHandleComposeReconcile_EmptyContent(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{
+		"service_id":       "ckpool",
+		"expected_content": "",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/compose/reconcile", bytes.NewReader(body))
+
+	handleComposeReconcile(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
