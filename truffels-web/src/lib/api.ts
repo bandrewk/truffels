@@ -382,6 +382,10 @@ export interface Settings {
   services_show_memory: boolean
   services_show_ports: boolean
   update_keep_old_images: boolean
+  trend_alert_enabled: boolean
+  trend_alert_horizon_hours: number
+  trend_alert_lookback_hours: number
+  trend_alert_min_data_hours: number
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {

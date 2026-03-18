@@ -4,6 +4,17 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 
+const ALERT_TYPE_LABELS: Record<string, string> = {
+  disk_full: 'Disk Full',
+  high_temp: 'High Temperature',
+  service_unhealthy: 'Service Unhealthy',
+  restart_loop: 'Restart Loop',
+  upstream_unhealthy: 'Upstream Unhealthy',
+  memory_trend: 'Memory Trend',
+  disk_trend: 'Disk Trend',
+  temp_trend: 'Temperature Trend',
+}
+
 export default function AlertsPage() {
   const [showAll, setShowAll] = useState(false)
   const fetcher = useCallback(() => api.alerts(showAll), [showAll])
@@ -59,7 +70,7 @@ export default function AlertsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-200">{a.message}</p>
                   <div className="flex gap-3 text-xs text-gray-500 mt-1">
-                    <span>Type: {a.type}</span>
+                    <span>Type: {ALERT_TYPE_LABELS[a.type] || a.type}</span>
                     {a.service_id && <span>Service: {a.service_id}</span>}
                     <span>Since: {new Date(a.first_seen).toLocaleString()}</span>
                     {a.resolved && a.resolved_at && (
