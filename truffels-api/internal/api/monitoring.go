@@ -22,8 +22,8 @@ func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request) {
 	if hours < 1 {
 		hours = 1
 	}
-	if hours > 48 {
-		hours = 48
+	if hours > 168 {
+		hours = 168
 	}
 
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
@@ -114,8 +114,8 @@ func (s *Server) handleServiceMonitoring(w http.ResponseWriter, r *http.Request)
 	if hours < 1 {
 		hours = 1
 	}
-	if hours > 48 {
-		hours = 48
+	if hours > 168 {
+		hours = 168
 	}
 
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)

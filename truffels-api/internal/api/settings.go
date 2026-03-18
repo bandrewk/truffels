@@ -22,6 +22,10 @@ var settingsDefaults = map[string]string{
 	"services_show_memory":           "false",
 	"services_show_ports":            "true",
 	"update_keep_old_images":         "false",
+	"trend_alert_enabled":            "true",
+	"trend_alert_horizon_hours":      "6",
+	"trend_alert_lookback_hours":     "6",
+	"trend_alert_min_data_hours":     "2",
 }
 
 type settingsResponse struct {
@@ -39,6 +43,10 @@ type settingsResponse struct {
 	ServicesShowMemory       bool    `json:"services_show_memory"`
 	ServicesShowPorts         bool    `json:"services_show_ports"`
 	UpdateKeepOldImages      bool    `json:"update_keep_old_images"`
+	TrendAlertEnabled        bool    `json:"trend_alert_enabled"`
+	TrendAlertHorizonHours   int     `json:"trend_alert_horizon_hours"`
+	TrendAlertLookbackHours  int     `json:"trend_alert_lookback_hours"`
+	TrendAlertMinDataHours   int     `json:"trend_alert_min_data_hours"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +65,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		ServicesShowMemory:       s.getSettingStr("services_show_memory", "false") == "true",
 		ServicesShowPorts:         s.getSettingStr("services_show_ports", "true") == "true",
 		UpdateKeepOldImages:      s.getSettingStr("update_keep_old_images", "false") == "true",
+		TrendAlertEnabled:        s.getSettingStr("trend_alert_enabled", "true") == "true",
+		TrendAlertHorizonHours:   s.getSettingInt("trend_alert_horizon_hours", 6),
+		TrendAlertLookbackHours:  s.getSettingInt("trend_alert_lookback_hours", 6),
+		TrendAlertMinDataHours:   s.getSettingInt("trend_alert_min_data_hours", 2),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

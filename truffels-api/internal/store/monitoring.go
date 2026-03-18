@@ -242,6 +242,60 @@ func (s *Store) GetServiceEvents(since time.Time, limit int) ([]model.ServiceEve
 	return events, rows.Err()
 }
 
+// GetContainerSnapshotsForTrend returns all container snapshots since the given time without downsampling.
+func (s *Store) GetContainerSnapshotsForTrend(since time.Time) ([]model.ContainerSnapshot, error) {
+	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
+
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, container, cpu_percent, mem_usage_mb, mem_limit_mb, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes
+		 FROM container_snapshots WHERE timestamp >= ?
+		 ORDER BY timestamp ASC`, sinceStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []model.ContainerSnapshot
+	for rows.Next() {
+		var snap model.ContainerSnapshot
+		var ts string
+		if err := rows.Scan(&snap.ID, &ts, &snap.Container, &snap.CPUPercent, &snap.MemUsageMB, &snap.MemLimitMB, &snap.NetRxBytes, &snap.NetTxBytes, &snap.BlockReadBytes, &snap.BlockWriteBytes); err != nil {
+			continue
+		}
+		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		all = append(all, snap)
+	}
+	return all, rows.Err()
+}
+
+// GetMetricSnapshotsForTrend returns all host metric snapshots since the given time without downsampling.
+func (s *Store) GetMetricSnapshotsForTrend(since time.Time) ([]model.MetricSnapshot, error) {
+	sinceStr := since.UTC().Format("2006-01-02 15:04:05")
+
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, cpu_percent, mem_percent, temp_c, disk_percent, fan_rpm, fan_percent,
+		        net_rx_bytes, net_tx_bytes, disk_read_bytes, disk_write_bytes, disk_io_percent
+		 FROM metric_snapshots WHERE timestamp >= ?
+		 ORDER BY timestamp ASC`, sinceStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []model.MetricSnapshot
+	for rows.Next() {
+		var snap model.MetricSnapshot
+		var ts string
+		if err := rows.Scan(&snap.ID, &ts, &snap.CPUPercent, &snap.MemPercent, &snap.TempC, &snap.DiskPercent, &snap.FanRPM, &snap.FanPercent,
+			&snap.NetRxBytes, &snap.NetTxBytes, &snap.DiskReadBytes, &snap.DiskWriteBytes, &snap.DiskIOPercent); err != nil {
+			continue
+		}
+		snap.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		all = append(all, snap)
+	}
+	return all, rows.Err()
+}
+
 // PruneServiceEvents keeps only the most recent keepN events, deleting the rest.
 func (s *Store) PruneServiceEvents(keepN int) error {
 	_, err := s.db.Exec(
