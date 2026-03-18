@@ -91,6 +91,8 @@ func main() {
 	mux.HandleFunc("POST /v1/git/checkout", handleGitCheckout)
 	mux.HandleFunc("POST /v1/compose/up-detached", handleComposeUpDetached)
 	mux.HandleFunc("POST /v1/compose/rewrite-tags", handleComposeRewriteTags)
+	mux.HandleFunc("POST /v1/compose/read", handleComposeRead)
+	mux.HandleFunc("POST /v1/compose/reconcile", handleComposeReconcile)
 	mux.HandleFunc("POST /v1/image/remove", handleImageRemove)
 	mux.HandleFunc("POST /v1/docker/prune", handleDockerPrune)
 	mux.HandleFunc("POST /v1/docker/prune-buildcache", handleDockerPruneBuildCache)
@@ -1400,6 +1402,70 @@ func handleComposeRewriteTags(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// handleComposeRead returns the content of a service's compose file.
+func handleComposeRead(w http.ResponseWriter, r *http.Request) {
+	var req serviceRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+
+	composePath := composeDir(req.ServiceID) + "/docker-compose.yml"
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "read compose file: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"status":  "ok",
+		"content": string(data),
+	})
+}
+
+// handleComposeReconcile compares expected content with the compose file on disk,
+// writes if different, and reports whether a change was made.
+func handleComposeReconcile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServiceID       string `json:"service_id"`
+		ExpectedContent string `json:"expected_content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if _, ok := allowedServices[req.ServiceID]; !ok {
+		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
+		return
+	}
+	if req.ExpectedContent == "" {
+		writeJSON(w, 400, map[string]string{"error": "expected_content is required"})
+		return
+	}
+
+	slog.Info("compose reconcile", "service", req.ServiceID)
+
+	composePath := composeDir(req.ServiceID) + "/docker-compose.yml"
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "read compose file: " + err.Error()})
+		return
+	}
+
+	// Byte-for-byte comparison
+	if bytes.Equal(data, []byte(req.ExpectedContent)) {
+		writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": false})
+		return
+	}
+
+	if err := os.WriteFile(composePath, []byte(req.ExpectedContent), 0644); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "write compose file: " + err.Error()})
+		return
+	}
+
+	slog.Info("compose file reconciled", "service", req.ServiceID)
+	writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": true})
 }
 
 // serviceContainers maps service IDs to their container names for fallback log retrieval.

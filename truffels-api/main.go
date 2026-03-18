@@ -13,6 +13,7 @@ import (
 	"truffels-api/internal/api"
 	"truffels-api/internal/auth"
 	"truffels-api/internal/bitcoin"
+	composereconcile "truffels-api/internal/compose"
 	"truffels-api/internal/config"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
@@ -62,6 +63,12 @@ func main() {
 	updateEngine := updates.NewEngine(st, registry, compose)
 	updateEngine.Start()
 	defer updateEngine.Stop()
+
+	// Compose reconciliation — regenerate compose files from templates on startup
+	reconciler := composereconcile.NewReconciler(registry, compose)
+	if err := reconciler.Run(); err != nil {
+		slog.Warn("compose reconciliation had errors", "err", err)
+	}
 
 	// Auth
 	authenticator := auth.New(st)
