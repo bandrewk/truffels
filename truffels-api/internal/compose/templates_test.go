@@ -31,7 +31,7 @@ func TestRender_Ckpool(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, got, "image: truffels/ckpool:v1.0.0")
-	assertContains(t, got, "memory: 1024M")
+	assertContains(t, got, "memory: 512M")
 	assertContains(t, got, "container_name: truffels-ckpool")
 }
 
