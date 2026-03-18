@@ -9,7 +9,7 @@ var Ckpool = model.ServiceTemplate{
 	ContainerNames: []string{"truffels-ckpool"},
 	Dependencies:   []string{"bitcoind"},
 	RequiresSynced: true,
-	MemoryLimit:    "1024M",
+	MemoryLimit:    "512M",
 	ConfigPath:     "ckpool/ckpool.conf",
 	Port:           "3333 (stratum)",
 	UpdateSource: &model.UpdateSource{

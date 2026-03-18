@@ -527,7 +527,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1024M
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "pidof ckpool || exit 1"]
       interval: 30s
@@ -927,7 +927,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.1}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.2}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"
