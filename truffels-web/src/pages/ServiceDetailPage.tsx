@@ -497,7 +497,7 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
   )
 }
 
-type TimeRange = 1 | 6 | 24
+type TimeRange = 1 | 6 | 24 | 48 | 168
 
 const CONTAINER_COLORS = [
   '#f59e0b', '#3b82f6', '#10b981', '#f97316', '#a855f7',
@@ -774,7 +774,7 @@ function MonitorTab({ id }: { id: string }) {
     <div className="space-y-4">
       <div className="flex justify-end">
         <div className="flex gap-1 bg-surface-overlay rounded-lg p-0.5">
-          {([1, 6, 24] as TimeRange[]).map((h) => (
+          {([1, 6, 24, 48, 168] as TimeRange[]).map((h) => (
             <button
               key={h}
               onClick={() => setHours(h)}
@@ -784,7 +784,7 @@ function MonitorTab({ id }: { id: string }) {
                   : 'text-gray-400 hover:text-gray-200'
               }`}
             >
-              {h}h
+              {h === 168 ? '7d' : `${h}h`}
             </button>
           ))}
         </div>
