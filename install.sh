@@ -527,7 +527,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 1024M
     healthcheck:
       test: ["CMD-SHELL", "pidof ckpool || exit 1"]
       interval: 30s
