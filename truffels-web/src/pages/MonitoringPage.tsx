@@ -14,7 +14,7 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 
-type TimeRange = 1 | 6 | 24
+type TimeRange = 1 | 6 | 24 | 48 | 168
 
 const CHART_COLORS = {
   cpu: '#f59e0b',
@@ -227,7 +227,7 @@ export default function MonitoringPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold">Monitoring</h1>
         <div className="flex gap-1 bg-surface-overlay rounded-lg p-0.5">
-          {([1, 6, 24] as TimeRange[]).map((h) => (
+          {([1, 6, 24, 48, 168] as TimeRange[]).map((h) => (
             <button
               key={h}
               onClick={() => setHours(h)}
@@ -237,7 +237,7 @@ export default function MonitoringPage() {
                   : 'text-gray-400 hover:text-gray-200'
               }`}
             >
-              {h}h
+              {h === 168 ? '7d' : `${h}h`}
             </button>
           ))}
         </div>
@@ -515,12 +515,14 @@ export default function MonitoringPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Link
-                    to={`/services/${a.service_id}`}
-                    className="text-xs px-2 py-1 rounded bg-surface-raised border border-border text-gray-300 hover:text-gray-100 transition-colors"
-                  >
-                    View Logs
-                  </Link>
+                  {a.service_id && !a.type.endsWith('_trend') && (
+                    <Link
+                      to={`/services/${a.service_id}`}
+                      className="text-xs px-2 py-1 rounded bg-surface-raised border border-border text-gray-300 hover:text-gray-100 transition-colors"
+                    >
+                      View Logs
+                    </Link>
+                  )}
                   {(a.type === 'service_unhealthy' || a.type === 'restart_loop') && (
                     <button
                       onClick={() => api.serviceAction(a.service_id, 'restart')}

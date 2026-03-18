@@ -143,15 +143,20 @@ func (e *Engine) evaluate() {
 	// Dependency health checks
 	e.checkDependencyHealth()
 
+	// ---- Trend alerts: every 10th tick (~5 minutes) ----
+	if e.snapshotTick%10 == 0 {
+		e.checkTrends()
+	}
+
 	// ---- Monitoring: prune old data every 100th tick (~50 minutes) ----
 	if e.snapshotTick%100 == 0 {
-		if err := e.store.PruneMetricSnapshots(time.Now().Add(-48 * time.Hour)); err != nil {
+		if err := e.store.PruneMetricSnapshots(time.Now().Add(-168 * time.Hour)); err != nil {
 			slog.Error("prune metric snapshots", "err", err)
 		}
 		if err := e.store.PruneServiceEvents(500); err != nil {
 			slog.Error("prune service events", "err", err)
 		}
-		if err := e.store.PruneContainerSnapshots(time.Now().Add(-48 * time.Hour)); err != nil {
+		if err := e.store.PruneContainerSnapshots(time.Now().Add(-168 * time.Hour)); err != nil {
 			slog.Error("prune container snapshots", "err", err)
 		}
 	}
@@ -318,6 +323,60 @@ func (e *Engine) checkDependencyHealth() {
 				e.resolve(alertType, tmpl.ID)
 				delete(e.autoStopped, tmpl.ID+"_dep")
 			}
+		}
+	}
+}
+
+func (e *Engine) checkTrends() {
+	enabled := e.getSettingStr("trend_alert_enabled", "true")
+	if enabled != "true" {
+		return
+	}
+
+	horizon := e.getSettingFloat("trend_alert_horizon_hours", 6)
+	lookback := e.getSettingFloat("trend_alert_lookback_hours", 6)
+	minDataHours := e.getSettingFloat("trend_alert_min_data_hours", 2)
+
+	// Check if we have enough data
+	since := time.Now().Add(-time.Duration(lookback) * time.Hour)
+	oldestAllowed := time.Now().Add(-time.Duration(minDataHours) * time.Hour)
+
+	// Container memory trends
+	containerAlerts := evaluateContainerMemoryTrends(e.store, lookback, horizon)
+	activeContainers := make(map[string]bool)
+	for _, pa := range containerAlerts {
+		activeContainers[pa.ServiceID] = true
+		e.upsert(pa.AlertType, pa.ServiceID, model.SeverityWarning, "%s", pa.Message)
+	}
+
+	// Resolve container memory_trend alerts that no longer fire
+	existingAlerts, _ := e.store.GetActiveAlerts()
+	for _, a := range existingAlerts {
+		if a.Type == "memory_trend" && a.ServiceID != "" && !activeContainers[a.ServiceID] {
+			e.resolve("memory_trend", a.ServiceID)
+		}
+	}
+
+	// Host trends — only if we have enough data
+	snaps, _ := e.store.GetMetricSnapshotsForTrend(since)
+	if len(snaps) > 0 && snaps[0].Timestamp.Before(oldestAllowed) {
+		tempCritical := e.getSettingFloat("temp_critical", 80)
+		hostAlerts := evaluateHostTrends(e.store, lookback, horizon, tempCritical)
+		activeHostTypes := make(map[string]bool)
+		for _, pa := range hostAlerts {
+			activeHostTypes[pa.AlertType] = true
+			e.upsert(pa.AlertType, pa.ServiceID, model.SeverityWarning, "%s", pa.Message)
+		}
+
+		// Resolve host trend alerts that no longer fire
+		for _, alertType := range []string{"disk_trend", "temp_trend"} {
+			if !activeHostTypes[alertType] {
+				e.resolve(alertType, "")
+			}
+		}
+		// Host memory_trend (serviceID="")
+		if !activeHostTypes["memory_trend"] {
+			e.resolve("memory_trend", "")
 		}
 	}
 }

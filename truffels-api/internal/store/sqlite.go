@@ -39,6 +39,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying sql.DB (for tests only).
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *Store) migrate() error {
 	migrations := []string{
 		"migrations/001_init.sql",
@@ -48,6 +53,7 @@ func (s *Store) migrate() error {
 		"migrations/005_fan_metrics.sql",
 		"migrations/006_container_metrics.sql",
 		"migrations/007_host_io_metrics.sql",
+		"migrations/008_trend_alerts.sql",
 	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)

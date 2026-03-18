@@ -311,8 +311,17 @@ function AlertsTab({ settings, saving, onSave }: {
 }) {
   const [tempWarning, setTempWarning] = useState(settings.temp_warning)
   const [tempCritical, setTempCritical] = useState(settings.temp_critical)
+  const [trendEnabled, setTrendEnabled] = useState(settings.trend_alert_enabled)
+  const [trendHorizon, setTrendHorizon] = useState(settings.trend_alert_horizon_hours)
+  const [trendLookback, setTrendLookback] = useState(settings.trend_alert_lookback_hours)
+  const [trendMinData, setTrendMinData] = useState(settings.trend_alert_min_data_hours)
 
-  const changed = tempWarning !== settings.temp_warning || tempCritical !== settings.temp_critical
+  const changed = tempWarning !== settings.temp_warning
+    || tempCritical !== settings.temp_critical
+    || trendEnabled !== settings.trend_alert_enabled
+    || trendHorizon !== settings.trend_alert_horizon_hours
+    || trendLookback !== settings.trend_alert_lookback_hours
+    || trendMinData !== settings.trend_alert_min_data_hours
 
   return (
     <div className="space-y-6">
@@ -352,10 +361,73 @@ function AlertsTab({ settings, saving, onSave }: {
         )}
       </Card>
 
+      <Card>
+        <CardTitle>Resource Trend Alerts</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Predict resource exhaustion using linear regression on recent data.
+          Fires a warning when a resource is estimated to hit its limit within the horizon.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer mb-4">
+          <input
+            type="checkbox" checked={trendEnabled} onChange={(e) => setTrendEnabled(e.target.checked)}
+            className="accent-accent w-4 h-4"
+          />
+          <span className="text-sm text-white font-medium">Enable trend alerts</span>
+        </label>
+        <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-lg ${!trendEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Alert horizon</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={48} step={1}
+                value={trendHorizon}
+                onChange={(e) => setTrendHorizon(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">h</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Alert if resource will hit limit within this window</p>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Lookback window</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={48} step={1}
+                value={trendLookback}
+                onChange={(e) => setTrendLookback(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">h</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">How far back to look for regression data</p>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Min data required</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={0} max={24} step={1}
+                value={trendMinData}
+                onChange={(e) => setTrendMinData(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">h</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Wait for this much data before evaluating</p>
+          </div>
+        </div>
+      </Card>
+
       <div className="flex justify-end">
         <button
           disabled={!changed || saving || tempWarning >= tempCritical}
-          onClick={() => onSave({ temp_warning: tempWarning, temp_critical: tempCritical })}
+          onClick={() => onSave({
+            temp_warning: tempWarning,
+            temp_critical: tempCritical,
+            trend_alert_enabled: trendEnabled,
+            trend_alert_horizon_hours: trendHorizon,
+            trend_alert_lookback_hours: trendLookback,
+            trend_alert_min_data_hours: trendMinData,
+          })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}
