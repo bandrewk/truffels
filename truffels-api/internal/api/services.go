@@ -331,16 +331,8 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 				if info == nil || !strings.Contains(info.Image, "@sha256:") {
 					continue
 				}
-				// info.Image is the old ref from the running container
-				// Get the new digest from the pulled image's tags
+				// Replace old digest with new one from the update check
 				imgName := info.Image[:strings.Index(info.Image, "@")]
-				newDigest := info.Digest // This is the container's image digest
-				// We need the NEW image digest — inspect the image by name
-				// The pull already updated the local tag, so docker inspect on the
-				// image name gives us the new digest. But ImageInspect inspects
-				// the container, not the image. Use the pull output or re-read.
-				// Simplest: read compose file content, replace old digest with
-				// the latest known digest from the update check.
 				if check, err := s.store.GetLatestUpdateCheck(id); err == nil && check != nil && check.LatestVersion != "" {
 					oldRef := imgName + "@" + check.CurrentVersion
 					newRef := imgName + "@" + check.LatestVersion
