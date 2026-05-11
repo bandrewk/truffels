@@ -1,5 +1,5 @@
 # truffels-web — React control plane UI
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
