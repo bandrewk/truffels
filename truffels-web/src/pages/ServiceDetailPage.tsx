@@ -345,6 +345,66 @@ function ElectrsStatsCard() {
   )
 }
 
+function MempoolStatsCard() {
+  const fetcher = useCallback(() => api.mempoolStats(), [])
+  const btcFetcher = useCallback(() => api.bitcoindStats(), [])
+  const { data, error } = useApi(fetcher, 30000)
+  const { data: btcData } = useApi(btcFetcher, 30000)
+
+  if (error) return (
+    <Card>
+      <CardTitle>Block Explorer</CardTitle>
+      <p className="text-sm text-red-400">Unable to fetch stats: {error}</p>
+    </Card>
+  )
+  if (!data) return null
+
+  const btcHeight = btcData?.blockchain.blocks
+  const synced = btcHeight != null && data.block_height >= btcHeight
+  const behind = btcHeight != null ? btcHeight - data.block_height : null
+
+  return (
+    <>
+      <Card>
+        <CardTitle>Block Explorer</CardTitle>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-gray-500">Block Height</dt>
+          <dd className="text-gray-300 font-mono">{data.block_height.toLocaleString()}</dd>
+          {btcHeight != null && (
+            <>
+              <dt className="text-gray-500">Bitcoin Core</dt>
+              <dd className="text-gray-300 font-mono">{btcHeight.toLocaleString()}</dd>
+              <dt className="text-gray-500">Status</dt>
+              <dd className={synced ? 'text-green-400' : 'text-yellow-400'}>
+                {synced ? 'Synced' : `${behind!.toLocaleString()} blocks behind`}
+              </dd>
+            </>
+          )}
+          {data.backend_info && (
+            <>
+              <dt className="text-gray-500">Backend Version</dt>
+              <dd className="text-gray-300">{data.backend_info.version}</dd>
+            </>
+          )}
+        </dl>
+      </Card>
+      {data.pool && (
+        <Card>
+          <CardTitle>Mempool</CardTitle>
+          <dl className="grid grid-cols-2 gap-2 text-sm">
+            <dt className="text-gray-500">Transactions</dt>
+            <dd className="text-gray-300 font-mono">{data.pool.count.toLocaleString()}</dd>
+            <dt className="text-gray-500">Size</dt>
+            <dd className="text-gray-300 font-mono">{(data.pool.vsize / 1_000_000).toFixed(2)} vMB</dd>
+            <dt className="text-gray-500">Total Fees</dt>
+            <dd className="text-gray-300 font-mono">{(data.pool.total_fee / 1e8).toFixed(4)} BTC</dd>
+          </dl>
+        </Card>
+      )}
+    </>
+  )
+}
+
 function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; updateCheck?: UpdateCheck | null; serviceId: string }) {
   const [rollbackConfirm, setRollbackConfirm] = useState(false)
   const [rollbackLoading, setRollbackLoading] = useState(false)
@@ -391,6 +451,7 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
       {svc.template.id === 'bitcoind' && <BitcoinStatsCard />}
       {svc.template.id === 'ckpool' && <CkpoolStatsCard />}
       {svc.template.id === 'electrs' && <ElectrsStatsCard />}
+      {svc.template.id === 'mempool' && <MempoolStatsCard />}
       <Card>
         <CardTitle>Containers</CardTitle>
         <div className="overflow-x-auto">

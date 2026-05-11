@@ -71,6 +71,8 @@ func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
 		s.enrichBitcoindSync(svc)
 	case "electrs":
 		s.enrichElectrsSync(svc)
+	case "mempool":
+		s.enrichMempoolSync(svc)
 	}
 }
 
@@ -126,6 +128,44 @@ func (s *Server) enrichElectrsSync(svc *model.ServiceInstance) {
 
 	progress := float64(indexHeight) / float64(bcInfo.Blocks)
 	behind := bcInfo.Blocks - indexHeight
+	pct := progress * 100
+	svc.SyncInfo = &model.SyncInfo{
+		Syncing:  true,
+		Progress: progress,
+		Detail:   fmt.Sprintf("%.1f%% (%s blocks behind)", pct, formatInt(behind)),
+	}
+}
+
+func (s *Server) enrichMempoolSync(svc *model.ServiceInstance) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(mempoolBaseURL + "/api/v1/blocks/tip/height")
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	mempoolHeight, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil || mempoolHeight == 0 {
+		return
+	}
+
+	if s.btcRPC == nil {
+		return
+	}
+	bcInfo, err := s.btcRPC.GetBlockchainInfo()
+	if err != nil || bcInfo.Blocks == 0 {
+		return
+	}
+
+	if mempoolHeight >= bcInfo.Blocks {
+		return // synced
+	}
+
+	progress := float64(mempoolHeight) / float64(bcInfo.Blocks)
+	behind := bcInfo.Blocks - mempoolHeight
 	pct := progress * 100
 	svc.SyncInfo = &model.SyncInfo{
 		Syncing:  true,

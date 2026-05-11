@@ -164,6 +164,20 @@ export interface ElectrsStats {
   index_height: number
 }
 
+export interface MempoolStats {
+  backend_info: {
+    version: string
+    backend: string
+    coreVersion: string
+  } | null
+  pool: {
+    count: number
+    vsize: number
+    total_fee: number
+  } | null
+  block_height: number
+}
+
 export interface UpdateCheck {
   id: number
   service_id: string
@@ -418,6 +432,7 @@ export const api = {
   bitcoindStats: () => get<BitcoindStats>('/services/bitcoind/stats'),
   ckpoolStats: () => get<CkpoolStats>('/services/ckpool/stats'),
   electrsStats: () => get<ElectrsStats>('/services/electrs/stats'),
+  mempoolStats: () => get<MempoolStats>('/services/mempool/stats'),
   host: () => get<HostMetrics>('/host'),
   alerts: (all = false) => get<Alert[]>(`/alerts${all ? '?all=true' : ''}`),
   dismissAlert: (id: number) => post<{ status: string }>(`/alerts/${id}/resolve`),

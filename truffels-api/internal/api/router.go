@@ -74,6 +74,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/services/bitcoind/stats", s.handleBitcoindStats)
 			r.Get("/services/ckpool/stats", s.handleCkpoolStats)
 			r.Get("/services/electrs/stats", s.handleElectrsStats)
+			r.Get("/services/mempool/stats", s.handleMempoolStats)
 			r.Get("/services/{id}", s.handleGetService)
 			r.Post("/services/{id}/action", s.handleServiceAction)
 			r.Get("/services/{id}/logs", s.handleServiceLogs)

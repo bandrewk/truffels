@@ -889,6 +889,22 @@ electrs_index_height{type="tip"} 890123
 	// Skipping full handler test — parser is covered.
 }
 
+// --- Mempool Stats ---
+
+func TestMempoolStats_BackendUnreachable(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	w := httptest.NewRecorder()
+	req := authedReq(t, srv, "GET", "/api/truffels/services/mempool/stats", "")
+	srv.Router().ServeHTTP(w, req)
+
+	// Backend is not running in test env, expect 503
+	if w.Code != 503 {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // --- Alerts Handler ---
 
 func TestAlertsHandler_ActiveOnly(t *testing.T) {
