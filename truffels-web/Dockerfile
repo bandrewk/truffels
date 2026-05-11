@@ -1,7 +1,7 @@
 # truffels-web — React control plane UI
 FROM node:20-slim AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
