@@ -321,10 +321,37 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// Always compose up — it's idempotent and only recreates containers
-		// whose image actually changed. This avoids the bug where a cached
-		// pull returns "Image is up to date" even though the running container
-		// uses an older digest.
+		// For digest-pinned images (e.g. mariadb:lts@sha256:...), update the
+		// compose file with the new digest so compose up sees the change.
+		composeContent, err := s.compose.ComposeRead(id)
+		if err == nil {
+			updated := composeContent
+			for _, cname := range tmpl.ContainerNames {
+				info, _ := s.compose.ImageInspect(cname)
+				if info == nil || !strings.Contains(info.Image, "@sha256:") {
+					continue
+				}
+				// info.Image is the old ref from the running container
+				// Get the new digest from the pulled image's tags
+				imgName := info.Image[:strings.Index(info.Image, "@")]
+				newDigest := info.Digest // This is the container's image digest
+				// We need the NEW image digest — inspect the image by name
+				// The pull already updated the local tag, so docker inspect on the
+				// image name gives us the new digest. But ImageInspect inspects
+				// the container, not the image. Use the pull output or re-read.
+				// Simplest: read compose file content, replace old digest with
+				// the latest known digest from the update check.
+				if check, err := s.store.GetLatestUpdateCheck(id); err == nil && check != nil && check.LatestVersion != "" {
+					oldRef := imgName + "@" + check.CurrentVersion
+					newRef := imgName + "@" + check.LatestVersion
+					updated = strings.ReplaceAll(updated, oldRef, newRef)
+				}
+			}
+			if updated != composeContent {
+				_, _ = s.compose.ComposeReconcile(id, updated)
+			}
+		}
+		// Compose up — recreates containers whose image changed
 		if err := s.compose.Up(id); err != nil {
 			writeError(w, http.StatusInternalServerError, "restart failed: "+err.Error())
 			return
