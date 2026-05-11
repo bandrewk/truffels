@@ -3,11 +3,18 @@ package compose
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"truffels-api/internal/docker"
 	"truffels-api/internal/service"
 )
+
+// dockerfileMapping maps service IDs to their Dockerfile path in the repo (relative to /repo/).
+var dockerfileMapping = map[string]string{
+	"ckstats": "dockerfiles/ckstats/Dockerfile",
+	"ckpool":  "dockerfiles/ckpool/Dockerfile",
+}
 
 // serviceIDs that have compose templates (skip truffels — self-managed).
 var reconciledServices = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy"}
@@ -81,15 +88,39 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 
 	if !changed {
 		slog.Info("compose unchanged", "service", serviceID)
-		return nil
+	} else {
+		slog.Info("compose reconciled, restarting", "service", serviceID)
+		if err := r.compose.Up(serviceID); err != nil {
+			return fmt.Errorf("restart after reconcile: %w", err)
+		}
 	}
 
-	slog.Info("compose reconciled, restarting", "service", serviceID)
-	if err := r.compose.Up(serviceID); err != nil {
-		return fmt.Errorf("restart after reconcile: %w", err)
+	// Reconcile Dockerfile if this service has one in the repo
+	if repoPath, ok := dockerfileMapping[serviceID]; ok {
+		r.reconcileDockerfile(serviceID, repoPath)
 	}
 
 	return nil
+}
+
+func (r *Reconciler) reconcileDockerfile(serviceID, repoPath string) {
+	expected, err := os.ReadFile("/repo/" + repoPath)
+	if err != nil {
+		slog.Warn("dockerfile read from repo failed", "service", serviceID, "err", err)
+		return
+	}
+
+	changed, err := r.compose.ReconcileFile(serviceID+"/Dockerfile", string(expected))
+	if err != nil {
+		slog.Warn("dockerfile reconcile failed", "service", serviceID, "err", err)
+		return
+	}
+
+	if changed {
+		slog.Info("dockerfile reconciled", "service", serviceID)
+	} else {
+		slog.Info("dockerfile unchanged", "service", serviceID)
+	}
 }
 
 func (r *Reconciler) readWithRetry(serviceID string) (string, error) {

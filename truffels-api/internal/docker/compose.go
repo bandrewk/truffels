@@ -499,6 +499,33 @@ func (c *ComposeClient) ComposeReconcile(serviceID, expectedContent string) (boo
 	return result.Changed, nil
 }
 
+// ReconcileFile compares expected content with a file under the compose root via the agent.
+// The path is relative to /srv/truffels/compose/ (e.g. "ckstats/Dockerfile").
+// Returns true if the file was changed.
+func (c *ComposeClient) ReconcileFile(relativePath, content string) (bool, error) {
+	body, _ := json.Marshal(map[string]string{
+		"path":             relativePath,
+		"expected_content": content,
+	})
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/file/reconcile", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("agent file reconcile: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Status  string `json:"status"`
+		Error   string `json:"error"`
+		Changed bool   `json:"changed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return false, fmt.Errorf("agent file reconcile: %s", result.Error)
+	}
+	return result.Changed, nil
+}
+
 func (c *ComposeClient) composeAction(path, serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)

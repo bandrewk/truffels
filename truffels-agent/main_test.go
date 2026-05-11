@@ -1599,3 +1599,129 @@ func TestHandleComposeReconcile_EmptyContent(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+// --- File Reconcile ---
+
+func TestHandleFileReconcile_Changed(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/ckstats", 0755)
+	_ = os.WriteFile(dir+"/ckstats/Dockerfile", []byte("FROM node:20-slim\n"), 0644)
+
+	body, _ := json.Marshal(map[string]string{
+		"path":             "ckstats/Dockerfile",
+		"expected_content": "FROM node:22-slim\n",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", bytes.NewReader(body))
+
+	handleFileReconcile(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["changed"] != true {
+		t.Fatal("expected changed=true")
+	}
+
+	data, _ := os.ReadFile(dir + "/ckstats/Dockerfile")
+	if string(data) != "FROM node:22-slim\n" {
+		t.Fatalf("expected updated content, got: %s", string(data))
+	}
+}
+
+func TestHandleFileReconcile_Unchanged(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	content := "FROM node:22-slim\n"
+	_ = os.MkdirAll(dir+"/ckstats", 0755)
+	_ = os.WriteFile(dir+"/ckstats/Dockerfile", []byte(content), 0644)
+
+	body, _ := json.Marshal(map[string]string{
+		"path":             "ckstats/Dockerfile",
+		"expected_content": content,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", bytes.NewReader(body))
+
+	handleFileReconcile(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["changed"] != false {
+		t.Fatal("expected changed=false")
+	}
+}
+
+func TestHandleFileReconcile_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	body, _ := json.Marshal(map[string]string{
+		"path":             "../etc/passwd",
+		"expected_content": "hacked",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", bytes.NewReader(body))
+
+	handleFileReconcile(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFileReconcile_EmptyFields(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{
+		"path":             "",
+		"expected_content": "",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", bytes.NewReader(body))
+
+	handleFileReconcile(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleFileReconcile_CreatesNewFile(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir
+
+	_ = os.MkdirAll(dir+"/ckpool", 0755)
+
+	body, _ := json.Marshal(map[string]string{
+		"path":             "ckpool/Dockerfile",
+		"expected_content": "FROM debian:bookworm-slim\n",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", bytes.NewReader(body))
+
+	handleFileReconcile(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["changed"] != true {
+		t.Fatal("expected changed=true for new file")
+	}
+
+	data, _ := os.ReadFile(dir + "/ckpool/Dockerfile")
+	if string(data) != "FROM debian:bookworm-slim\n" {
+		t.Fatalf("expected content written, got: %s", string(data))
+	}
+}

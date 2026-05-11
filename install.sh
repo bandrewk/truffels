@@ -479,28 +479,7 @@ networks:
 ELECTRSDC
 
 # ckpool
-tee "$COMPOSE_DIR/ckpool/Dockerfile" >/dev/null <<'CKPOOLDKR'
-FROM debian:bookworm-slim AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential autoconf automake libtool pkg-config \
-    libczmq-dev ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /build
-RUN git clone --depth 1 --branch v1.0.0 https://bitbucket.org/ckolivas/ckpool.git .
-RUN ./autogen.sh && ./configure && make -j$(nproc)
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libczmq4 \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd -g 1000 ckpool \
-    && useradd -u 1000 -g ckpool -s /usr/sbin/nologin ckpool
-COPY --from=builder /build/src/ckpool /usr/local/bin/ckpool
-COPY --from=builder /build/src/ckpmsg /usr/local/bin/ckpmsg
-COPY --from=builder /build/src/notifier /usr/local/bin/notifier
-USER ckpool
-ENTRYPOINT ["ckpool"]
-CKPOOLDKR
+cp "$SCRIPT_DIR/dockerfiles/ckpool/Dockerfile" "$COMPOSE_DIR/ckpool/Dockerfile"
 
 tee "$COMPOSE_DIR/ckpool/docker-compose.yml" >/dev/null <<'CKPOOLDC'
 services:
@@ -630,39 +609,7 @@ networks:
 MEMPOOLDC
 
 # ckstats Dockerfile
-tee "$COMPOSE_DIR/ckstats/Dockerfile" >/dev/null <<'CKSTATSDKR'
-FROM node:20-slim AS builder
-RUN corepack enable && corepack prepare pnpm@9 --activate
-WORKDIR /app
-COPY ckpoolstats/package.json ckpoolstats/pnpm-lock.yaml ./
-RUN pnpm install --no-frozen-lockfile
-RUN pnpm add dotenv
-COPY ckpoolstats/ ./
-RUN sed -i "s|fetch('/api/|fetch('/ckstats/api/|g" components/Header.tsx && \
-    sed -i "s|fetch(\`/api/|fetch(\`/ckstats/api/|g" components/UserResetButton.tsx components/PrivacyToggle.tsx && \
-    npx prettier --write components/Header.tsx components/UserResetButton.tsx components/PrivacyToggle.tsx
-RUN pnpm build
-
-FROM node:20-slim
-RUN corepack enable && corepack prepare pnpm@9 --activate
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cron postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/scripts ./scripts
-COPY --from=builder /app/lib ./lib
-COPY --from=builder /app/utils ./utils
-COPY --from=builder /app/tsconfig.json ./
-COPY --from=builder /app/tsconfig.scripts.json ./
-COPY --from=builder /app/ormconfig.ts ./
-COPY --from=builder /app/next.config.js ./
-COPY --from=builder /app/migrations ./migrations
-EXPOSE 3000
-CMD ["pnpm", "start"]
-CKSTATSDKR
+cp "$SCRIPT_DIR/dockerfiles/ckstats/Dockerfile" "$COMPOSE_DIR/ckstats/Dockerfile"
 
 tee "$COMPOSE_DIR/ckstats/docker-compose.yml" >/dev/null <<'CKSTATSDC'
 services:
@@ -927,7 +874,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.8}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.9}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"

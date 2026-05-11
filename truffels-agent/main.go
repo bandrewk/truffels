@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"os/signal"
 	"regexp"
 	"strconv"
@@ -93,6 +94,7 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/rewrite-tags", handleComposeRewriteTags)
 	mux.HandleFunc("POST /v1/compose/read", handleComposeRead)
 	mux.HandleFunc("POST /v1/compose/reconcile", handleComposeReconcile)
+	mux.HandleFunc("POST /v1/file/reconcile", handleFileReconcile)
 	mux.HandleFunc("POST /v1/image/remove", handleImageRemove)
 	mux.HandleFunc("POST /v1/docker/prune", handleDockerPrune)
 	mux.HandleFunc("POST /v1/docker/prune-buildcache", handleDockerPruneBuildCache)
@@ -1465,6 +1467,57 @@ func handleComposeReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("compose file reconciled", "service", req.ServiceID)
+	writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": true})
+}
+
+// handleFileReconcile compares expected content with a file under the compose root,
+// writes if different, and reports whether a change was made.
+func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path            string `json:"path"`
+		ExpectedContent string `json:"expected_content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Path == "" || req.ExpectedContent == "" {
+		writeJSON(w, 400, map[string]string{"error": "path and expected_content are required"})
+		return
+	}
+
+	// Security: resolve path and ensure it stays under composeRoot
+	fullPath := filepath.Join(composeRoot, filepath.Clean(req.Path))
+	if !strings.HasPrefix(fullPath, composeRoot+"/") {
+		writeJSON(w, 403, map[string]string{"error": "path outside compose root"})
+		return
+	}
+
+	slog.Info("file reconcile", "path", fullPath)
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil && !os.IsNotExist(err) {
+		writeJSON(w, 500, map[string]string{"error": "read file: " + err.Error()})
+		return
+	}
+
+	if bytes.Equal(data, []byte(req.ExpectedContent)) {
+		writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": false})
+		return
+	}
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "create dir: " + err.Error()})
+		return
+	}
+
+	if err := os.WriteFile(fullPath, []byte(req.ExpectedContent), 0644); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "write file: " + err.Error()})
+		return
+	}
+
+	slog.Info("file reconciled", "path", fullPath)
 	writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": true})
 }
 
