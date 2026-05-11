@@ -348,6 +348,12 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "restart failed: "+err.Error())
 			return
 		}
+		// Update the check so UI shows "up to date"
+		if check, err := s.store.GetLatestUpdateCheck(id); err == nil && check != nil && check.HasUpdate {
+			check.CurrentVersion = check.LatestVersion
+			check.HasUpdate = false
+			_ = s.store.UpsertUpdateCheck(check)
+		}
 
 	case "enable":
 		_ = s.store.SetServiceEnabled(id, true)
