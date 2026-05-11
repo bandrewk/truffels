@@ -1643,14 +1643,9 @@ func TestServiceAction_PullRestart_AlreadyUpToDate(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var body map[string]string
-	_ = json.Unmarshal(w.Body.Bytes(), &body)
-	if body["status"] != "already_up_to_date" {
-		t.Fatalf("expected already_up_to_date status, got %q", body["status"])
-	}
-	// Compose up should NOT have been called
-	if agentState.lastAction == "up" {
-		t.Fatal("expected no compose up when image is already up to date")
+	// Compose up is always called (idempotent) — docker compose handles the diff
+	if agentState.lastAction != "up" {
+		t.Fatalf("expected compose up to always be called, got %q", agentState.lastAction)
 	}
 }
 

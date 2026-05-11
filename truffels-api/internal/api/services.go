@@ -305,8 +305,7 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "pull-restart":
-		// Pull latest images, check if anything changed, restart only if needed
-		changed := false
+		// Pull latest images for all containers in this service
 		for _, cname := range tmpl.ContainerNames {
 			info, err := s.compose.ImageInspect(cname)
 			if err != nil {
@@ -317,21 +316,15 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			if atIdx := strings.Index(imgRef, "@"); atIdx >= 0 {
 				imgRef = imgRef[:atIdx]
 			}
-			output, err := s.compose.Pull(imgRef)
-			if err != nil {
+			if _, err := s.compose.Pull(imgRef); err != nil {
 				writeError(w, http.StatusInternalServerError, "pull failed: "+err.Error())
 				return
 			}
-			if !strings.Contains(output, "Image is up to date") {
-				changed = true
-			}
 		}
-		if !changed {
-			_ = s.store.LogAudit("service_pull_restart", id, "already up to date", r.RemoteAddr)
-			writeJSON(w, http.StatusOK, map[string]string{"status": "already_up_to_date", "action": "pull-restart"})
-			return
-		}
-		// Use compose up (without down) — only recreates containers whose image changed
+		// Always compose up — it's idempotent and only recreates containers
+		// whose image actually changed. This avoids the bug where a cached
+		// pull returns "Image is up to date" even though the running container
+		// uses an older digest.
 		if err := s.compose.Up(id); err != nil {
 			writeError(w, http.StatusInternalServerError, "restart failed: "+err.Error())
 			return
