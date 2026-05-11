@@ -8,7 +8,7 @@ var Mempool = model.ServiceTemplate{
 	Description:    "Bitcoin block explorer and mempool visualizer",
 	ContainerNames: []string{"truffels-mempool-backend", "truffels-mempool-frontend"},
 	Dependencies:   []string{"bitcoind", "electrs", "mempool-db"},
-	MemoryLimit:    "1792M",
+	MemoryLimit:    "2304M",
 	ConfigPath:       "",
 	RequiresUnpruned: true,
 	Port:           "80 (via proxy)",
