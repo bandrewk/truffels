@@ -4,7 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import { truncDigest, formatTime, logStatusMap } from '@/lib/updates'
+import { truncDigest, formatTime, logStatusMap, phaseLabel, formatElapsed } from '@/lib/updates'
 
 function DockerIcon() {
   return (
@@ -251,6 +251,12 @@ export default function UpdatesPage() {
           const isDigest = c.current_version?.startsWith('sha256:') || c.latest_version?.startsWith('sha256:')
           const displayName = displayNames[c.service_id] || floating?.display_name || c.service_id
           const imgName = floating?.image ? floating.image.split(':')[0] : ''
+          // Logs are ordered DESC by started_at — first non-terminal entry is the live one.
+          const activeLog = updating[c.service_id]
+            ? (logs || []).find(l =>
+                l.service_id === c.service_id &&
+                l.status !== 'done' && l.status !== 'failed' && l.status !== 'rolled_back')
+            : undefined
           return (
             <Card key={c.service_id}>
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -265,7 +271,11 @@ export default function UpdatesPage() {
                     {c.error ? (
                       <span className="text-xs text-red-400">error</span>
                     ) : updating[c.service_id] ? (
-                      <span className="text-xs text-yellow-400 animate-pulse">updating...</span>
+                      <span className="text-xs text-yellow-400 animate-pulse">
+                        {activeLog
+                          ? `${phaseLabel(activeLog.status)} · ${formatElapsed(activeLog.started_at)}`
+                          : 'updating...'}
+                      </span>
                     ) : c.has_update ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent border border-accent/30">
                         update available
@@ -290,6 +300,11 @@ export default function UpdatesPage() {
                   </div>
                   {c.error && (
                     <p className="text-xs text-red-400 mt-1">{c.error}</p>
+                  )}
+                  {updating[c.service_id] && (
+                    <p className="text-[11px] text-gray-500 italic mt-1">
+                      Source builds can take &gt;10 minutes. Safe to leave this page.
+                    </p>
                   )}
                 </div>
                 <div className="flex-shrink-0">
