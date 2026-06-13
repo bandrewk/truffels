@@ -29,7 +29,7 @@ func TestReconciler_NoChange(t *testing.T) {
 		{ID: "ckpool", ComposeDir: "/srv/truffels/compose/ckpool"},
 	})
 
-	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL))
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
 	if err := reconciler.Run(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,7 +72,7 @@ networks:
 		{ID: "ckpool", ComposeDir: "/srv/truffels/compose/ckpool"},
 	})
 
-	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL))
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
 	if err := reconciler.Run(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestReconciler_ReadError(t *testing.T) {
 		{ID: "ckpool", ComposeDir: "/srv/truffels/compose/ckpool"},
 	})
 
-	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL))
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
 	err := reconciler.Run()
 	if err == nil {
 		t.Fatal("expected error")
@@ -169,11 +169,67 @@ func newMockAgentFull(t *testing.T, contents map[string]string,
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
+		case "/v1/fs/ensure-dir":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "ok",
+				"created": false,
+			})
+
 		default:
 			w.WriteHeader(404)
 			fmt.Fprintf(w, `{"error":"not found: %s"}`, r.URL.Path)
 		}
 	}))
+}
+
+// captureAlertStore records UpsertAlert calls in memory for testing.
+type captureAlertStore struct {
+	alerts []*model.Alert
+}
+
+func (c *captureAlertStore) UpsertAlert(a *model.Alert) error {
+	c.alerts = append(c.alerts, a)
+	return nil
+}
+
+func TestReconciler_FailedUpEmitsAlert(t *testing.T) {
+	// Render expected (so reconcile reports "changed") but make `compose up`
+	// fail — reconciler must raise a critical Alert via the alertStore.
+	oldContent := `services:
+  ckpool:
+    image: truffels/ckpool:v1.0.0
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+`
+	srv := newMockAgentFull(t, map[string]string{"ckpool": oldContent},
+		func(serviceID, content string) (bool, error) { return true, nil },
+		func(serviceID string) error { return fmt.Errorf("compose up exit 1") },
+	)
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "ckpool", ComposeDir: "/srv/truffels/compose/ckpool"},
+	})
+	store := &captureAlertStore{}
+
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), store)
+	_ = reconciler.Run() // expected to return error
+
+	if len(store.alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(store.alerts))
+	}
+	got := store.alerts[0]
+	if got.Type != "compose_reconcile_failed" {
+		t.Errorf("type: %q", got.Type)
+	}
+	if got.Severity != model.SeverityCritical {
+		t.Errorf("severity: %q", got.Severity)
+	}
+	if got.ServiceID != "ckpool" {
+		t.Errorf("service: %q", got.ServiceID)
+	}
 }
 
 func newMockAgentError(t *testing.T) *httptest.Server {

@@ -18,4 +18,12 @@ var Ckstats = model.ServiceTemplate{
 		Branch:     "main",
 		NeedsBuild: true,
 	},
+	DataDirs: []model.DataDir{
+		{
+			Path:        "/srv/truffels/data/ckstats/postgres",
+			Label:       "Mining stats DB",
+			Description: "PostgreSQL — persistent mining stats history. Not clearable.",
+			Clearable:   false,
+		},
+	},
 }

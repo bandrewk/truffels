@@ -552,10 +552,17 @@ const UNIT_OPTIONS = [
 function SystemInfoTab() {
   const fetcher = useCallback(() => api.systemInfo(), [])
   const { data, error, loading, refresh } = useApi(fetcher)
+  const servicesFetcher = useCallback(() => api.services(), [])
+  const { data: services } = useApi(servicesFetcher)
   const [pruning, setPruning] = useState(false)
   const [prunePassword, setPrunePassword] = useState('')
   const [pruneConfirm, setPruneConfirm] = useState<'buildcache' | 'all' | null>(null)
   const [pruneMsg, setPruneMsg] = useState('')
+  // Service data clear state — keyed by `${serviceId}|${path}` so multiple rows can be independent.
+  const [clearTarget, setClearTarget] = useState<{ serviceId: string; path: string; label: string; description: string } | null>(null)
+  const [clearPassword, setClearPassword] = useState('')
+  const [clearMsg, setClearMsg] = useState('')
+  const [clearing, setClearing] = useState(false)
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
@@ -577,6 +584,59 @@ function SystemInfoTab() {
     } finally {
       setPruning(false)
     }
+  }
+
+  async function handleClear() {
+    if (!clearTarget) return
+    if (!clearPassword) { setClearMsg('Password required'); return }
+    setClearing(true); setClearMsg('')
+    try {
+      await api.clearServiceData(clearPassword, clearTarget.serviceId, clearTarget.path)
+      setClearMsg(`Cleared ${clearTarget.label}`)
+      setClearTarget(null)
+      setClearPassword('')
+      refresh()
+    } catch (e: any) {
+      setClearMsg(`Error: ${e.message}`)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  // Build the joined view: a row per (template DataDir × measured size from agent).
+  // Service data from the agent is keyed by path; template DataDirs supply
+  // service id, label, description, and clearable flag.
+  type ServiceDataRow = {
+    serviceId: string
+    serviceName: string
+    path: string
+    label: string
+    description: string
+    clearable: boolean
+    size: string
+    sizeRaw: number
+  }
+  const serviceDataRows: ServiceDataRow[] = []
+  if (services && data?.service_data) {
+    const sizeByPath = new Map(data.service_data.map((s) => [s.path, s]))
+    for (const svc of services) {
+      const tmpl = svc.template
+      if (!tmpl.data_dirs) continue
+      for (const dd of tmpl.data_dirs) {
+        const sz = sizeByPath.get(dd.path)
+        serviceDataRows.push({
+          serviceId: tmpl.id,
+          serviceName: tmpl.display_name,
+          path: dd.path,
+          label: dd.label,
+          description: dd.description,
+          clearable: dd.clearable,
+          size: sz?.size ?? '—',
+          sizeRaw: sz?.size_raw ?? 0,
+        })
+      }
+    }
+    serviceDataRows.sort((a, b) => b.sizeRaw - a.sizeRaw)
   }
 
   const Row = ({ label, value }: { label: string; value: string | number }) => (
@@ -742,6 +802,86 @@ function SystemInfoTab() {
               </p>
             )}
           </div>
+        </Card>
+      )}
+      {serviceDataRows.length > 0 && (
+        <Card>
+          <CardTitle>Service Data Storage</CardTitle>
+          <p className="text-xs text-gray-500 mb-3">
+            Per-service host data under <span className="font-mono">/srv/truffels/data/</span>. Caches can be cleared; persistent state cannot.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-border-subtle">
+                  <th className="pb-2 pr-4">Service</th>
+                  <th className="pb-2 pr-4">Label</th>
+                  <th className="pb-2 pr-4">Path</th>
+                  <th className="pb-2 pr-4 text-right">Size</th>
+                  <th className="pb-2 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serviceDataRows.map((r) => (
+                  <tr key={`${r.serviceId}|${r.path}`} className="border-b border-border-subtle last:border-0">
+                    <td className="py-1.5 pr-4 text-gray-300">{r.serviceName}</td>
+                    <td className="py-1.5 pr-4 text-gray-300">{r.label}</td>
+                    <td className="py-1.5 pr-4 font-mono text-gray-500 text-xs">{r.path}</td>
+                    <td className="py-1.5 pr-4 text-right font-mono text-gray-300">{r.size}</td>
+                    <td className="py-1.5 text-right">
+                      {r.clearable ? (
+                        <button
+                          onClick={() => {
+                            setClearTarget({ serviceId: r.serviceId, path: r.path, label: r.label, description: r.description })
+                            setClearMsg('')
+                          }}
+                          className="px-3 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-xs font-medium rounded transition-colors"
+                        >
+                          Clear
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-600">view-only</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {clearTarget && (
+            <div className="mt-4 pt-4 border-t border-border-subtle space-y-3">
+              <p className="text-sm text-yellow-400">
+                <span className="font-medium">{clearTarget.label}</span> — {clearTarget.description}
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <input
+                  type="password"
+                  value={clearPassword}
+                  onChange={(e) => setClearPassword(e.target.value)}
+                  placeholder="Admin password"
+                  className="px-3 py-1.5 bg-surface-overlay border border-border rounded text-sm text-white placeholder-gray-600 max-w-xs"
+                />
+                <button
+                  onClick={handleClear}
+                  disabled={clearing || !clearPassword}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded disabled:opacity-50"
+                >
+                  {clearing ? 'Clearing...' : 'Confirm Clear'}
+                </button>
+                <button
+                  onClick={() => { setClearTarget(null); setClearMsg('') }}
+                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {clearMsg && (
+            <p className={`text-sm mt-2 ${clearMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+              {clearMsg}
+            </p>
+          )}
         </Card>
       )}
     </div>

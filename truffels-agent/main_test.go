@@ -1725,3 +1725,168 @@ func TestHandleFileReconcile_CreatesNewFile(t *testing.T) {
 		t.Fatalf("expected content written, got: %s", string(data))
 	}
 }
+
+// --- fs/ensure-dir ---
+
+func postEnsureDir(t *testing.T, path string, uid, gid int, mode string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{
+		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/fs/ensure-dir", bytes.NewReader(body))
+	handleEnsureDir(w, r)
+	return w
+}
+
+func TestHandleEnsureDir_CreatesIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+
+	// Use the test runner's own uid/gid so chown is a no-op — production
+	// agent runs as root and can chown to 1000:1000, but CI runners can't.
+	// We're exercising the path validation + mkdir paths, not privilege.
+	uid, gid := os.Getuid(), os.Getgid()
+
+	target := dir + "/mempool/cache"
+	w := postEnsureDir(t, target, uid, gid, "0755")
+	if w.Code != 200 {
+		t.Fatalf("first call: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		t.Fatalf("dir not created: %v", err)
+	}
+	// Idempotent: second call also OK.
+	w = postEnsureDir(t, target, uid, gid, "0755")
+	if w.Code != 200 {
+		t.Fatalf("second call: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleEnsureDir_RejectsOutsideDataRoot(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+
+	// Absolute escape
+	w := postEnsureDir(t, "/etc/eviltest", 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("absolute escape: expected 403, got %d", w.Code)
+	}
+	// Relative escape via ..
+	w = postEnsureDir(t, dir+"/foo/../../etcbad", 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("..-escape: expected 403, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleEnsureDir_RejectsEmptyPath(t *testing.T) {
+	dataRoot = t.TempDir()
+	w := postEnsureDir(t, "", 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for empty path, got %d", w.Code)
+	}
+}
+
+func TestHandleEnsureDir_RejectsSymlinkRedirect(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+	// Create a symlink at dataRoot/evil pointing to /tmp (outside dataRoot).
+	outside := t.TempDir() // real path outside dataRoot
+	if err := os.Symlink(outside, dir+"/evil"); err != nil {
+		t.Skip("symlink not supported: ", err)
+	}
+	// Now try to ensure-dir at dataRoot/evil/foo — parent (evil) resolves outside dataRoot.
+	w := postEnsureDir(t, dir+"/evil/foo", 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for symlink redirect, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// --- fs/clear-dir ---
+
+func postClearDir(t *testing.T, path string, uid, gid int, mode string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{
+		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/fs/clear-dir", bytes.NewReader(body))
+	handleClearDir(w, r)
+	return w
+}
+
+func TestHandleClearDir_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+	target := dir + "/mempool/cache"
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// drop a file inside
+	if err := os.WriteFile(target+"/rbfcache.json", []byte("xx"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Use the test runner's own uid/gid (see TestHandleEnsureDir_CreatesIdempotent).
+	uid, gid := os.Getuid(), os.Getgid()
+	w := postClearDir(t, target, uid, gid, "0755")
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(target + "/rbfcache.json"); !os.IsNotExist(err) {
+		t.Error("expected rbfcache.json removed")
+	}
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		t.Errorf("expected dir to be recreated: %v", err)
+	}
+}
+
+func TestHandleClearDir_RejectsBasenameNotInAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+	target := dir + "/bitcoin/blockchain"
+	_ = os.MkdirAll(target, 0755)
+	w := postClearDir(t, target, 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for blockchain basename, got %d body=%s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Error("dir must NOT have been removed")
+	}
+}
+
+// The "blockchain-suffix-trick": even if basename matches "cache", the path is
+// rejected if not exactly two levels under dataRoot. This guards against
+// requests like /srv/truffels/data/bitcoin/blockchain/cache.
+func TestHandleClearDir_RejectsThreeLevelDeep(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+	target := dir + "/bitcoin/blockchain/cache"
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	w := postClearDir(t, target, 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for three-level-deep path, got %d body=%s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Error("dir must NOT have been removed")
+	}
+}
+
+func TestHandleClearDir_RejectsAbsoluteEscape(t *testing.T) {
+	dataRoot = t.TempDir()
+	w := postClearDir(t, "/etc/cache", 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for absolute escape, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleClearDir_RejectsRelativeEscape(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot = dir
+	target := dir + "/foo/../../etc/cache"
+	w := postClearDir(t, target, 1000, 1000, "0755")
+	if w.Code != 403 {
+		t.Errorf("expected 403 for relative escape, got %d body=%s", w.Code, w.Body.String())
+	}
+}

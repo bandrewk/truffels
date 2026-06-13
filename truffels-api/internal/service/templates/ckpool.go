@@ -18,4 +18,12 @@ var Ckpool = model.ServiceTemplate{
 		Branch:     "master",
 		NeedsBuild: true,
 	},
+	DataDirs: []model.DataDir{
+		{
+			Path:        "/srv/truffels/data/ckpool",
+			Label:       "Ckpool state + logs",
+			Description: "Pool state, share data, and per-miner logs. Clearing logs separately is a future feature; today the whole dir is view-only.",
+			Clearable:   false,
+		},
+	},
 }

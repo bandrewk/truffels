@@ -54,9 +54,11 @@ func main() {
 	// Host metrics collector
 	collector := metrics.NewCollector(cfg.HostProc, cfg.HostSys, cfg.DataRoot)
 
-	// Alert engine
+	// Alert engine (constructed early so we can pass it to the reconciler).
+	// IMPORTANT: Start() is deferred until after Compose reconciliation so
+	// the alert evaluator doesn't fire spurious warnings against services
+	// that are still being reconciled. See v0.3.1-dev.14 startup-ordering fix.
 	alertEngine := alerts.NewEngine(st, registry, collector, compose)
-	alertEngine.Start()
 	defer alertEngine.Stop()
 
 	// Update engine
@@ -64,11 +66,17 @@ func main() {
 	updateEngine.Start()
 	defer updateEngine.Stop()
 
-	// Compose reconciliation — regenerate compose files from templates on startup
-	reconciler := composereconcile.NewReconciler(registry, compose)
+	// Compose reconciliation — regenerate compose files from templates on startup.
+	// Reconciler emits critical Alerts on compose-up failures so that a typo
+	// in a service template doesn't silently break the service after self-update.
+	reconciler := composereconcile.NewReconciler(registry, compose, st)
 	if err := reconciler.Run(); err != nil {
 		slog.Warn("compose reconciliation had errors", "err", err)
 	}
+
+	// Start alerts AFTER reconciliation so the first tick evaluates a
+	// post-reconcile world (not a transient mid-restart state).
+	alertEngine.Start()
 
 	// Auth
 	authenticator := auth.New(st)

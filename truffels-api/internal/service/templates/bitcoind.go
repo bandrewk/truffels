@@ -16,4 +16,12 @@ var Bitcoind = model.ServiceTemplate{
 		Type:   model.SourceDockerHub,
 		Images: []string{"btcpayserver/bitcoin"},
 	},
+	DataDirs: []model.DataDir{
+		{
+			Path:        "/srv/truffels/data/bitcoin/blockchain",
+			Label:       "Blockchain data",
+			Description: "Full Bitcoin blockchain (~650 GB). Not clearable — would force ~7 day IBD over the network.",
+			Clearable:   false,
+		},
+	},
 }

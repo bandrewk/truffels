@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"truffels-api/internal/docker"
+	"truffels-api/internal/model"
 	"truffels-api/internal/service"
 )
 
@@ -19,15 +20,24 @@ var dockerfileMapping = map[string]string{
 // serviceIDs that have compose templates (skip truffels — self-managed).
 var reconciledServices = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy"}
 
-type Reconciler struct {
-	registry *service.Registry
-	compose  *docker.ComposeClient
+// AlertStore is the subset of the store interface the reconciler needs to
+// surface reconciliation failures as alerts. Defined here (not imported) to
+// avoid an import cycle with internal/store.
+type AlertStore interface {
+	UpsertAlert(*model.Alert) error
 }
 
-func NewReconciler(registry *service.Registry, compose *docker.ComposeClient) *Reconciler {
+type Reconciler struct {
+	registry   *service.Registry
+	compose    *docker.ComposeClient
+	alertStore AlertStore // optional — if nil, failures are slog-only
+}
+
+func NewReconciler(registry *service.Registry, compose *docker.ComposeClient, alertStore AlertStore) *Reconciler {
 	return &Reconciler{
-		registry: registry,
-		compose:  compose,
+		registry:   registry,
+		compose:    compose,
+		alertStore: alertStore,
 	}
 }
 
@@ -80,6 +90,16 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 		return fmt.Errorf("render: %w", err)
 	}
 
+	// Ensure any declared bind-mount host directories exist with correct
+	// ownership before we hand the new compose to `docker compose up`.
+	tmpl, _ := r.registry.Get(serviceID)
+	for _, d := range tmpl.EnsureDirs {
+		if err := r.compose.FsEnsureDir(d.Path, d.UID, d.GID, d.Mode); err != nil {
+			return fmt.Errorf("ensure-dir %s: %w", d.Path, err)
+		}
+		slog.Info("ensure-dir ok", "service", serviceID, "path", d.Path)
+	}
+
 	// Compare and write if different
 	changed, err := r.reconcileWithRetry(serviceID, expected)
 	if err != nil {
@@ -91,6 +111,9 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 	} else {
 		slog.Info("compose reconciled, restarting", "service", serviceID)
 		if err := r.compose.Up(serviceID); err != nil {
+			// Fail loud — without this, a typo in the new compose template
+			// silently breaks the service while self-update reports success.
+			r.raiseAlert(serviceID, fmt.Sprintf("compose reconcile restart failed: %v", err))
 			return fmt.Errorf("restart after reconcile: %w", err)
 		}
 	}
@@ -101,6 +124,22 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 	}
 
 	return nil
+}
+
+// raiseAlert surfaces a reconciliation failure as a critical alert. If no
+// alertStore is configured (e.g. in tests), falls back to slog.
+func (r *Reconciler) raiseAlert(serviceID, msg string) {
+	if r.alertStore == nil {
+		return
+	}
+	if err := r.alertStore.UpsertAlert(&model.Alert{
+		Type:      "compose_reconcile_failed",
+		Severity:  model.SeverityCritical,
+		ServiceID: serviceID,
+		Message:   msg,
+	}); err != nil {
+		slog.Error("failed to upsert reconcile alert", "service", serviceID, "err", err)
+	}
 }
 
 func (r *Reconciler) reconcileDockerfile(serviceID, repoPath string) {

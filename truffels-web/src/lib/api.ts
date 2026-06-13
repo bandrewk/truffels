@@ -60,6 +60,15 @@ export interface ServiceTemplate {
   floating_tag?: boolean
   update_source?: UpdateSource
   stack_containers?: string[]
+  data_dirs?: DataDir[]
+}
+
+export interface DataDir {
+  path: string
+  label: string
+  description: string
+  clearable: boolean
+  requires_stop?: boolean
 }
 
 export interface SyncInfo {
@@ -360,6 +369,12 @@ export interface DockerStorageItem {
   reclaimable: string
 }
 
+export interface ServiceDataItem {
+  path: string
+  size: string
+  size_raw: number
+}
+
 export interface SystemInfo {
   hostname: string
   os: string
@@ -372,6 +387,7 @@ export interface SystemInfo {
   networks: NetworkIfInfo[]
   storage: StorageInfo[]
   docker_storage?: DockerStorageItem[]
+  service_data?: ServiceDataItem[]
 }
 
 export interface SystemTuning {
@@ -465,4 +481,6 @@ export const api = {
     post<{ status: string; reclaimed: string }>('/system/docker-prune', { password }),
   dockerPruneBuildCache: (password: string) =>
     post<{ status: string; reclaimed: string }>('/system/docker-prune-buildcache', { password }),
+  clearServiceData: (password: string, serviceId: string, path: string) =>
+    post<{ status: string; path: string }>('/system/service-data/clear', { password, service_id: serviceId, path }),
 }
