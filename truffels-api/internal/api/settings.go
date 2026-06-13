@@ -2,15 +2,18 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+
+	"truffels-api/internal/model"
 )
 
 // settingsDefaults are the default values for all configurable settings.
 var settingsDefaults = map[string]string{
 	"restart_loop_count":      "5",
 	"restart_loop_window_min": "10",
-	"restart_loop_max_retries": "0",
+	"restart_loop_max_retries": "10",
 	"dep_handling_mode":       "flag_only",
 	"temp_warning":            "75",
 	"temp_critical":           "80",
@@ -53,7 +56,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	resp := settingsResponse{
 		RestartLoopCount:      s.getSettingInt("restart_loop_count", 5),
 		RestartLoopWindowMin:  s.getSettingInt("restart_loop_window_min", 10),
-		RestartLoopMaxRetries: s.getSettingInt("restart_loop_max_retries", 0),
+		RestartLoopMaxRetries: s.getSettingInt("restart_loop_max_retries", 10),
 		DepHandlingMode:       s.getSettingStr("dep_handling_mode", "flag_only"),
 		TempWarning:           s.getSettingFloat("temp_warning", 75),
 		TempCritical:          s.getSettingFloat("temp_critical", 80),
@@ -216,6 +219,89 @@ func (s *Server) handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Requ
 
 	_ = s.store.LogAudit("docker_prune_buildcache", "", "Build cache prune: "+reclaimed, r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reclaimed": reclaimed})
+}
+
+// --- Clear Service Data ---
+
+// handleClearServiceData empties a host data directory belonging to a managed
+// service. The path must be declared in the service template's DataDirs with
+// Clearable=true (e.g. mempool/cache). If RequiresStop, the service is stopped
+// before the clear and started again after. Roll-forward on failure: if the
+// clear step fails after stop, we still try to bring the service back up.
+func (s *Server) handleClearServiceData(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Password  string `json:"password"`
+		ServiceID string `json:"service_id"`
+		Path      string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	ok, err := s.auth.CheckPassword(body.Password)
+	if err != nil || !ok {
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+	if body.ServiceID == "" || body.Path == "" {
+		writeError(w, http.StatusBadRequest, "service_id and path are required")
+		return
+	}
+
+	// Look up the template and verify the path is declared clearable.
+	tmpl, exists := s.registry.Get(body.ServiceID)
+	if !exists {
+		writeError(w, http.StatusBadRequest, "unknown service: "+body.ServiceID)
+		return
+	}
+	var dd *model.DataDir
+	for i := range tmpl.DataDirs {
+		if tmpl.DataDirs[i].Path == body.Path {
+			dd = &tmpl.DataDirs[i]
+			break
+		}
+	}
+	if dd == nil {
+		writeError(w, http.StatusBadRequest, "path not registered for this service")
+		return
+	}
+	if !dd.Clearable {
+		writeError(w, http.StatusBadRequest, "path is not clearable")
+		return
+	}
+
+	_ = s.store.LogAudit("service_data_clear", body.ServiceID, "Clear data dir: "+body.Path, r.RemoteAddr)
+
+	// Stop first if required. If stop fails, abort entirely — don't try to
+	// clear data of a still-running service.
+	if dd.RequiresStop {
+		if err := s.compose.Stop(body.ServiceID); err != nil {
+			writeError(w, http.StatusInternalServerError, "stop failed: "+err.Error())
+			return
+		}
+	}
+
+	clearErr := s.compose.FsClearDir(body.Path, 1000, 1000, "0755")
+
+	// Always try to bring service back up if we stopped it — even if clear failed.
+	if dd.RequiresStop {
+		if err := s.compose.Up(body.ServiceID); err != nil {
+			if clearErr != nil {
+				writeError(w, http.StatusInternalServerError,
+					fmt.Sprintf("clear failed (%v) AND service restart failed (%v)", clearErr, err))
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "clear succeeded but service restart failed: "+err.Error())
+			return
+		}
+	}
+
+	if clearErr != nil {
+		writeError(w, http.StatusInternalServerError, "clear failed: "+clearErr.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "path": body.Path})
 }
 
 // --- System Info ---

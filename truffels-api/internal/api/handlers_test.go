@@ -757,3 +757,114 @@ func TestBackupDownload_PathTraversal(t *testing.T) {
 		}
 	}
 }
+
+// --- Clear Service Data ---
+
+func TestClearServiceData_WrongPassword(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	body := `{"password":"wrong","service_id":"mempool","path":"/srv/truffels/data/mempool/cache"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401, got %d body=%s", w.Code, w.Body.String())
+	}
+	if agentState.clearDirCalls != 0 {
+		t.Errorf("agent clear-dir must not be called on auth failure")
+	}
+}
+
+func TestClearServiceData_HappyPath_Mempool(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	body := `{"password":"testpassword","service_id":"mempool","path":"/srv/truffels/data/mempool/cache"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if agentState.clearDirCalls != 1 {
+		t.Errorf("expected clear-dir called once, got %d", agentState.clearDirCalls)
+	}
+}
+
+func TestClearServiceData_RejectsNonClearablePath(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	// /srv/truffels/data/mempool/mysql is declared but Clearable=false
+	body := `{"password":"testpassword","service_id":"mempool","path":"/srv/truffels/data/mempool/mysql"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for non-clearable path, got %d body=%s", w.Code, w.Body.String())
+	}
+	if agentState.clearDirCalls != 0 {
+		t.Errorf("agent must not be called for non-clearable path")
+	}
+}
+
+func TestClearServiceData_RejectsUnregisteredPath(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	body := `{"password":"testpassword","service_id":"mempool","path":"/srv/truffels/data/mempool/random"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestClearServiceData_RejectsUnknownService(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, _, _ := newTestServerWithAgent(t, agentState)
+
+	body := `{"password":"testpassword","service_id":"madeup","path":"/srv/truffels/data/madeup/cache"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for unknown service, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestClearServiceData_AuditLog(t *testing.T) {
+	agentState := &mockAgentState{}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	body := `{"password":"testpassword","service_id":"mempool","path":"/srv/truffels/data/mempool/cache"}`
+	req := authedReq(t, srv, "POST", "/api/truffels/system/service-data/clear", body)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	entries, err := st.GetAuditLog(50)
+	if err != nil {
+		t.Fatalf("get audit log: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == "service_data_clear" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected service_data_clear audit entry")
+	}
+}

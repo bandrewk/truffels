@@ -173,7 +173,7 @@ services:
     env_file:
       - /srv/truffels/secrets/mempool-backend.env
     environment:
-      NODE_OPTIONS: "--max-old-space-size=1280"
+      NODE_OPTIONS: "--max-old-space-size=1792"
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
       ELECTRUM_PORT: "50001"
@@ -185,13 +185,21 @@ services:
       DATABASE_PORT: "3306"
       DATABASE_DATABASE: "mempool"
       STATISTICS_ENABLED: "true"
+    volumes:
+      - /srv/truffels/data/mempool/cache:/backend/cache
     depends_on:
       mempool-db:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 1536M
+          memory: 2048M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
 
   mempool-frontend:
     image: {{.FrontendImageTag}}
@@ -212,6 +220,12 @@ services:
       resources:
         limits:
           memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   mempool-db:
     image: {{.DBImageTag}}

@@ -201,6 +201,14 @@ type DockerStorageItem struct {
 	Reclaimable string `json:"reclaimable"`
 }
 
+// ServiceDataItem represents a host data directory size — populated for paths
+// under /srv/truffels/data/* by the agent.
+type ServiceDataItem struct {
+	Path    string `json:"path"`
+	Size    string `json:"size"`
+	SizeRaw int64  `json:"size_raw"`
+}
+
 // SystemInfo represents host system information.
 type SystemInfo struct {
 	Hostname      string              `json:"hostname"`
@@ -214,6 +222,7 @@ type SystemInfo struct {
 	Networks      []NetworkIfInfo     `json:"networks"`
 	Storage       []StorageInfo       `json:"storage"`
 	DockerStorage []DockerStorageItem `json:"docker_storage,omitempty"`
+	ServiceData   []ServiceDataItem   `json:"service_data,omitempty"`
 }
 
 // SystemInfoGet fetches host system info via the agent.
@@ -405,6 +414,46 @@ func (c *ComposeClient) RemoveImage(image string) error {
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("agent remove image: %s", ar.Error)
+	}
+	return nil
+}
+
+// FsEnsureDir creates a directory under the agent's dataRoot with the requested
+// ownership and mode. Idempotent. Used by the compose reconciler to guarantee
+// bind-mount source paths exist before bringing a service up.
+func (c *ComposeClient) FsEnsureDir(path string, uid, gid int, mode string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/fs/ensure-dir", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent ensure-dir: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent ensure-dir: %s", ar.Error)
+	}
+	return nil
+}
+
+// FsClearDir empties a directory under the agent's dataRoot and recreates it
+// with the requested ownership/mode. The agent enforces a basename+depth
+// allowlist; callers must ensure the path is one we want to expose.
+func (c *ComposeClient) FsClearDir(path string, uid, gid int, mode string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/fs/clear-dir", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent clear-dir: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent clear-dir: %s", ar.Error)
 	}
 	return nil
 }

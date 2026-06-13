@@ -67,4 +67,12 @@ var Truffels = model.ServiceTemplate{
 		Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
 		NeedsBuild: true,
 	},
+	DataDirs: []model.DataDir{
+		{
+			Path:        "/srv/truffels/data/truffels",
+			Label:       "Admin DB",
+			Description: "SQLite store: settings, alerts, update history, audit log. Not clearable — losing this wipes session keys and audit trail.",
+			Clearable:   false,
+		},
+	},
 }

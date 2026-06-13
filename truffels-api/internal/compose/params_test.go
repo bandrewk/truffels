@@ -100,3 +100,78 @@ func TestExtractParams_MissingTag(t *testing.T) {
 		t.Fatal("expected error for missing tag")
 	}
 }
+
+// TestExtractParams_Mempool_OldShape exercises ExtractParams against a verbatim
+// v0.3.1-dev.13 mempool compose file (no volumes/healthcheck on backend, no
+// healthcheck on frontend, NODE_OPTIONS=1280, mem 1536M). The reconciler reads
+// the live compose to extract image tags, then renders the new template — this
+// test confirms a user upgrading from dev.13 doesn't get an extract error.
+func TestExtractParams_Mempool_OldShape(t *testing.T) {
+	dev13Compose := `# Project Truffels — mempool.space (Block Explorer)
+# Managed by truffels. Do not edit manually.
+
+services:
+  mempool-backend:
+    image: mempool/backend:v3.3.1
+    container_name: truffels-mempool-backend
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      bitcoin-backend:
+    env_file:
+      - /srv/truffels/secrets/mempool-backend.env
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=1280"
+      MEMPOOL_BACKEND: "electrum"
+    depends_on:
+      mempool-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  mempool-frontend:
+    image: mempool/frontend:v3.3.1
+    container_name: truffels-mempool-frontend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  mempool-db:
+    image: mariadb:lts@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
+    container_name: truffels-mempool-db
+
+networks:
+  bitcoin-backend:
+    external: true
+`
+	p, err := ExtractParams("mempool", dev13Compose)
+	if err != nil {
+		t.Fatalf("ExtractParams should succeed on dev.13-shape compose: %v", err)
+	}
+	mp := p.(MempoolParams)
+	if mp.BackendImageTag != "mempool/backend:v3.3.1" {
+		t.Errorf("backend: %q", mp.BackendImageTag)
+	}
+	if mp.FrontendImageTag != "mempool/frontend:v3.3.1" {
+		t.Errorf("frontend: %q", mp.FrontendImageTag)
+	}
+	if !contains(mp.DBImageTag, "mariadb:lts") {
+		t.Errorf("db: %q", mp.DBImageTag)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

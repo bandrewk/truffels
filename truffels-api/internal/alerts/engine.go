@@ -216,7 +216,7 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	}
 	threshold := e.getSettingInt("restart_loop_count", 5)
 	windowMin := e.getSettingInt("restart_loop_window_min", 10)
-	maxRetries := e.getSettingInt("restart_loop_max_retries", 0)
+	maxRetries := e.getSettingInt("restart_loop_max_retries", 10)
 
 	for _, name := range tmpl.ContainerNames {
 		cs, err := docker.InspectContainer(name)

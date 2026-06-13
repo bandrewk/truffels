@@ -52,6 +52,7 @@ var allowedContainers = map[string]bool{
 }
 
 var composeRoot string
+var dataRoot string
 
 var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
 
@@ -69,6 +70,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	composeRoot = envOr("TRUFFELS_COMPOSE_ROOT", "/srv/truffels/compose")
+	dataRoot = envOr("TRUFFELS_DATA_ROOT", "/srv/truffels/data")
 	listen := envOr("TRUFFELS_AGENT_LISTEN", ":9090")
 
 	mux := http.NewServeMux()
@@ -95,6 +97,8 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/read", handleComposeRead)
 	mux.HandleFunc("POST /v1/compose/reconcile", handleComposeReconcile)
 	mux.HandleFunc("POST /v1/file/reconcile", handleFileReconcile)
+	mux.HandleFunc("POST /v1/fs/ensure-dir", handleEnsureDir)
+	mux.HandleFunc("POST /v1/fs/clear-dir", handleClearDir)
 	mux.HandleFunc("POST /v1/image/remove", handleImageRemove)
 	mux.HandleFunc("POST /v1/docker/prune", handleDockerPrune)
 	mux.HandleFunc("POST /v1/docker/prune-buildcache", handleDockerPruneBuildCache)
@@ -807,6 +811,13 @@ type systemInfoResponse struct {
 	Networks      []networkIfInfo     `json:"networks"`
 	Storage       []storageInfo       `json:"storage"`
 	DockerStorage []dockerStorageItem `json:"docker_storage,omitempty"`
+	ServiceData   []serviceDataItem   `json:"service_data,omitempty"`
+}
+
+type serviceDataItem struct {
+	Path    string `json:"path"`
+	Size    string `json:"size"`
+	SizeRaw int64  `json:"size_raw"` // bytes — for client-side sorting/thresholds
 }
 
 type networkIfInfo struct {
@@ -967,6 +978,46 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Service data: enumerate /srv/truffels/data/* leaf paths and du each.
+	// Walking down one level past dataRoot gives us per-service entries like
+	// mempool/cache, mempool/mysql, ckpool/logs, etc. — granularity matches
+	// what the service templates declare as DataDirs in the API.
+	var serviceData []serviceDataItem
+	if entries, err := os.ReadDir(dataRoot); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			servicePath := filepath.Join(dataRoot, e.Name())
+			children, err := os.ReadDir(servicePath)
+			if err != nil {
+				continue
+			}
+			for _, c := range children {
+				if !c.IsDir() {
+					continue
+				}
+				full := filepath.Join(servicePath, c.Name())
+				size := dirSizeBytes(full)
+				serviceData = append(serviceData, serviceDataItem{
+					Path:    full,
+					Size:    formatBytes(size),
+					SizeRaw: size,
+				})
+			}
+			// Also include the bare top-level dir (e.g. /srv/truffels/data/truffels)
+			// if it has files but no leaf subdirs the template references.
+			if len(children) == 0 {
+				size := dirSizeBytes(servicePath)
+				serviceData = append(serviceData, serviceDataItem{
+					Path:    servicePath,
+					Size:    formatBytes(size),
+					SizeRaw: size,
+				})
+			}
+		}
+	}
+
 	writeJSON(w, 200, systemInfoResponse{
 		Hostname:      hostname,
 		OS:            osRelease,
@@ -979,7 +1030,39 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		Networks:      networks,
 		Storage:       storage,
 		DockerStorage: dockerStorage,
+		ServiceData:   serviceData,
 	})
+}
+
+// dirSizeBytes walks `path` and returns total size in bytes. Returns 0 on any
+// error to keep the system-info endpoint robust against permission-denied
+// nested files (e.g. inside container-managed dirs).
+func dirSizeBytes(path string) int64 {
+	var total int64
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// formatBytes renders bytes as a human-friendly size (matches Docker's df output).
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // --- System Journal & Tuning ---
@@ -1486,10 +1569,12 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: resolve path and ensure it stays under composeRoot
+	// Security: resolve path and ensure it stays under composeRoot.
+	// validateUnderRoot also walks the parent chain via EvalSymlinks so a
+	// symlink at /srv/truffels/compose/foo → /etc cannot be used as a write target.
 	fullPath := filepath.Join(composeRoot, filepath.Clean(req.Path))
-	if !strings.HasPrefix(fullPath, composeRoot+"/") {
-		writeJSON(w, 403, map[string]string{"error": "path outside compose root"})
+	if _, err := validateUnderRoot(fullPath, composeRoot); err != nil {
+		writeJSON(w, 403, map[string]string{"error": "path outside compose root: " + err.Error()})
 		return
 	}
 
@@ -1519,6 +1604,167 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("file reconciled", "path", fullPath)
 	writeJSON(w, 200, map[string]interface{}{"status": "ok", "changed": true})
+}
+
+// validateUnderRoot returns the cleaned absolute path if it lies under `root`,
+// is not a symlink redirecting outside `root`, and contains no relative-path
+// escapes. Returns ("", error) otherwise. The path's parent must exist for
+// EvalSymlinks to resolve cleanly; if the parent doesn't exist yet, the check
+// walks upward until it finds an existing ancestor and validates that one.
+func validateUnderRoot(p, root string) (string, error) {
+	if p == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	cleaned := filepath.Clean(p)
+	if !strings.HasPrefix(cleaned, root+"/") {
+		return "", fmt.Errorf("path outside root")
+	}
+	// Walk up to the nearest existing ancestor and EvalSymlinks it. This catches
+	// symlink redirects (e.g. /srv/truffels/data/x is a symlink to /etc).
+	probe := cleaned
+	for {
+		if _, err := os.Stat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe || parent == "/" {
+			break
+		}
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err == nil && !strings.HasPrefix(resolved+"/", root+"/") && resolved != root {
+		return "", fmt.Errorf("symlink redirects outside root")
+	}
+	return cleaned, nil
+}
+
+// handleEnsureDir creates a directory under dataRoot with the requested
+// ownership and mode. Idempotent. Used by the compose reconciler to guarantee
+// bind-mount source paths exist with correct uid:gid before `docker compose up`.
+func handleEnsureDir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		UID  int    `json:"uid"`
+		GID  int    `json:"gid"`
+		Mode string `json:"mode"` // octal string, e.g. "0755"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "0755"
+	}
+	mode64, err := strconv.ParseUint(req.Mode, 8, 32)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid mode: " + err.Error()})
+		return
+	}
+	mode := os.FileMode(uint32(mode64))
+
+	cleaned, err := validateUnderRoot(req.Path, dataRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+
+	existed := true
+	if _, err := os.Stat(cleaned); os.IsNotExist(err) {
+		existed = false
+	}
+
+	if err := os.MkdirAll(cleaned, mode); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "mkdir: " + err.Error()})
+		return
+	}
+	if err := os.Chown(cleaned, req.UID, req.GID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "chown: " + err.Error()})
+		return
+	}
+	if err := os.Chmod(cleaned, mode); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
+		return
+	}
+
+	slog.Info("ensure-dir", "path", cleaned, "uid", req.UID, "gid", req.GID, "created", !existed)
+	writeJSON(w, 200, map[string]interface{}{"status": "ok", "created": !existed})
+}
+
+// clearDirBasenameAllowlist limits clear-dir to known-safe directory names.
+// Adding to this set requires explicit review.
+var clearDirBasenameAllowlist = map[string]bool{
+	"cache": true,
+	"logs":  true,
+}
+
+// handleClearDir empties a directory under dataRoot, then recreates it with
+// the requested ownership/mode. Double-locked: basename must be in allowlist
+// AND path must be exactly two levels under dataRoot (i.e. dataRoot/<service>/<basename>).
+// This rejects paths like /srv/truffels/data/bitcoin/blockchain/cache.
+func handleClearDir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		UID  int    `json:"uid"`
+		GID  int    `json:"gid"`
+		Mode string `json:"mode"` // octal string, e.g. "0755"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "0755"
+	}
+	mode64, err := strconv.ParseUint(req.Mode, 8, 32)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid mode: " + err.Error()})
+		return
+	}
+	mode := os.FileMode(uint32(mode64))
+
+	cleaned, err := validateUnderRoot(req.Path, dataRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Basename allowlist
+	base := filepath.Base(cleaned)
+	if !clearDirBasenameAllowlist[base] {
+		writeJSON(w, 403, map[string]string{"error": "basename not in clear allowlist: " + base})
+		return
+	}
+
+	// Exact depth check: path must be dataRoot/<service>/<basename> — exactly two levels deep.
+	// This rejects e.g. /srv/truffels/data/bitcoin/blockchain/cache.
+	rel := strings.TrimPrefix(cleaned, dataRoot+"/")
+	parts := strings.Split(rel, "/")
+	if len(parts) != 2 {
+		writeJSON(w, 403, map[string]string{"error": "clear-dir path must be exactly dataRoot/<service>/<dir>"})
+		return
+	}
+
+	slog.Info("clear-dir", "path", cleaned, "uid", req.UID, "gid", req.GID)
+
+	if err := os.RemoveAll(cleaned); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "remove: " + err.Error()})
+		return
+	}
+	if err := os.MkdirAll(cleaned, mode); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "mkdir: " + err.Error()})
+		return
+	}
+	if err := os.Chown(cleaned, req.UID, req.GID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "chown: " + err.Error()})
+		return
+	}
+	if err := os.Chmod(cleaned, mode); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{"status": "ok"})
 }
 
 // serviceContainers maps service IDs to their container names for fallback log retrieval.

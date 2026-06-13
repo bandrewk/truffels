@@ -195,10 +195,12 @@ fi
 # --- Step 2: Directory layout -------------------------------------------------
 log "Creating directory layout..."
 mkdir -p "$TRUFFELS_BASE"/{compose,config,data,logs,backups,secrets,tmp}
-mkdir -p "$DATA_DIR"/{bitcoin/blockchain,ckpool/logs,electrs/db,mempool/mysql,ckstats/postgres,truffels}
+mkdir -p "$DATA_DIR"/{bitcoin/blockchain,ckpool/logs,electrs/db,mempool/mysql,mempool/cache,ckstats/postgres,truffels}
 # Pre-create ckpool log subdirs with world-readable perms so caps-dropped ckstats-cron can read them
 mkdir -p "$DATA_DIR"/ckpool/logs/{pool,users}
 chmod 0755 "$DATA_DIR"/ckpool/logs/{pool,users}
+# Mempool backend writes RBF/mempool cache here as uid 1000 (image user)
+chown 1000:1000 "$DATA_DIR"/mempool/cache
 mkdir -p "$CONFIG_DIR"/{bitcoin,electrs,ckpool,ckstats,proxy,nftables}
 mkdir -p "$COMPOSE_DIR"/{bitcoin,electrs,ckpool,mempool,ckstats,proxy,truffels}
 chmod 0755 "$TRUFFELS_BASE"
@@ -534,7 +536,7 @@ services:
     env_file:
       - /srv/truffels/secrets/mempool-backend.env
     environment:
-      NODE_OPTIONS: "--max-old-space-size=1280"
+      NODE_OPTIONS: "--max-old-space-size=1792"
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
       ELECTRUM_PORT: "50001"
@@ -546,13 +548,21 @@ services:
       DATABASE_PORT: "3306"
       DATABASE_DATABASE: "mempool"
       STATISTICS_ENABLED: "true"
+    volumes:
+      - /srv/truffels/data/mempool/cache:/backend/cache
     depends_on:
       mempool-db:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 1536M
+          memory: 2048M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
 
   mempool-frontend:
     image: $MEMPOOL_FRONTEND_IMAGE
@@ -573,6 +583,12 @@ services:
       resources:
         limits:
           memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   mempool-db:
     image: $MARIADB_IMAGE
@@ -874,7 +890,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.13}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.14}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"
@@ -902,9 +918,11 @@ services:
       - /srv/truffels/compose:/srv/truffels/compose:rw
       - /srv/truffels/config:/srv/truffels/config:ro
       - /srv/truffels/secrets:/srv/truffels/secrets:ro
+      - /srv/truffels/data:/srv/truffels/data:rw
       - $TRUFFELS_REPO_SRC:/repo:rw
     environment:
       TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_DATA_ROOT: "/srv/truffels/data"
       TRUFFELS_AGENT_LISTEN: ":9090"
     deploy:
       resources:

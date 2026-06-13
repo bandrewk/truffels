@@ -37,17 +37,24 @@ func TestRender_Ckpool(t *testing.T) {
 
 func TestRender_Mempool(t *testing.T) {
 	got, err := Render("mempool", MempoolParams{
-		BackendImageTag:  "mempool/backend:v3.2.1",
-		FrontendImageTag: "mempool/frontend:v3.2.1",
+		BackendImageTag:  "mempool/backend:v3.3.1",
+		FrontendImageTag: "mempool/frontend:v3.3.1",
 		DBImageTag:       "mariadb:lts@sha256:abc123",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertContains(t, got, "image: mempool/backend:v3.2.1")
-	assertContains(t, got, "image: mempool/frontend:v3.2.1")
+	assertContains(t, got, "image: mempool/backend:v3.3.1")
+	assertContains(t, got, "image: mempool/frontend:v3.3.1")
 	assertContains(t, got, "image: mariadb:lts@sha256:abc123")
 	assertContains(t, got, "container_name: truffels-mempool-backend")
+	// Backend OOM-fix shape: bind-mounted cache, bumped heap, healthcheck.
+	assertContains(t, got, "/srv/truffels/data/mempool/cache:/backend/cache")
+	assertContains(t, got, "--max-old-space-size=1792")
+	assertContains(t, got, "memory: 2048M")
+	assertContains(t, got, "start_period: 300s")
+	// Frontend healthcheck.
+	assertContains(t, got, "http://127.0.0.1:8080/")
 }
 
 func TestRender_Ckstats(t *testing.T) {

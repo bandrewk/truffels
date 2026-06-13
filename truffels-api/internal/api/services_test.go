@@ -30,6 +30,7 @@ type mockAgentState struct {
 	lastAction      string
 	lastServiceID   string
 	lastContainer   string
+	clearDirCalls   int
 }
 
 func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
@@ -113,6 +114,13 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 
 		case r.URL.Path == "/v1/docker/prune-buildcache" && r.Method == "POST":
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 50MB"})
+
+		case r.URL.Path == "/v1/fs/ensure-dir" && r.Method == "POST":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "created": false})
+
+		case r.URL.Path == "/v1/fs/clear-dir" && r.Method == "POST":
+			state.clearDirCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
 	}))
 }
@@ -983,8 +991,8 @@ func TestGetSettings_Defaults(t *testing.T) {
 	if resp["restart_loop_window_min"] != float64(10) {
 		t.Fatalf("expected restart_loop_window_min=10, got %v", resp["restart_loop_window_min"])
 	}
-	if resp["restart_loop_max_retries"] != float64(0) {
-		t.Fatalf("expected restart_loop_max_retries=0, got %v", resp["restart_loop_max_retries"])
+	if resp["restart_loop_max_retries"] != float64(10) {
+		t.Fatalf("expected restart_loop_max_retries=10, got %v", resp["restart_loop_max_retries"])
 	}
 	if resp["dep_handling_mode"] != "flag_only" {
 		t.Fatalf("expected dep_handling_mode=flag_only, got %v", resp["dep_handling_mode"])

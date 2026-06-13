@@ -16,4 +16,12 @@ var Electrs = model.ServiceTemplate{
 		Type:   model.SourceDockerHub,
 		Images: []string{"getumbrel/electrs"},
 	},
+	DataDirs: []model.DataDir{
+		{
+			Path:        "/srv/truffels/data/electrs/db",
+			Label:       "Address index",
+			Description: "RocksDB address index. Not clearable — would force ~6 h reindex.",
+			Clearable:   false,
+		},
+	},
 }
