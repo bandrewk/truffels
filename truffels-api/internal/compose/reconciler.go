@@ -34,6 +34,7 @@ var reconciledServices = []string{"truffels", "bitcoind", "electrs", "ckpool", "
 // avoid an import cycle with internal/store.
 type AlertStore interface {
 	UpsertAlert(*model.Alert) error
+	ResolveAlerts(alertType, serviceID string) error
 }
 
 type Reconciler struct {
@@ -171,6 +172,7 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 			// reconciliation in this cycle would hit either the dying agent
 			// (connection refused) or the about-to-be-replaced agent (still
 			// using OLD mounts). The next API boot does a clean pass.
+			r.clearAlert(serviceID)
 			return errShortCircuit
 		}
 	}
@@ -180,6 +182,9 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 		r.reconcileDockerfile(serviceID, repoPath)
 	}
 
+	// All steps succeeded — clear any stale compose_reconcile_failed alert
+	// from a prior failed cycle so the UI doesn't show a phantom problem.
+	r.clearAlert(serviceID)
 	return nil
 }
 
@@ -196,6 +201,18 @@ func (r *Reconciler) raiseAlert(serviceID, msg string) {
 		Message:   msg,
 	}); err != nil {
 		slog.Error("failed to upsert reconcile alert", "service", serviceID, "err", err)
+	}
+}
+
+// clearAlert resolves any open compose_reconcile_failed alert for this
+// service. Called when reconciliation completes successfully so a stale
+// alert from a prior failed cycle doesn't linger forever in the UI.
+func (r *Reconciler) clearAlert(serviceID string) {
+	if r.alertStore == nil {
+		return
+	}
+	if err := r.alertStore.ResolveAlerts("compose_reconcile_failed", serviceID); err != nil {
+		slog.Warn("failed to resolve stale reconcile alert", "service", serviceID, "err", err)
 	}
 }
 
