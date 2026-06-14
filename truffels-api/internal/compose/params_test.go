@@ -175,3 +175,53 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestExtractParams_Truffels(t *testing.T) {
+	dev14Compose := `services:
+  agent:
+    image: truffels/agent:v0.3.1-dev.14
+    container_name: truffels-agent
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/truffels/compose:/srv/truffels/compose:rw
+      - /home/truffel/Project-Truffels:/repo:rw
+  api:
+    image: truffels/api:v0.3.1-dev.14
+    container_name: truffels-api
+  web:
+    image: truffels/web:v0.3.1-dev.14
+    container_name: truffels-web
+`
+	p, err := ExtractParams("truffels", dev14Compose)
+	if err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+	tp := p.(TruffelsParams)
+	if tp.AgentTag != "truffels/agent:v0.3.1-dev.14" {
+		t.Errorf("agent: %q", tp.AgentTag)
+	}
+	if tp.APITag != "truffels/api:v0.3.1-dev.14" {
+		t.Errorf("api: %q", tp.APITag)
+	}
+	if tp.WebTag != "truffels/web:v0.3.1-dev.14" {
+		t.Errorf("web: %q", tp.WebTag)
+	}
+	if tp.RepoSrc != "/home/truffel/Project-Truffels" {
+		t.Errorf("repo: %q", tp.RepoSrc)
+	}
+}
+
+func TestExtractParams_Truffels_MissingRepoMount(t *testing.T) {
+	compose := `services:
+  agent:
+    image: truffels/agent:v0.3.1-dev.14
+  api:
+    image: truffels/api:v0.3.1-dev.14
+  web:
+    image: truffels/web:v0.3.1-dev.14
+`
+	_, err := ExtractParams("truffels", compose)
+	if err == nil {
+		t.Fatal("expected error when /repo:rw mount missing")
+	}
+}

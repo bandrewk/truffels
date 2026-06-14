@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- Health ---
@@ -1888,5 +1889,121 @@ func TestHandleClearDir_RejectsRelativeEscape(t *testing.T) {
 	w := postClearDir(t, target, 1000, 1000, "0755")
 	if w.Code != 403 {
 		t.Errorf("expected 403 for relative escape, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestValidateUnderRoot_AllowsMissingRoot(t *testing.T) {
+	// Replicate the production bug: the root itself doesn't exist (the agent
+	// container has no /srv/truffels/data mount). validateUnderRoot must walk
+	// past root up to the nearest existing ancestor and not flag it as a symlink
+	// redirect just because the ancestor doesn't match root.
+	tmpBase := t.TempDir()
+	root := tmpBase + "/notyet" // root itself doesn't exist
+	target := root + "/mempool/cache/subdir"
+	cleaned, err := validateUnderRoot(target, root)
+	if err != nil {
+		t.Fatalf("expected accept, got error: %v", err)
+	}
+	if cleaned != target {
+		t.Errorf("expected cleaned=%q, got %q", target, cleaned)
+	}
+}
+
+func TestValidateUnderRoot_AllowsNestedUnderExistingRoot(t *testing.T) {
+	root := t.TempDir() // root exists
+	target := root + "/foo/bar/baz"
+	cleaned, err := validateUnderRoot(target, root)
+	if err != nil {
+		t.Fatalf("expected accept, got error: %v", err)
+	}
+	if cleaned != target {
+		t.Errorf("expected cleaned=%q, got %q", target, cleaned)
+	}
+}
+
+// --- dirSizeCache ---
+
+func TestDirSizeCache_HitMiss(t *testing.T) {
+	c := newDirSizeCache()
+	if _, _, hit := c.get("/foo"); hit {
+		t.Fatal("expected miss before set")
+	}
+	c.set("/foo", 42)
+	size, walked, hit := c.get("/foo")
+	if !hit {
+		t.Fatal("expected hit after set")
+	}
+	if size != 42 {
+		t.Errorf("size: %d", size)
+	}
+	if walked.IsZero() {
+		t.Error("walked timestamp should be non-zero")
+	}
+}
+
+func TestDirSizeCache_ForgetRemoves(t *testing.T) {
+	c := newDirSizeCache()
+	c.set("/foo", 1)
+	c.set("/bar", 2)
+	c.forget("/foo")
+	if _, _, hit := c.get("/foo"); hit {
+		t.Error("expected forget to remove the entry")
+	}
+	if _, _, hit := c.get("/bar"); !hit {
+		t.Error("forget must not affect other entries")
+	}
+}
+
+func TestHandleFileReconcile_AcceptsConfigRoot(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir + "/compose"
+	configRoot = dir + "/config"
+	if err := os.MkdirAll(composeRoot+"/proxy", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configRoot+"/proxy", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// composeRoot path — should still work.
+	body := `{"path":"` + composeRoot + `/proxy/docker-compose.yml","expected_content":"x: y\n"}`
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 200 {
+		t.Fatalf("composeRoot: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// configRoot path — must also work.
+	body = `{"path":"` + configRoot + `/proxy/Caddyfile","expected_content":"z\n"}`
+	r = httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 200 {
+		t.Fatalf("configRoot: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// /etc/passwd — must reject.
+	body = `{"path":"/etc/passwd","expected_content":"x\n"}`
+	r = httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 403 {
+		t.Errorf("/etc/passwd: expected 403, got %d", w.Code)
+	}
+}
+
+func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
+	c := newDirSizeCache()
+	c.set("/foo", 12345)
+	c.mu.Lock()
+	c.walked["/foo"] = time.Now().Add(-2 * time.Hour)
+	c.mu.Unlock()
+	_, walked, hit := c.get("/foo")
+	if !hit {
+		t.Fatal("expected hit")
+	}
+	if time.Since(walked) < time.Hour {
+		t.Errorf("walked was %v ago, expected >1h", time.Since(walked))
 	}
 }

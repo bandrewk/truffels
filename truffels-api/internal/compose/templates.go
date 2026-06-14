@@ -42,6 +42,7 @@ var rawTemplates = map[string]string{
 	"mempool":  mempoolTemplate,
 	"ckstats":  ckstatsTemplate,
 	"proxy":    proxyTemplate,
+	"truffels": truffelsTemplate,
 }
 
 const bitcoinTemplate = `# Project Truffels — Bitcoin Core
@@ -400,7 +401,7 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/proxy-health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -414,5 +415,134 @@ networks:
   truffels-edge:
     external: true
   bitcoin-backend:
+    external: true
+`
+
+
+const truffelsTemplate = `# Project Truffels — Control Plane (agent + api + web)
+# Managed by truffels. Do not edit manually.
+
+services:
+  agent:
+    build:
+      context: {{.RepoSrc}}/truffels-agent
+      dockerfile: {{.RepoSrc}}/truffels-agent/Dockerfile
+    image: {{.AgentTag}}
+    container_name: truffels-agent
+    pid: "host"
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    networks:
+      truffels-core:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/truffels/compose:/srv/truffels/compose:rw
+      - /srv/truffels/config:/srv/truffels/config:rw
+      - /srv/truffels/secrets:/srv/truffels/secrets:ro
+      - /srv/truffels/data:/srv/truffels/data:rw
+      - {{.RepoSrc}}:/repo:rw
+    environment:
+      TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"
+      TRUFFELS_DATA_ROOT: "/srv/truffels/data"
+      TRUFFELS_AGENT_LISTEN: ":9090"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  api:
+    build:
+      context: {{.RepoSrc}}/truffels-api
+      dockerfile: {{.RepoSrc}}/truffels-api/Dockerfile
+    image: {{.APITag}}
+    container_name: truffels-api
+    user: "1000:1000"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      bitcoin-backend:
+      truffels-edge:
+      truffels-core:
+    depends_on:
+      agent:
+        condition: service_healthy
+    volumes:
+      - /srv/truffels/config:/srv/truffels/config:ro
+      - /srv/truffels/compose:/srv/truffels/compose
+      - /srv/truffels/secrets:/srv/truffels/secrets:ro
+      - /srv/truffels/data/truffels:/data
+      - /srv/truffels/data:/srv/truffels/data:ro
+      - /srv/truffels/backups:/srv/truffels/backups
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    environment:
+      TRUFFELS_LISTEN: ":8080"
+      TRUFFELS_DB_PATH: "/data/truffels.db"
+      TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"
+      TRUFFELS_SECRETS_ROOT: "/srv/truffels/secrets"
+      TRUFFELS_DATA_ROOT: "/srv/truffels/data"
+      TRUFFELS_HOST_PROC: "/host/proc"
+      TRUFFELS_HOST_SYS: "/host/sys"
+      TRUFFELS_AGENT_URL: "http://truffels-agent:9090"
+      TRUFFELS_GITHUB_REPO: "bandrewk/truffels"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/truffels/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  web:
+    build:
+      context: {{.RepoSrc}}/truffels-web
+      dockerfile: {{.RepoSrc}}/truffels-web/Dockerfile
+    image: {{.WebTag}}
+    container_name: truffels-web
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    networks:
+      truffels-edge:
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/admin/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  bitcoin-backend:
+    external: true
+  truffels-edge:
+    external: true
+  truffels-core:
     external: true
 `

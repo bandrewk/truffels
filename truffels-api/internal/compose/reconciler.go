@@ -17,8 +17,14 @@ var dockerfileMapping = map[string]string{
 	"ckpool":  "dockerfiles/ckpool/Dockerfile",
 }
 
-// serviceIDs that have compose templates (skip truffels — self-managed).
-var reconciledServices = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy"}
+// serviceIDs that have compose templates.
+//
+// "truffels" is special: its compose contains the API itself, so a normal
+// `compose up` would kill the running reconciler. The reconcileService path
+// dispatches to ComposeUpDetached for that ID — the agent writes a shell
+// script to host /tmp and execs it via nsenter, so the restart survives the
+// API process exiting.
+var reconciledServices = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy", "truffels"}
 
 // AlertStore is the subset of the store interface the reconciler needs to
 // surface reconciliation failures as alerts. Defined here (not imported) to
@@ -92,12 +98,32 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 
 	// Ensure any declared bind-mount host directories exist with correct
 	// ownership before we hand the new compose to `docker compose up`.
+	// Non-fatal: a failure here gets a critical alert and a warning log but
+	// we still proceed to write the compose. The service will then fail loud
+	// (caught by healthcheck + restart-loop autostop from dev.14) rather than
+	// silently skipping the entire reconciliation.
 	tmpl, _ := r.registry.Get(serviceID)
 	for _, d := range tmpl.EnsureDirs {
 		if err := r.compose.FsEnsureDir(d.Path, d.UID, d.GID, d.Mode); err != nil {
-			return fmt.Errorf("ensure-dir %s: %w", d.Path, err)
+			slog.Warn("ensure-dir failed; continuing with compose write",
+				"service", serviceID, "path", d.Path, "err", err)
+			r.raiseAlert(serviceID, fmt.Sprintf("ensure-dir %s failed: %v", d.Path, err))
+			continue
 		}
 		slog.Info("ensure-dir ok", "service", serviceID, "path", d.Path)
+	}
+
+	// Proxy ships a Caddyfile alongside the compose YAML. Reconcile it via
+	// the same agent file/reconcile path so structural Caddy config changes
+	// flow through the update channel.
+	if serviceID == "proxy" {
+		caddyfile := RenderCaddyfile()
+		caddyfilePath := "/srv/truffels/config/proxy/Caddyfile"
+		if err := r.reconcileFileWithRetry(caddyfilePath, caddyfile); err != nil {
+			slog.Warn("Caddyfile reconcile failed; proceeding with compose",
+				"err", err)
+			r.raiseAlert("proxy", fmt.Sprintf("Caddyfile reconcile failed: %v", err))
+		}
 	}
 
 	// Compare and write if different
@@ -110,11 +136,19 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 		slog.Info("compose unchanged", "service", serviceID)
 	} else {
 		slog.Info("compose reconciled, restarting", "service", serviceID)
-		if err := r.compose.Up(serviceID); err != nil {
+		var upErr error
+		if serviceID == "truffels" {
+			// Detached restart — agent execs the up script in PID 1's namespace
+			// so the API can be killed mid-reconcile without orphaning the stack.
+			upErr = r.compose.ComposeUpDetached(serviceID)
+		} else {
+			upErr = r.compose.Up(serviceID)
+		}
+		if upErr != nil {
 			// Fail loud — without this, a typo in the new compose template
 			// silently breaks the service while self-update reports success.
-			r.raiseAlert(serviceID, fmt.Sprintf("compose reconcile restart failed: %v", err))
-			return fmt.Errorf("restart after reconcile: %w", err)
+			r.raiseAlert(serviceID, fmt.Sprintf("compose reconcile restart failed: %v", upErr))
+			return fmt.Errorf("restart after reconcile: %w", upErr)
 		}
 	}
 
@@ -188,4 +222,21 @@ func (r *Reconciler) reconcileWithRetry(serviceID, expected string) (bool, error
 		time.Sleep(5 * time.Second)
 	}
 	return false, lastErr
+}
+
+func (r *Reconciler) reconcileFileWithRetry(path, content string) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		changed, err := r.compose.FileReconcile(path, content)
+		if err == nil {
+			if changed {
+				slog.Info("config file reconciled", "path", path)
+			}
+			return nil
+		}
+		lastErr = err
+		slog.Warn("file reconcile retry", "path", path, "attempt", i+1, "err", err)
+		time.Sleep(5 * time.Second)
+	}
+	return lastErr
 }

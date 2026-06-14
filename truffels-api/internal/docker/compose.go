@@ -458,6 +458,31 @@ func (c *ComposeClient) FsClearDir(path string, uid, gid int, mode string) error
 	return nil
 }
 
+// FileReconcile writes `content` to `path` via the agent's POST /v1/file/reconcile
+// endpoint. Used by the reconciler for config files (Caddyfile) that live outside
+// composeRoot. Returns (changed, error).
+func (c *ComposeClient) FileReconcile(path, content string) (bool, error) {
+	body, _ := json.Marshal(map[string]string{
+		"path":             path,
+		"expected_content": content,
+	})
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/file/reconcile", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("agent file reconcile: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var result struct {
+		Status  string `json:"status"`
+		Error   string `json:"error"`
+		Changed bool   `json:"changed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode != 200 {
+		return false, fmt.Errorf("agent file reconcile: %s", result.Error)
+	}
+	return result.Changed, nil
+}
+
 // DockerPrune runs a full docker cleanup via the agent (builder + image + system prune).
 func (c *ComposeClient) DockerPrune() (string, error) {
 	longClient := &http.Client{Timeout: 6 * time.Minute}

@@ -34,6 +34,20 @@ type ProxyParams struct {
 	ImageTag string
 }
 
+type TruffelsParams struct {
+	AgentTag string
+	APITag   string
+	WebTag   string
+	// RepoSrc is the host path mounted as /repo on the agent container and used
+	// as the build context for all three truffels images. Extracted from the
+	// agent's "- <path>:/repo:rw" volume line on disk.
+	RepoSrc string
+}
+
+// repoSrcRe extracts the host path from a line like
+// "      - /home/truffel/Project-Truffels:/repo:rw"
+var repoSrcRe = regexp.MustCompile(`(?m)^\s*-\s+(\S+):/repo:rw\s*$`)
+
 // imageTagRe matches `image: <ref>` lines, capturing the full image reference.
 var imageTagRe = regexp.MustCompile(`(?m)^\s*image:\s*(\S+)\s*$`)
 
@@ -106,6 +120,27 @@ func ExtractParams(serviceID, content string) (any, error) {
 			return nil, fmt.Errorf("no image tag found for proxy")
 		}
 		return ProxyParams{ImageTag: tag}, nil
+
+	case "truffels":
+		agent := ExtractImageTag(content, "truffels/agent:")
+		api := ExtractImageTag(content, "truffels/api:")
+		web := ExtractImageTag(content, "truffels/web:")
+		if agent == "" || api == "" || web == "" {
+			return nil, fmt.Errorf("missing image tag(s) for truffels (agent=%q api=%q web=%q)", agent, api, web)
+		}
+		var repoSrc string
+		if m := repoSrcRe.FindStringSubmatch(content); m != nil {
+			repoSrc = m[1]
+		}
+		if repoSrc == "" {
+			return nil, fmt.Errorf("missing /repo:rw mount for truffels (extract RepoSrc)")
+		}
+		return TruffelsParams{
+			AgentTag: agent,
+			APITag:   api,
+			WebTag:   web,
+			RepoSrc:  repoSrc,
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown service for param extraction: %q", serviceID)
