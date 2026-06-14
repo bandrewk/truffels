@@ -757,6 +757,16 @@ function SystemInfoTab() {
         <Card>
           <CardTitle>Docker Storage</CardTitle>
           <p className="text-xs text-gray-500 italic mb-2">Refreshed every 5 minutes. Manual actions update immediately.</p>
+          {(() => {
+            const bc = data.docker_storage?.find((ds) => ds.type === 'Build Cache')
+            // Threshold: 10 GB (decimal — matches the agent's parseBytes scaling)
+            if (!bc || bc.reclaimable_raw < 10_000_000_000) return null
+            return (
+              <div className="mb-3 px-3 py-2 bg-yellow-600/10 border border-yellow-600/30 rounded text-xs text-yellow-300">
+                Build cache is using <span className="font-mono font-semibold">{bc.reclaimable}</span> that can be reclaimed. Click <span className="font-semibold">Clear Build Cache</span> below to free it.
+              </div>
+            )
+          })()}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

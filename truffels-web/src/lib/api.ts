@@ -371,6 +371,7 @@ export interface DockerStorageItem {
   count: number
   total_size: string
   reclaimable: string
+  reclaimable_raw: number
 }
 
 export interface ServiceDataItem {

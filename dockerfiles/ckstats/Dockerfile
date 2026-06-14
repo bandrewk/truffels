@@ -6,8 +6,8 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 COPY ckpoolstats/package.json ckpoolstats/pnpm-lock.yaml ckpoolstats/pnpm-workspace.yaml* ./
-RUN pnpm install --no-frozen-lockfile || (sleep 2 && pnpm install --no-frozen-lockfile) || (sleep 5 && pnpm install --no-frozen-lockfile)
-RUN pnpm add dotenv || (sleep 2 && pnpm add dotenv) || (sleep 5 && pnpm add dotenv)
+RUN pnpm install --no-frozen-lockfile || (sleep 10 && pnpm install --no-frozen-lockfile) || (sleep 30 && pnpm install --no-frozen-lockfile) || (sleep 60 && pnpm install --no-frozen-lockfile)
+RUN pnpm add dotenv || (sleep 10 && pnpm add dotenv) || (sleep 30 && pnpm add dotenv) || (sleep 60 && pnpm add dotenv)
 
 COPY ckpoolstats/ ./
 
@@ -25,10 +25,11 @@ FROM node:22-slim
 
 ENV CI=true
 RUN corepack enable && corepack prepare pnpm@latest --activate
-# retry() wraps apt-get in 3 attempts with backoff so a transient flake on
-# deb.debian.org doesn't kill the whole build.
+# retry() wraps apt-get in 4 attempts with 10/30/60s backoff so a transient
+# flake on deb.debian.org doesn't kill the whole build. Total worst-case sleep
+# budget: 100s before giving up.
 RUN set -e; \
-    retry() { for i in 1 2 3; do "$@" && return 0; sleep $((i*2)); done; return 1; }; \
+    retry() { "$@" && return 0; for s in 10 30 60; do sleep $s; "$@" && return 0; done; return 1; }; \
     retry apt-get update && \
     retry apt-get install -y --no-install-recommends cron postgresql-client && \
     rm -rf /var/lib/apt/lists/*

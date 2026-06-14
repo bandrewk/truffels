@@ -178,6 +178,56 @@ func TestUpdateStatus_WithPending(t *testing.T) {
 	}
 }
 
+// dev.19: regression guard — /updates/status checks must include source_type
+// so the frontend's version-selector dropdown gate can fire for DockerHub
+// services. dev.18 added source_type to /updates but the UI consumes
+// /updates/status, so without this enrichment the dropdown is hidden for
+// every service (bug shipped in dev.18).
+func TestUpdateStatus_ChecksIncludeSourceType(t *testing.T) {
+	srv, st, _ := newTestServerWithEngine(t)
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "bitcoind",
+		CurrentVersion: "31.0",
+		LatestVersion:  "31.0",
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "abc123",
+		LatestVersion:  "def456",
+	})
+
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "GET", "/api/truffels/updates/status", "")
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+
+	checks := body["checks"].([]interface{})
+	if len(checks) != 2 {
+		t.Fatalf("expected 2 checks, got %d", len(checks))
+	}
+
+	gotSourceType := map[string]string{}
+	for _, c := range checks {
+		m := c.(map[string]interface{})
+		sid, _ := m["service_id"].(string)
+		st, _ := m["source_type"].(string)
+		gotSourceType[sid] = st
+	}
+	if gotSourceType["bitcoind"] != "dockerhub" {
+		t.Errorf("bitcoind: expected source_type=dockerhub, got %q", gotSourceType["bitcoind"])
+	}
+	if gotSourceType["ckpool"] != "bitbucket" {
+		t.Errorf("ckpool: expected source_type=bitbucket, got %q", gotSourceType["ckpool"])
+	}
+}
+
 // --- POST /updates/check ---
 
 func TestCheckUpdates(t *testing.T) {
