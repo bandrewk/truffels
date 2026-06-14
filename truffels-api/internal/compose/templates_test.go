@@ -68,6 +68,10 @@ func TestRender_Ckstats(t *testing.T) {
 	assertContains(t, got, "image: truffels/ckstats:latest")
 	assertContains(t, got, "image: postgres:16.13-alpine")
 	assertContains(t, got, "container_name: truffels-ckstats-db")
+	// dev.16: ckstats-cron now has a healthcheck (sentinel-file mtime probe)
+	// so a wedged loop is visible instead of silently "running".
+	assertContains(t, got, "cron-last-run")
+	assertContains(t, got, "start_period: 120s")
 }
 
 func TestRender_Proxy(t *testing.T) {

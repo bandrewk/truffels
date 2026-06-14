@@ -319,6 +319,7 @@ services:
       - |
         CLEANUP_COUNTER=0
         while true; do
+          date +%s > /tmp/cron-last-run
           echo "[$(date)] Running seed..."
           pnpm seed 2>&1
           echo "[$(date)] Running update-users..."
@@ -335,6 +336,12 @@ services:
       resources:
         limits:
           memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/cron-last-run 2>/dev/null || echo 0) )) -lt 180"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
 
   ckstats-db:
     image: {{.DBImageTag}}
