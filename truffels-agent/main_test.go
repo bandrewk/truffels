@@ -1993,6 +1993,84 @@ func TestHandleFileReconcile_AcceptsConfigRoot(t *testing.T) {
 	}
 }
 
+// dev.16: walker must index both 1-level service dirs (ckpool, truffels)
+// and 2-level leaves (bitcoin/blockchain, electrs/db). dev.15 only did 2-level
+// when children existed, so ckpool's template path got a cache miss.
+func TestWalkDataDirs_IndexesTopLevelAndLeaves(t *testing.T) {
+	root := t.TempDir()
+	// Build a fake data tree: ckpool/logs (children exist) + truffels (also children)
+	// and a 2-level case bitcoin/blockchain.
+	for _, p := range []string{
+		root + "/ckpool/logs/pool",
+		root + "/truffels/somefile_parent",
+		root + "/bitcoin/blockchain",
+	} {
+		if err := os.MkdirAll(p, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := newDirSizeCache()
+	// Drive a single walk iteration synchronously by inlining the body.
+	// Easier than waiting 5s + 5min from the goroutine.
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		servicePath := root + "/" + e.Name()
+		c.set(servicePath, dirSizeBytes(servicePath))
+		children, _ := os.ReadDir(servicePath)
+		for _, child := range children {
+			if !child.IsDir() {
+				continue
+			}
+			c.set(servicePath+"/"+child.Name(), dirSizeBytes(servicePath+"/"+child.Name()))
+		}
+	}
+
+	// All four paths should be in the cache.
+	wanted := []string{
+		root + "/ckpool",
+		root + "/ckpool/logs",
+		root + "/truffels",
+		root + "/bitcoin",
+		root + "/bitcoin/blockchain",
+	}
+	for _, p := range wanted {
+		if _, _, hit := c.get(p); !hit {
+			t.Errorf("expected cache hit for %q", p)
+		}
+	}
+}
+
+func TestDockerStorageCache_HitMiss(t *testing.T) {
+	c := newDockerStorageCache(100 * time.Millisecond)
+	if _, hit := c.get(); hit {
+		t.Fatal("expected miss before set")
+	}
+	c.set([]dockerStorageItem{{Type: "Images", Count: 5}})
+	if items, hit := c.get(); !hit || len(items) != 1 || items[0].Count != 5 {
+		t.Fatalf("expected hit after set; got hit=%v items=%v", hit, items)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if _, hit := c.get(); hit {
+		t.Error("expected miss after TTL expiry")
+	}
+}
+
+func TestDockerStorageCache_InvalidateClearsCache(t *testing.T) {
+	c := newDockerStorageCache(1 * time.Hour)
+	c.set([]dockerStorageItem{{Type: "Images", Count: 5}})
+	if _, hit := c.get(); !hit {
+		t.Fatal("expected hit after set")
+	}
+	c.invalidate()
+	if _, hit := c.get(); hit {
+		t.Error("expected miss after invalidate")
+	}
+}
+
 func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
 	c := newDirSizeCache()
 	c.set("/foo", 12345)

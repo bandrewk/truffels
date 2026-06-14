@@ -68,6 +68,10 @@ func TestRender_Ckstats(t *testing.T) {
 	assertContains(t, got, "image: truffels/ckstats:latest")
 	assertContains(t, got, "image: postgres:16.13-alpine")
 	assertContains(t, got, "container_name: truffels-ckstats-db")
+	// dev.16: ckstats-cron now has a healthcheck (sentinel-file mtime probe)
+	// so a wedged loop is visible instead of silently "running".
+	assertContains(t, got, "cron-last-run")
+	assertContains(t, got, "start_period: 120s")
 }
 
 func TestRender_Proxy(t *testing.T) {
@@ -93,14 +97,18 @@ func TestRender_UnknownService(t *testing.T) {
 
 func TestRender_Truffels(t *testing.T) {
 	got, err := Render("truffels", TruffelsParams{
-		AgentTag: "truffels/agent:v0.3.1-dev.15",
-		APITag:   "truffels/api:v0.3.1-dev.15",
-		WebTag:   "truffels/web:v0.3.1-dev.15",
+		AgentTag: "truffels/agent:v0.3.1-dev.16",
+		APITag:   "truffels/api:v0.3.1-dev.16",
+		WebTag:   "truffels/web:v0.3.1-dev.16",
 		RepoSrc:  "/home/truffel/Project-Truffels",
+		Version:  "v0.3.1-dev.16",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// dev.16: build.args.VERSION must be present so docker compose build sets
+	// the ldflag + OCI label correctly even when buildkit drops --build-arg.
+	assertContains(t, got, "VERSION: v0.3.1-dev.16")
 	// The dev.15 mount fix is the whole point — verify it's there.
 	assertContains(t, got, "/srv/truffels/data:/srv/truffels/data:rw")
 	assertContains(t, got, "TRUFFELS_DATA_ROOT")
@@ -108,9 +116,9 @@ func TestRender_Truffels(t *testing.T) {
 	assertContains(t, got, "/srv/truffels/config:/srv/truffels/config:rw")
 	assertContains(t, got, "TRUFFELS_CONFIG_ROOT")
 	// Image tags from params land in the rendered output.
-	assertContains(t, got, "image: truffels/agent:v0.3.1-dev.15")
-	assertContains(t, got, "image: truffels/api:v0.3.1-dev.15")
-	assertContains(t, got, "image: truffels/web:v0.3.1-dev.15")
+	assertContains(t, got, "image: truffels/agent:v0.3.1-dev.16")
+	assertContains(t, got, "image: truffels/api:v0.3.1-dev.16")
+	assertContains(t, got, "image: truffels/web:v0.3.1-dev.16")
 	// Build contexts pick up RepoSrc.
 	assertContains(t, got, "context: /home/truffel/Project-Truffels/truffels-agent")
 	assertContains(t, got, "context: /home/truffel/Project-Truffels/truffels-api")

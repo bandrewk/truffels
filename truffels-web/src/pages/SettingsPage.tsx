@@ -734,6 +734,7 @@ function SystemInfoTab() {
       {data.docker_storage && data.docker_storage.length > 0 && (
         <Card>
           <CardTitle>Docker Storage</CardTitle>
+          <p className="text-xs text-gray-500 italic mb-2">Refreshed every 5 minutes. Manual actions update immediately.</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -814,9 +815,10 @@ function SystemInfoTab() {
       {serviceDataRows.length > 0 && (
         <Card>
           <CardTitle>Service Data Storage</CardTitle>
-          <p className="text-xs text-gray-500 mb-3">
+          <p className="text-xs text-gray-500 mb-1">
             Per-service host data under <span className="font-mono">/srv/truffels/data/</span>. Caches can be cleared; persistent state cannot.
           </p>
+          <p className="text-xs text-gray-500 italic mb-3">Refreshed every 5 minutes. Clearing a directory updates immediately.</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

@@ -56,6 +56,7 @@ var composeRoot string
 var dataRoot string
 var configRoot string
 var sizeCache *dirSizeCache
+var storageCache *dockerStorageCache
 
 var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
 
@@ -79,6 +80,8 @@ func main() {
 
 	sizeCache = newDirSizeCache()
 	go walkDataDirsForever(sizeCache, dataRoot)
+
+	storageCache = newDockerStorageCache(5 * time.Minute)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
@@ -482,6 +485,12 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 		reclaimed = strings.Join(reclaimedParts, "; ")
 	}
 
+	// Force /system/info to refetch the storage summary so the user sees
+	// the result of the prune immediately rather than waiting up to 5 min.
+	if storageCache != nil {
+		storageCache.invalidate()
+	}
+
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
 }
 
@@ -505,6 +514,11 @@ func handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Request) {
 			reclaimed = strings.TrimSpace(line)
 			break
 		}
+	}
+
+	// Force storage refetch — see handleDockerPrune for rationale.
+	if storageCache != nil {
+		storageCache.invalidate()
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
@@ -955,34 +969,20 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Docker storage: run docker system df and parse output
+	// Docker storage: serve from a 5-min cache. `docker system df` takes
+	// several seconds on a pi with many image layers — caching makes the
+	// /system/info handler sub-second after the first call. Cache is
+	// invalidated by destructive actions (prune handlers).
 	var dockerStorage []dockerStorageItem
-	dockerCtx, dockerCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer dockerCancel()
-	dockerCmd := exec.CommandContext(dockerCtx, "docker", "system", "df", "--format", "{{json .}}")
-	var dockerOut bytes.Buffer
-	dockerCmd.Stdout = &dockerOut
-	if err := dockerCmd.Run(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(dockerOut.String()), "\n") {
-			if line == "" {
-				continue
-			}
-			var item struct {
-				Type        string `json:"Type"`
-				TotalCount  string `json:"TotalCount"`
-				Size        string `json:"Size"`
-				Reclaimable string `json:"Reclaimable"`
-			}
-			if err := json.Unmarshal([]byte(line), &item); err == nil {
-				count, _ := strconv.Atoi(item.TotalCount)
-				dockerStorage = append(dockerStorage, dockerStorageItem{
-					Type:        item.Type,
-					Count:       count,
-					TotalSize:   formatSize(item.Size),
-					Reclaimable: formatSize(item.Reclaimable),
-				})
-			}
+	if storageCache != nil {
+		var hit bool
+		dockerStorage, hit = storageCache.get()
+		if !hit {
+			dockerStorage = fetchDockerStorage()
+			storageCache.set(dockerStorage)
 		}
+	} else {
+		dockerStorage = fetchDockerStorage()
 	}
 
 	// Service data: serve sizes from the background cache. Paths not yet
@@ -1090,9 +1090,97 @@ func (c *dirSizeCache) forget(path string) {
 	delete(c.walked, path)
 }
 
-// walkDataDirsForever populates sizeCache by enumerating dataRoot/*/* and
-// walking each leaf. Runs forever in a goroutine; first walk happens after a
-// short delay so the HTTP server is up first.
+// dockerStorageCache memoizes the output of `docker system df`. The command
+// takes several seconds on a pi with many containers + image layers; running
+// it on every /system/info request is the dominant cost of the handler.
+// TTL matches dirSizeCache's walk cadence so the whole Info panel is
+// "approximately 5-min fresh." Manual destructive actions (prune,
+// prune-buildcache) call invalidate() so the next fetch is live.
+type dockerStorageCache struct {
+	mu        sync.RWMutex
+	value     []dockerStorageItem
+	fetchedAt time.Time
+	ttl       time.Duration
+}
+
+func newDockerStorageCache(ttl time.Duration) *dockerStorageCache {
+	return &dockerStorageCache{ttl: ttl}
+}
+
+func (c *dockerStorageCache) get() ([]dockerStorageItem, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.fetchedAt.IsZero() || time.Since(c.fetchedAt) > c.ttl {
+		return nil, false
+	}
+	return c.value, true
+}
+
+func (c *dockerStorageCache) set(v []dockerStorageItem) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.value = v
+	c.fetchedAt = time.Now()
+}
+
+func (c *dockerStorageCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fetchedAt = time.Time{}
+}
+
+// fetchDockerStorage runs `docker system df --format {{json .}}` and parses
+// the per-type rows. Returns nil on any error so the handler can gracefully
+// degrade rather than 500.
+func fetchDockerStorage() []dockerStorageItem {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "system", "df", "--format", "{{json .}}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	var items []dockerStorageItem
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var raw struct {
+			Type        string `json:"Type"`
+			TotalCount  string `json:"TotalCount"`
+			Size        string `json:"Size"`
+			Reclaimable string `json:"Reclaimable"`
+		}
+		if err := json.Unmarshal([]byte(line), &raw); err == nil {
+			count, _ := strconv.Atoi(raw.TotalCount)
+			items = append(items, dockerStorageItem{
+				Type:        raw.Type,
+				Count:       count,
+				TotalSize:   formatSize(raw.Size),
+				Reclaimable: formatSize(raw.Reclaimable),
+			})
+		}
+	}
+	return items
+}
+
+// walkDataDirsForever populates sizeCache by enumerating dataRoot/* AND
+// dataRoot/*/*. Indexing BOTH levels lets templates declare data dirs at
+// either granularity:
+//
+//   - bitcoind: /srv/truffels/data/bitcoin/blockchain (2 levels)
+//   - electrs:  /srv/truffels/data/electrs/db          (2 levels)
+//   - ckpool:   /srv/truffels/data/ckpool              (1 level — whole dir)
+//   - truffels: /srv/truffels/data/truffels            (1 level — whole dir)
+//
+// dev.15 only indexed the 2-level leaves when children existed, so ckpool
+// and truffels' template paths got cache misses and showed "—" in the UI.
+// Cost of indexing the parent too: one extra du -s per service per 5 min
+// — cheap.
+//
+// Runs forever in a goroutine; first walk happens after a short delay so
+// the HTTP server is up first.
 func walkDataDirsForever(c *dirSizeCache, root string) {
 	time.Sleep(5 * time.Second)
 	for {
@@ -1103,13 +1191,13 @@ func walkDataDirsForever(c *dirSizeCache, root string) {
 					continue
 				}
 				servicePath := filepath.Join(root, e.Name())
+				// Always index the top-level service path so templates that
+				// declare a 1-level path (ckpool, truffels) get a hit.
+				seen[servicePath] = true
+				c.set(servicePath, dirSizeBytes(servicePath))
+
 				children, err := os.ReadDir(servicePath)
 				if err != nil {
-					continue
-				}
-				if len(children) == 0 {
-					seen[servicePath] = true
-					c.set(servicePath, dirSizeBytes(servicePath))
 					continue
 				}
 				for _, child := range children {

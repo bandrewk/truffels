@@ -319,6 +319,7 @@ services:
       - |
         CLEANUP_COUNTER=0
         while true; do
+          date +%s > /tmp/cron-last-run
           echo "[$(date)] Running seed..."
           pnpm seed 2>&1
           echo "[$(date)] Running update-users..."
@@ -335,6 +336,12 @@ services:
       resources:
         limits:
           memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/cron-last-run 2>/dev/null || echo 0) )) -lt 180"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
 
   ckstats-db:
     image: {{.DBImageTag}}
@@ -427,6 +434,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-agent
       dockerfile: {{.RepoSrc}}/truffels-agent/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.AgentTag}}
     container_name: truffels-agent
     pid: "host"
@@ -463,6 +472,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-api
       dockerfile: {{.RepoSrc}}/truffels-api/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.APITag}}
     container_name: truffels-api
     user: "1000:1000"
@@ -513,6 +524,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-web
       dockerfile: {{.RepoSrc}}/truffels-web/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.WebTag}}
     container_name: truffels-web
     restart: unless-stopped

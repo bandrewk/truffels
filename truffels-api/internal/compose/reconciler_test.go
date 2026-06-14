@@ -183,13 +183,24 @@ func newMockAgentFull(t *testing.T, contents map[string]string,
 	}))
 }
 
-// captureAlertStore records UpsertAlert calls in memory for testing.
+// captureAlertStore records UpsertAlert + ResolveAlerts calls in memory for testing.
 type captureAlertStore struct {
-	alerts []*model.Alert
+	alerts   []*model.Alert
+	resolved []resolveCall
+}
+
+type resolveCall struct {
+	alertType string
+	serviceID string
 }
 
 func (c *captureAlertStore) UpsertAlert(a *model.Alert) error {
 	c.alerts = append(c.alerts, a)
+	return nil
+}
+
+func (c *captureAlertStore) ResolveAlerts(alertType, serviceID string) error {
+	c.resolved = append(c.resolved, resolveCall{alertType, serviceID})
 	return nil
 }
 
@@ -240,6 +251,70 @@ func newMockAgentError(t *testing.T) *httptest.Server {
 		w.WriteHeader(500)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "agent unavailable"})
 	}))
+}
+
+// TestReconciler_TruffelsShortCircuitsLoop verifies that when truffels
+// reconciliation triggers a detached restart, no subsequent service is
+// reconciled in this cycle (the next API boot picks them up).
+func TestReconciler_TruffelsShortCircuitsLoop(t *testing.T) {
+	truffelsOld := `services:
+  agent:
+    image: truffels/agent:v0.3.1-dev.15
+    container_name: truffels-agent
+    volumes:
+      - /home/truffel/Project-Truffels:/repo:rw
+  api:
+    image: truffels/api:v0.3.1-dev.15
+    container_name: truffels-api
+  web:
+    image: truffels/web:v0.3.1-dev.15
+    container_name: truffels-web
+`
+	proxyOld := `services:
+  proxy:
+    image: caddy:2.11.2-alpine
+    container_name: truffels-proxy
+`
+	var proxyComposeReadCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			var req struct {
+				ServiceID string `json:"service_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.ServiceID == "proxy" {
+				proxyComposeReadCalled = true
+			}
+			content := truffelsOld
+			if req.ServiceID == "proxy" {
+				content = proxyOld
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": content,
+			})
+		case "/v1/compose/reconcile":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/compose/up-detached":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "truffels", ComposeDir: "/srv/truffels/compose/truffels"},
+		{ID: "proxy", ComposeDir: "/srv/truffels/compose/proxy"},
+	})
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
+	_ = reconciler.Run()
+
+	if proxyComposeReadCalled {
+		t.Error("proxy must NOT be reconciled when truffels triggered a short-circuit")
+	}
 }
 
 // TestReconciler_TruffelsTriggersDetachedRestart verifies that when the
@@ -352,6 +427,52 @@ func TestReconciler_ProxyWritesBothComposeAndCaddyfile(t *testing.T) {
 	}
 	if !strings.Contains(caddy, "/proxy-health") {
 		t.Errorf("Caddyfile missing /proxy-health route: %s", caddy)
+	}
+}
+
+// TestReconciler_ResolvesAlertOnSuccess verifies a stale
+// compose_reconcile_failed alert is resolved when the next reconciliation
+// for that service completes successfully.
+func TestReconciler_ResolvesAlertOnSuccess(t *testing.T) {
+	ckpoolUnchanged := `services:
+  ckpool:
+    image: truffels/ckpool:v1.0.0
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": ckpoolUnchanged,
+			})
+		case "/v1/compose/reconcile":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": false,
+			})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "ckpool", ComposeDir: "/srv/truffels/compose/ckpool"},
+	})
+	store := &captureAlertStore{}
+
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), store)
+	if err := reconciler.Run(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := false
+	for _, rc := range store.resolved {
+		if rc.alertType == "compose_reconcile_failed" && rc.serviceID == "ckpool" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ResolveAlerts(compose_reconcile_failed, ckpool); got %v", store.resolved)
 	}
 }
 

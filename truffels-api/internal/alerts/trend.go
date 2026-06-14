@@ -99,7 +99,15 @@ type pendingAlert struct {
 }
 
 // evaluateContainerMemoryTrends checks each container's memory usage trend.
-func evaluateContainerMemoryTrends(s *store.Store, lookbackHours, horizon float64) []pendingAlert {
+//
+// oldestAllowed gates the regression: the per-container series must include
+// at least one sample older than oldestAllowed, otherwise the trend is fit
+// over too-recent data (warmup spikes right after a restart).
+//
+// restartedContainers is a set of container names that restarted within the
+// lookback window — those are skipped because extrapolating post-restart
+// cache fill is meaningless.
+func evaluateContainerMemoryTrends(s *store.Store, lookbackHours, horizon float64, oldestAllowed time.Time, restartedContainers map[string]bool) []pendingAlert {
 	since := time.Now().Add(-time.Duration(lookbackHours) * time.Hour)
 	snaps, err := s.GetContainerSnapshotsForTrend(since)
 	if err != nil || len(snaps) == 0 {
@@ -115,6 +123,20 @@ func evaluateContainerMemoryTrends(s *store.Store, lookbackHours, horizon float6
 	var alerts []pendingAlert
 	for container, snapshots := range byContainer {
 		if len(snapshots) < 2 {
+			continue
+		}
+
+		// Gate: skip if the oldest snapshot is too recent — same rule the
+		// host trend evaluator applies. Without this, a freshly-restarted
+		// container's cache-fill rate gets extrapolated as a +5249MB/h
+		// trend and the user gets a spurious critical alert.
+		if !snapshots[0].Timestamp.Before(oldestAllowed) {
+			continue
+		}
+
+		// Skip if the container restarted within the lookback window —
+		// extrapolating post-restart growth is meaningless.
+		if restartedContainers[container] {
 			continue
 		}
 

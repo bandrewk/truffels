@@ -181,7 +181,8 @@ func TestEvaluateContainerMemoryTrends_Integration(t *testing.T) {
 	}
 
 	// Rate is 100MB/h, current ~800, limit 1024 → ~2.24h to hit
-	alerts := evaluateContainerMemoryTrends(s, 6, 6)
+	oldestAllowed := time.Now().Add(-2 * time.Hour)
+	alerts := evaluateContainerMemoryTrends(s, 6, 6, oldestAllowed, nil)
 	if len(alerts) != 1 {
 		t.Fatalf("expected 1 trend alert, got %d", len(alerts))
 	}
@@ -202,9 +203,51 @@ func TestEvaluateContainerMemoryTrends_NoAlert_FlatMemory(t *testing.T) {
 		insertContainerSnap(t, s, ts, "truffels-ckpool", 500, 1024)
 	}
 
-	alerts := evaluateContainerMemoryTrends(s, 6, 6)
+	oldestAllowed := time.Now().Add(-2 * time.Hour)
+	alerts := evaluateContainerMemoryTrends(s, 6, 6, oldestAllowed, nil)
 	if len(alerts) != 0 {
 		t.Fatalf("expected 0 alerts for flat memory, got %d", len(alerts))
+	}
+}
+
+// dev.16: container trends must not fire when the series is too short.
+// This guards against spurious post-restart "+5249 MB/h" alerts.
+func TestEvaluateContainerMemoryTrends_SkipsWhenInsufficientData(t *testing.T) {
+	s := newTestStore(t)
+
+	// Only 30 minutes of fast-growing samples.
+	now := time.Now()
+	for i := 0; i <= 30; i++ {
+		ts := now.Add(-time.Duration(30-i) * time.Minute)
+		mem := 100 + float64(i)*30.0 // 100 → 1000 over 30min — steep
+		insertContainerSnap(t, s, ts, "truffels-mempool-backend", mem, 2048)
+	}
+
+	// oldestAllowed = 2h ago, but oldest sample is 30min ago → skip
+	oldestAllowed := time.Now().Add(-2 * time.Hour)
+	alerts := evaluateContainerMemoryTrends(s, 6, 6, oldestAllowed, nil)
+	if len(alerts) != 0 {
+		t.Errorf("expected 0 alerts for series shorter than min_data_hours, got %d", len(alerts))
+	}
+}
+
+// dev.16: container trends must not fire when the container restarted within
+// the lookback window — caches refilling looks like a leak.
+func TestEvaluateContainerMemoryTrends_SkipsAfterRestart(t *testing.T) {
+	s := newTestStore(t)
+
+	now := time.Now()
+	for i := 0; i <= 180; i++ {
+		ts := now.Add(-time.Duration(180-i) * time.Minute)
+		mem := 500 + float64(i)*300.0/180.0 // would normally fire
+		insertContainerSnap(t, s, ts, "truffels-mempool-backend", mem, 1024)
+	}
+
+	oldestAllowed := time.Now().Add(-2 * time.Hour)
+	restarted := map[string]bool{"truffels-mempool-backend": true}
+	alerts := evaluateContainerMemoryTrends(s, 6, 6, oldestAllowed, restarted)
+	if len(alerts) != 0 {
+		t.Errorf("expected 0 alerts after restart, got %d", len(alerts))
 	}
 }
 
