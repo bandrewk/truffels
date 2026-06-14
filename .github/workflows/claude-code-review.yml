@@ -36,10 +36,40 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
           use_sticky_comment: 'true'
+          # dev.18: the `code-review` plugin ran in inline-comment-only mode
+          # and posted nothing when it had nothing to flag — no signal whether
+          # the review actually ran. Replace with an inline `prompt:` (plain
+          # text, no slash command) that always produces a sticky summary
+          # comment, so we have a visible verdict per PR.
+          prompt: |
+            Review this pull request. Look for:
+            - Correctness bugs and logic errors
+            - Security issues (path traversal, injection, secret leaks, auth bypass)
+            - Concurrency / race conditions
+            - Resource leaks (file handles, goroutines, network connections)
+            - Breaking changes to public APIs or stored data formats
+            - Tests that don't actually test the behaviour they claim to
+            - Personally Identifiable Information accidentally introduced in code,
+              tests, fixtures, comments, or commit messages: real names, real
+              email addresses (anything that's not the project's GitHub noreply
+              identity `*@users.noreply.github.com`), phone numbers, physical
+              addresses, IP addresses other than RFC1918 / loopback, API keys,
+              passwords, or other secrets.
+
+            Post ONE sticky summary comment with this structure:
+            - Start with a one-line verdict: `**LGTM**` or `**Concerns flagged below**`.
+            - If concerns: list each as `- <file>:<line> — <issue>` with the smallest fix you can suggest.
+            - If none: briefly note what you actually checked (which files, which classes of bug) so the author knows you reviewed — don't just say "looks good."
+
+            CRITICAL: do NOT include any of the PII you find in the comment.
+            Flag its presence by file:line and category only (e.g.
+            "fixtures/user.json:14 — appears to contain a real email address;
+            replace with a noreply identity"). Never echo the value itself.
+            This applies to anything that looks like PII even if it's in a test
+            fixture or a comment.
+
+            Be terse. Skip style / formatting nitpicks the linter would catch.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
