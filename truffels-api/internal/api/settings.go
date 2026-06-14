@@ -29,6 +29,7 @@ var settingsDefaults = map[string]string{
 	"trend_alert_horizon_hours":      "6",
 	"trend_alert_lookback_hours":     "6",
 	"trend_alert_min_data_hours":     "2",
+	"allow_downgrade":                "false",
 }
 
 type settingsResponse struct {
@@ -50,6 +51,7 @@ type settingsResponse struct {
 	TrendAlertHorizonHours   int     `json:"trend_alert_horizon_hours"`
 	TrendAlertLookbackHours  int     `json:"trend_alert_lookback_hours"`
 	TrendAlertMinDataHours   int     `json:"trend_alert_min_data_hours"`
+	AllowDowngrade           bool    `json:"allow_downgrade"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +74,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		TrendAlertHorizonHours:   s.getSettingInt("trend_alert_horizon_hours", 6),
 		TrendAlertLookbackHours:  s.getSettingInt("trend_alert_lookback_hours", 6),
 		TrendAlertMinDataHours:   s.getSettingInt("trend_alert_min_data_hours", 2),
+		AllowDowngrade:           s.getSettingStr("allow_downgrade", "false") == "true",
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

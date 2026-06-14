@@ -418,3 +418,65 @@ func TestUpdatesEndpoints_RequireAuth(t *testing.T) {
 		}
 	}
 }
+
+// dev.17: version selector endpoint
+func TestGetUpdateVersions_UnknownService(t *testing.T) {
+	srv, _, _ := newTestServerWithEngine(t)
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "GET", "/api/truffels/updates/nonexistent/versions", "")
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 404 {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestGetUpdateVersions_ReturnsStructure(t *testing.T) {
+	srv, _, _ := newTestServerWithEngine(t)
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "GET", "/api/truffels/updates/bitcoind/versions", "")
+	srv.Router().ServeHTTP(w, req)
+	// May return 200 with empty available (network may fail in test env) — accept either.
+	if w.Code != 200 && w.Code != 500 {
+		t.Fatalf("expected 200 or 500, got %d body=%s", w.Code, w.Body.String())
+	}
+	if w.Code == 200 {
+		var body map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if _, ok := body["available"]; !ok {
+			t.Error("response missing 'available' field")
+		}
+		if _, ok := body["current"]; !ok {
+			t.Error("response missing 'current' field")
+		}
+		if _, ok := body["latest"]; !ok {
+			t.Error("response missing 'latest' field")
+		}
+	}
+}
+
+// dev.17: compareSemverLike helper
+func TestCompareSemverLike(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int // sign: -1, 0, 1
+	}{
+		{"31.0", "29.2", 1},
+		{"29.2", "31.0", -1},
+		{"v3.3.1", "v3.2.1", 1},
+		{"v3.3.0", "v3.3.0", 0},
+		{"2.11.2-alpine", "2.11.1-alpine", 1},
+		{"30.2.1", "30.2", 1},
+	}
+	for _, c := range cases {
+		got := compareSemverLike(c.a, c.b)
+		sign := 0
+		if got > 0 {
+			sign = 1
+		} else if got < 0 {
+			sign = -1
+		}
+		if sign != c.want {
+			t.Errorf("compareSemverLike(%q, %q) = %d (sign %d), want sign %d", c.a, c.b, got, sign, c.want)
+		}
+	}
+}

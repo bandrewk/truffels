@@ -1009,6 +1009,9 @@ func TestGetSettings_Defaults(t *testing.T) {
 	if resp["update_check_enabled"] != true {
 		t.Fatalf("expected update_check_enabled=true, got %v", resp["update_check_enabled"])
 	}
+	if resp["allow_downgrade"] != false {
+		t.Fatalf("expected allow_downgrade=false, got %v", resp["allow_downgrade"])
+	}
 }
 
 func TestUpdateSettings_Success(t *testing.T) {

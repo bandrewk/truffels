@@ -416,6 +416,13 @@ export interface Settings {
   trend_alert_horizon_hours: number
   trend_alert_lookback_hours: number
   trend_alert_min_data_hours: number
+  allow_downgrade: boolean
+}
+
+export interface UpdateVersions {
+  current: string
+  latest: string
+  available: string[]
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
@@ -455,7 +462,9 @@ export const api = {
   updates: () => get<UpdateCheck[]>('/updates'),
   updateStatus: () => get<UpdateStatus>('/updates/status'),
   checkUpdates: () => post<{ status: string }>('/updates/check'),
-  applyUpdate: (id: string) => post<{ status: string }>(`/updates/apply/${id}`),
+  applyUpdate: (id: string, targetVersion?: string) =>
+    post<{ status: string }>(`/updates/apply/${id}`, targetVersion ? { target_version: targetVersion } : undefined),
+  updateVersions: (id: string) => get<UpdateVersions>(`/updates/${id}/versions`),
   applyAllUpdates: () => post<{ status: string; queued: string[] }>('/updates/apply-all'),
   updatePreflight: (id: string) => get<PreflightResult>(`/updates/preflight/${id}`),
   updateLogs: (serviceId?: string) => get<UpdateLog[]>(`/updates/logs${serviceId ? `?service=${serviceId}` : ''}`),

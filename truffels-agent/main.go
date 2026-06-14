@@ -82,6 +82,7 @@ func main() {
 	go walkDataDirsForever(sizeCache, dataRoot)
 
 	storageCache = newDockerStorageCache(5 * time.Minute)
+	go walkDockerStorageForever(storageCache)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
@@ -485,10 +486,11 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 		reclaimed = strings.Join(reclaimedParts, "; ")
 	}
 
-	// Force /system/info to refetch the storage summary so the user sees
-	// the result of the prune immediately rather than waiting up to 5 min.
+	// Refresh storage immediately so /system/info reflects the prune result
+	// on the very next request, not 5 minutes later.
 	if storageCache != nil {
 		storageCache.invalidate()
+		storageCache.set(fetchDockerStorage())
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
@@ -516,9 +518,10 @@ func handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Force storage refetch — see handleDockerPrune for rationale.
+	// Refresh storage — see handleDockerPrune for rationale.
 	if storageCache != nil {
 		storageCache.invalidate()
+		storageCache.set(fetchDockerStorage())
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
@@ -969,20 +972,16 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Docker storage: serve from a 5-min cache. `docker system df` takes
-	// several seconds on a pi with many image layers — caching makes the
-	// /system/info handler sub-second after the first call. Cache is
-	// invalidated by destructive actions (prune handlers).
+	// Docker storage: cache-only read. The 5-min background goroutine
+	// (walkDockerStorageForever) refreshes the cache. On a pi with many
+	// build-cache items `docker system df` takes 15+ seconds — running it
+	// inline inside an HTTP handler caused the request to time out and the
+	// cache to be populated with empty, hiding the Docker Storage card.
+	// If the cache is empty during the first few seconds after startup,
+	// the UI renders no card; the next refresh populates it.
 	var dockerStorage []dockerStorageItem
 	if storageCache != nil {
-		var hit bool
-		dockerStorage, hit = storageCache.get()
-		if !hit {
-			dockerStorage = fetchDockerStorage()
-			storageCache.set(dockerStorage)
-		}
-	} else {
-		dockerStorage = fetchDockerStorage()
+		dockerStorage, _ = storageCache.get()
 	}
 
 	// Service data: serve sizes from the background cache. Paths not yet
@@ -1129,11 +1128,27 @@ func (c *dockerStorageCache) invalidate() {
 	c.fetchedAt = time.Time{}
 }
 
+// walkDockerStorageForever populates storageCache in the background. Same
+// shape as walkDataDirsForever: short startup delay so the HTTP server is
+// up, then refresh every 5 min. Manual destructive actions call set()
+// directly after invalidate() to surface the post-prune state immediately.
+func walkDockerStorageForever(c *dockerStorageCache) {
+	time.Sleep(5 * time.Second)
+	for {
+		c.set(fetchDockerStorage())
+		time.Sleep(5 * time.Minute)
+	}
+}
+
 // fetchDockerStorage runs `docker system df --format {{json .}}` and parses
 // the per-type rows. Returns nil on any error so the handler can gracefully
 // degrade rather than 500.
+//
+// Generous 60 s timeout — on a pi with many build-cache items the scan can
+// take 15+ seconds. This function is called from the background goroutine
+// (walkDockerStorageForever) so it's not bounded by an HTTP request budget.
 func fetchDockerStorage() []dockerStorageItem {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", "system", "df", "--format", "{{json .}}")
 	var out bytes.Buffer
