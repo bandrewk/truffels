@@ -95,8 +95,11 @@ function SourceLinks({ source }: { source?: UpdateSource }) {
 export default function UpdatesPage() {
   const statusFetcher = useCallback(() => api.updateStatus(), [])
   const logsFetcher = useCallback(() => api.updateLogs(), [])
+  const settingsFetcher = useCallback(() => api.settings(), [])
   const { data: status, loading, refresh: refreshStatus } = useApi(statusFetcher, 10000)
   const { data: logs, refresh: refreshLogs } = useApi(logsFetcher, 10000)
+  const { data: settings } = useApi(settingsFetcher)
+  const allowDowngrade = settings?.allow_downgrade === true
   const [actionPending, setActionPending] = useState<string | null>(null)
   const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null)
   const [preflightLoading, setPreflightLoading] = useState<string | null>(null)
@@ -104,6 +107,14 @@ export default function UpdatesPage() {
   const [pullRestartMsg, setPullRestartMsg] = useState<string | null>(null)
   const [showUpdateAllConfirm, setShowUpdateAllConfirm] = useState(false)
   const [checkMsg, setCheckMsg] = useState<string | null>(null)
+  // dev.17: per-service version selection. Empty/undefined = use auto-detected latest.
+  const [selectedVersion, setSelectedVersion] = useState<Record<string, string>>({})
+  const [versionsCache, setVersionsCache] = useState<Record<string, string[]>>({})
+  // Downgrade confirmation modal state
+  const [downgradeTarget, setDowngradeTarget] = useState<{ serviceId: string; from: string; to: string } | null>(null)
+  const [downgradePassword, setDowngradePassword] = useState('')
+  const [downgradeAck, setDowngradeAck] = useState(false)
+  const [downgradeMsg, setDowngradeMsg] = useState<string | null>(null)
 
   async function handleCheck() {
     setActionPending('check')
@@ -154,13 +165,70 @@ export default function UpdatesPage() {
     }
   }
 
+  // dev.17: parse a version string into a sortable []number for compare.
+  function parseVersion(v: string): number[] {
+    let s = v.replace(/^v/, '')
+    s = s.replace(/[^0-9.].*$/, '')
+    if (!s) return []
+    return s.split('.').map((p) => parseInt(p, 10)).filter((n) => !isNaN(n))
+  }
+  function compareVersion(a: string, b: string): number {
+    const pa = parseVersion(a), pb = parseVersion(b)
+    const n = Math.max(pa.length, pb.length)
+    for (let i = 0; i < n; i++) {
+      const av = pa[i] ?? 0, bv = pb[i] ?? 0
+      if (av !== bv) return av - bv
+    }
+    return 0
+  }
+
+  // dev.17: ensure we've fetched the versions list for a service.
+  async function ensureVersions(serviceId: string) {
+    if (versionsCache[serviceId]) return
+    try {
+      const v = await api.updateVersions(serviceId)
+      setVersionsCache((m) => ({ ...m, [serviceId]: v.available }))
+    } catch {
+      setVersionsCache((m) => ({ ...m, [serviceId]: [] }))
+    }
+  }
+
+  // dev.17: dropdown change handler.
+  function handleSelectVersion(serviceId: string, version: string) {
+    setSelectedVersion((m) => ({ ...m, [serviceId]: version }))
+  }
+
+  // dev.17: confirm downgrade via password modal.
+  async function handleConfirmDowngrade() {
+    if (!downgradeTarget) return
+    if (!downgradeAck || !downgradePassword) {
+      setDowngradeMsg('Password and acknowledgement required')
+      return
+    }
+    const { serviceId, to } = downgradeTarget
+    setDowngradeTarget(null)
+    setDowngradePassword('')
+    setDowngradeAck(false)
+    setDowngradeMsg(null)
+    setActionPending(serviceId)
+    try {
+      await api.applyUpdate(serviceId, to)
+      setTimeout(() => { refreshStatus(); refreshLogs() }, 5000)
+    } catch (e: any) {
+      setDowngradeMsg(`Error: ${e?.message ?? 'failed'}`)
+    } finally {
+      setActionPending(null)
+    }
+  }
+
   async function handleConfirmUpdate() {
     if (!preflightResult) return
     const serviceId = preflightResult.service_id
+    const target = selectedVersion[serviceId]
     setPreflightResult(null)
     setActionPending(serviceId)
     try {
-      await api.applyUpdate(serviceId)
+      await api.applyUpdate(serviceId, target)
       setTimeout(() => { refreshStatus(); refreshLogs() }, 5000)
     } finally {
       setActionPending(null)
@@ -297,6 +365,40 @@ export default function UpdatesPage() {
                         <span className="font-mono">{isDigest ? truncDigest(c.latest_version) : c.latest_version}</span>
                       </span>
                     )}
+                    {/* dev.17: version selector dropdown (DockerHub services only).
+                        Lazy-fetches on first interaction. Defaults to latest. */}
+                    {!isDigest && !floating && (
+                      <select
+                        onFocus={() => ensureVersions(c.service_id)}
+                        onMouseDown={() => ensureVersions(c.service_id)}
+                        value={selectedVersion[c.service_id] ?? c.latest_version ?? ''}
+                        onChange={(e) => handleSelectVersion(c.service_id, e.target.value)}
+                        disabled={actionPending !== null}
+                        className="text-xs bg-surface-overlay border border-border rounded px-2 py-1 text-gray-300 disabled:opacity-50"
+                      >
+                        {(() => {
+                          const av = versionsCache[c.service_id]
+                          // While loading: just show latest + current as options.
+                          if (!av || av.length === 0) {
+                            const opts: string[] = []
+                            if (c.latest_version) opts.push(c.latest_version)
+                            if (c.current_version && c.current_version !== c.latest_version) opts.push(c.current_version)
+                            return opts.map((v) => (
+                              <option key={v} value={v}>{v}{v === c.latest_version ? ' (latest)' : ''}{v === c.current_version ? ' (current)' : ''}</option>
+                            ))
+                          }
+                          // Filter to forward-only unless allow_downgrade is on.
+                          const cur = c.current_version || ''
+                          const filtered = allowDowngrade
+                            ? av
+                            : av.filter((v) => !cur || compareVersion(v, cur) >= 0)
+                          return filtered.map((v) => {
+                            const label = v + (v === c.latest_version ? ' (latest)' : '') + (v === cur ? ' (current)' : '')
+                            return <option key={v} value={v}>{label}</option>
+                          })
+                        })()}
+                      </select>
+                    )}
                   </div>
                   {c.error && (
                     <p className="text-xs text-red-400 mt-1">{c.error}</p>
@@ -308,17 +410,50 @@ export default function UpdatesPage() {
                   )}
                 </div>
                 <div className="flex-shrink-0">
-                  {c.has_update && !c.error && !updating[c.service_id] && (
-                    <button
-                      onClick={() => floating ? setPullRestartTarget(floating) : handlePreflight(c.service_id)}
-                      disabled={actionPending !== null || preflightLoading !== null}
-                      className={`px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 ${
-                        floating ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-400' : 'bg-accent/20 hover:bg-accent/30 text-accent'
-                      }`}
-                    >
-                      {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : floating ? 'Pull & Restart' : 'Update'}
-                    </button>
-                  )}
+                  {(() => {
+                    if (c.error || updating[c.service_id]) return null
+                    const target = selectedVersion[c.service_id] ?? c.latest_version ?? ''
+                    const cur = c.current_version || ''
+                    // Floating tag services: existing Pull & Restart flow.
+                    if (floating) {
+                      if (!c.has_update) return null
+                      return (
+                        <button
+                          onClick={() => setPullRestartTarget(floating)}
+                          disabled={actionPending !== null || preflightLoading !== null}
+                          className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400"
+                        >
+                          {actionPending === c.service_id ? 'Updating...' : 'Pull & Restart'}
+                        </button>
+                      )
+                    }
+                    if (!target) return null
+                    const cmp = cur ? compareVersion(target, cur) : 1
+                    // Same version → no button (no-op).
+                    if (cmp === 0) return null
+                    // Downgrade.
+                    if (cmp < 0) {
+                      return (
+                        <button
+                          onClick={() => { setDowngradeTarget({ serviceId: c.service_id, from: cur, to: target }); setDowngradePassword(''); setDowngradeAck(false); setDowngradeMsg(null) }}
+                          disabled={actionPending !== null || preflightLoading !== null}
+                          className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-red-500/20 hover:bg-red-500/30 text-red-400"
+                        >
+                          {actionPending === c.service_id ? 'Downgrading...' : `Downgrade to ${target}`}
+                        </button>
+                      )
+                    }
+                    // Upgrade.
+                    return (
+                      <button
+                        onClick={() => handlePreflight(c.service_id)}
+                        disabled={actionPending !== null || preflightLoading !== null}
+                        className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-accent/20 hover:bg-accent/30 text-accent"
+                      >
+                        {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : (target !== c.latest_version ? `Update to ${target}` : 'Update')}
+                      </button>
+                    )
+                  })()}
                 </div>
               </div>
               <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
@@ -466,6 +601,61 @@ export default function UpdatesPage() {
                 </div>
               </Card>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* dev.17: Downgrade Confirmation Modal */}
+      {downgradeTarget && (
+        <div className="fixed inset-0 z-40 bg-black/70 flex items-center justify-center px-4">
+          <div className="bg-surface border border-border rounded-lg p-6 max-w-md w-full space-y-4">
+            <h3 className="text-lg font-medium text-white">
+              Downgrade <span className="font-mono">{downgradeTarget.serviceId}</span>?
+            </h3>
+            <p className="text-sm text-gray-400">
+              Downgrading from{' '}
+              <span className="font-mono text-gray-200">{downgradeTarget.from}</span>{' '}
+              to{' '}
+              <span className="font-mono text-red-400">{downgradeTarget.to}</span>.
+            </p>
+            <p className="text-sm text-red-400">
+              ⚠ Older versions may not understand newer DB formats (mempool, ckstats, electrs).
+              Data loss or container failure is possible. Backup before continuing.
+            </p>
+            <label className="flex items-start gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={downgradeAck}
+                onChange={(e) => setDowngradeAck(e.target.checked)}
+                className="mt-1"
+              />
+              <span>I understand. I have a backup or accept the data-loss risk.</span>
+            </label>
+            <input
+              type="password"
+              value={downgradePassword}
+              onChange={(e) => setDowngradePassword(e.target.value)}
+              placeholder="Admin password"
+              className="w-full px-3 py-1.5 bg-surface-overlay border border-border rounded text-sm text-white placeholder-gray-600"
+            />
+            {downgradeMsg && (
+              <p className={`text-sm ${downgradeMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{downgradeMsg}</p>
+            )}
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => { setDowngradeTarget(null); setDowngradePassword(''); setDowngradeAck(false); setDowngradeMsg(null) }}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDowngrade}
+                disabled={!downgradeAck || !downgradePassword}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded disabled:opacity-50"
+              >
+                Downgrade
+              </button>
+            </div>
           </div>
         </div>
       )}
