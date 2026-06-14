@@ -17,11 +17,18 @@ export function UpdatingOverlay() {
     if (status === 'online') return
     if (status === 'updating') setStatus('polling')
 
+    // Poll BOTH /api/truffels/health (truffels-api) AND /admin/
+    // (truffels-web via Caddy). Redirecting on /health alone caused
+    // a transient 502 because truffels-web typically comes up a few
+    // seconds after truffels-api. Only flip to online when both
+    // respond 2xx.
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 3000)
-    fetch('/api/truffels/health', { signal: controller.signal })
-      .then((r) => { if (r.ok) setStatus('online') })
-      .catch(() => {})
+    Promise.all([
+      fetch('/api/truffels/health', { signal: controller.signal }).then(r => r.ok).catch(() => false),
+      fetch('/admin/', { signal: controller.signal }).then(r => r.ok).catch(() => false),
+    ])
+      .then(([api, web]) => { if (api && web) setStatus('online') })
       .finally(() => clearTimeout(timeout))
   }, [elapsed, status])
 
