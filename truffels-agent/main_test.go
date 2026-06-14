@@ -1954,6 +1954,45 @@ func TestDirSizeCache_ForgetRemoves(t *testing.T) {
 	}
 }
 
+func TestHandleFileReconcile_AcceptsConfigRoot(t *testing.T) {
+	dir := t.TempDir()
+	composeRoot = dir + "/compose"
+	configRoot = dir + "/config"
+	if err := os.MkdirAll(composeRoot+"/proxy", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configRoot+"/proxy", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// composeRoot path — should still work.
+	body := `{"path":"` + composeRoot + `/proxy/docker-compose.yml","expected_content":"x: y\n"}`
+	r := httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 200 {
+		t.Fatalf("composeRoot: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// configRoot path — must also work.
+	body = `{"path":"` + configRoot + `/proxy/Caddyfile","expected_content":"z\n"}`
+	r = httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 200 {
+		t.Fatalf("configRoot: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// /etc/passwd — must reject.
+	body = `{"path":"/etc/passwd","expected_content":"x\n"}`
+	r = httptest.NewRequest("POST", "/v1/file/reconcile", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	handleFileReconcile(w, r)
+	if w.Code != 403 {
+		t.Errorf("/etc/passwd: expected 403, got %d", w.Code)
+	}
+}
+
 func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
 	c := newDirSizeCache()
 	c.set("/foo", 12345)

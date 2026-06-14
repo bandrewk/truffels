@@ -54,6 +54,7 @@ var allowedContainers = map[string]bool{
 
 var composeRoot string
 var dataRoot string
+var configRoot string
 var sizeCache *dirSizeCache
 
 var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
@@ -73,6 +74,7 @@ func main() {
 
 	composeRoot = envOr("TRUFFELS_COMPOSE_ROOT", "/srv/truffels/compose")
 	dataRoot = envOr("TRUFFELS_DATA_ROOT", "/srv/truffels/data")
+	configRoot = envOr("TRUFFELS_CONFIG_ROOT", "/srv/truffels/config")
 	listen := envOr("TRUFFELS_AGENT_LISTEN", ":9090")
 
 	sizeCache = newDirSizeCache()
@@ -1671,13 +1673,28 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: resolve path and ensure it stays under composeRoot.
-	// validateUnderRoot also walks the parent chain via EvalSymlinks so a
-	// symlink at /srv/truffels/compose/foo → /etc cannot be used as a write target.
-	fullPath := filepath.Join(composeRoot, filepath.Clean(req.Path))
+	// Security: accept paths under either composeRoot or configRoot.
+	// Relative paths keep the legacy behavior of joining with composeRoot;
+	// absolute paths must validate against one of the two allowed roots.
+	fullPath := req.Path
+	if !filepath.IsAbs(fullPath) {
+		fullPath = filepath.Join(composeRoot, filepath.Clean(req.Path))
+	} else {
+		fullPath = filepath.Clean(fullPath)
+	}
 	if _, err := validateUnderRoot(fullPath, composeRoot); err != nil {
-		writeJSON(w, 403, map[string]string{"error": "path outside compose root: " + err.Error()})
-		return
+		// Fall back to configRoot only if it's non-empty — an empty root would
+		// match everything (HasPrefix(anything, "/") is true).
+		if configRoot == "" {
+			writeJSON(w, 403, map[string]string{"error": "path outside compose root: " + err.Error()})
+			return
+		}
+		if _, err2 := validateUnderRoot(fullPath, configRoot); err2 != nil {
+			writeJSON(w, 403, map[string]string{
+				"error": "path outside allowed roots: " + err.Error() + " / " + err2.Error(),
+			})
+			return
+		}
 	}
 
 	slog.Info("file reconcile", "path", fullPath)
