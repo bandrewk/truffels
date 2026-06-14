@@ -195,10 +195,11 @@ type StorageInfo struct {
 
 // DockerStorageItem represents a row from docker system df.
 type DockerStorageItem struct {
-	Type        string `json:"type"`
-	Count       int    `json:"count"`
-	TotalSize   string `json:"total_size"`
-	Reclaimable string `json:"reclaimable"`
+	Type           string `json:"type"`
+	Count          int    `json:"count"`
+	TotalSize      string `json:"total_size"`
+	Reclaimable    string `json:"reclaimable"`
+	ReclaimableRaw int64  `json:"reclaimable_raw"` // bytes — for client-side threshold gates
 }
 
 // ServiceDataItem represents a host data directory size — populated for paths
