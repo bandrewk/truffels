@@ -444,11 +444,13 @@ function UpdatesTab({ settings, saving, onSave }: {
   const [interval, setInterval] = useState(settings.update_check_interval_hours)
   const [channel, setChannel] = useState(settings.update_channel || 'stable')
   const [keepOldImages, setKeepOldImages] = useState(settings.update_keep_old_images)
+  const [allowDowngrade, setAllowDowngrade] = useState(settings.allow_downgrade)
 
   const changed = interval !== settings.update_check_interval_hours
     || enabled !== settings.update_check_enabled
     || channel !== (settings.update_channel || 'stable')
     || keepOldImages !== settings.update_keep_old_images
+    || allowDowngrade !== settings.allow_downgrade
 
   return (
     <div className="space-y-6">
@@ -523,10 +525,30 @@ function UpdatesTab({ settings, saving, onSave }: {
         </label>
       </Card>
 
+      <Card>
+        <CardTitle>Allow Downgrades</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Off (default): the version selector on the Updates page only shows newer versions than the
+          installed one. On: older versions also appear, but each downgrade requires admin password
+          + explicit acknowledgement. Older versions may not understand newer DB formats — data loss
+          is possible.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox" checked={allowDowngrade} onChange={(e) => setAllowDowngrade(e.target.checked)}
+            className="accent-accent w-4 h-4"
+          />
+          <div>
+            <span className="text-sm text-white font-medium">Show downgrades in version selector</span>
+            <p className="text-xs text-gray-500">Power-user escape hatch for rolling back to a prior version when an update misbehaves.</p>
+          </div>
+        </label>
+      </Card>
+
       <div className="flex justify-end">
         <button
           disabled={!changed || saving || (enabled && (interval < 1 || interval > 168))}
-          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval, update_channel: channel, update_keep_old_images: keepOldImages })}
+          onClick={() => onSave({ update_check_enabled: enabled, update_check_interval_hours: interval, update_channel: channel, update_keep_old_images: keepOldImages, allow_downgrade: allowDowngrade })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save Changes'}
