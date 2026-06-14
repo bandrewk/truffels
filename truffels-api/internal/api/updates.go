@@ -13,16 +13,30 @@ import (
 	"truffels-api/internal/model"
 )
 
+// UpdateCheckResponse adds the service's UpdateSource.Type to the on-the-wire
+// UpdateCheck so the frontend can gate the version-selector dropdown on
+// "dockerhub" sources only. SHA-based sources (github, bitbucket) and
+// floating-tag (docker_digest) sources don't have meaningful pickable versions.
+type UpdateCheckResponse struct {
+	model.UpdateCheck
+	SourceType string `json:"source_type,omitempty"`
+}
+
 func (s *Server) handleGetUpdates(w http.ResponseWriter, r *http.Request) {
 	checks, err := s.store.GetAllUpdateChecks()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if checks == nil {
-		checks = []model.UpdateCheck{}
+	resp := make([]UpdateCheckResponse, 0, len(checks))
+	for _, c := range checks {
+		entry := UpdateCheckResponse{UpdateCheck: c}
+		if tmpl, ok := s.registry.Get(c.ServiceID); ok && tmpl.UpdateSource != nil {
+			entry.SourceType = string(tmpl.UpdateSource.Type)
+		}
+		resp = append(resp, entry)
 	}
-	writeJSON(w, http.StatusOK, checks)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleCheckUpdates(w http.ResponseWriter, r *http.Request) {

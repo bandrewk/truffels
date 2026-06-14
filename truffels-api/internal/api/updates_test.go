@@ -419,6 +419,46 @@ func TestUpdatesEndpoints_RequireAuth(t *testing.T) {
 	}
 }
 
+// dev.18: /updates response carries source_type so the frontend can gate
+// the version selector dropdown on DockerHub-only.
+func TestGetUpdates_IncludesSourceType(t *testing.T) {
+	srv, st, _ := newTestServerWithEngine(t)
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "bitcoind",
+		CurrentVersion: "30.0",
+		LatestVersion:  "31.0",
+		HasUpdate:      true,
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "481f4cfe348e",
+		LatestVersion:  "a01fcb3e0a53",
+		HasUpdate:      true,
+	})
+
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "GET", "/api/truffels/updates", "")
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// Parse as []map so we can inspect arbitrary fields including source_type.
+	var resp []map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	sourceTypes := map[string]string{}
+	for _, c := range resp {
+		sid, _ := c["service_id"].(string)
+		st, _ := c["source_type"].(string)
+		sourceTypes[sid] = st
+	}
+	if sourceTypes["bitcoind"] != "dockerhub" {
+		t.Errorf("bitcoind source_type: got %q want dockerhub", sourceTypes["bitcoind"])
+	}
+	if sourceTypes["ckpool"] != "bitbucket" {
+		t.Errorf("ckpool source_type: got %q want bitbucket", sourceTypes["ckpool"])
+	}
+}
+
 // dev.17: version selector endpoint
 func TestGetUpdateVersions_UnknownService(t *testing.T) {
 	srv, _, _ := newTestServerWithEngine(t)

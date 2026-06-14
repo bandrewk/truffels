@@ -366,8 +366,10 @@ export default function UpdatesPage() {
                       </span>
                     )}
                     {/* dev.17: version selector dropdown (DockerHub services only).
-                        Lazy-fetches on first interaction. Defaults to latest. */}
-                    {!isDigest && !floating && (
+                        Lazy-fetches on first interaction. Defaults to latest.
+                        dev.18: gated on source_type==='dockerhub' so commit-SHA
+                        sources (github, bitbucket) don't show a misleading dropdown. */}
+                    {!isDigest && !floating && c.source_type === 'dockerhub' && (
                       <select
                         onFocus={() => ensureVersions(c.service_id)}
                         onMouseDown={() => ensureVersions(c.service_id)}
@@ -424,6 +426,22 @@ export default function UpdatesPage() {
                           className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400"
                         >
                           {actionPending === c.service_id ? 'Updating...' : 'Pull & Restart'}
+                        </button>
+                      )
+                    }
+                    // dev.18: non-DockerHub sources (github commit SHAs,
+                    // bitbucket commit SHAs, github-release) — fall back to
+                    // the dev.16 simple Update button on has_update. Version
+                    // comparison doesn't apply to SHAs and would mis-classify.
+                    if (c.source_type !== 'dockerhub') {
+                      if (!c.has_update) return null
+                      return (
+                        <button
+                          onClick={() => handlePreflight(c.service_id)}
+                          disabled={actionPending !== null || preflightLoading !== null}
+                          className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-accent/20 hover:bg-accent/30 text-accent"
+                        >
+                          {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Updating...' : 'Update'}
                         </button>
                       )
                     }
