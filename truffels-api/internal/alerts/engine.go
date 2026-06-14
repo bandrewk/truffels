@@ -341,8 +341,19 @@ func (e *Engine) checkTrends() {
 	since := time.Now().Add(-time.Duration(lookback) * time.Hour)
 	oldestAllowed := time.Now().Add(-time.Duration(minDataHours) * time.Hour)
 
+	// Containers that restarted within the lookback window — skip their
+	// trend evaluation (post-restart memory growth is cache fill, not a leak).
+	restartedContainers := make(map[string]bool)
+	if events, err := e.store.GetServiceEvents(since, 1000); err == nil {
+		for _, ev := range events {
+			if ev.EventType == "restart" {
+				restartedContainers[ev.Container] = true
+			}
+		}
+	}
+
 	// Container memory trends
-	containerAlerts := evaluateContainerMemoryTrends(e.store, lookback, horizon)
+	containerAlerts := evaluateContainerMemoryTrends(e.store, lookback, horizon, oldestAllowed, restartedContainers)
 	activeContainers := make(map[string]bool)
 	for _, pa := range containerAlerts {
 		activeContainers[pa.ServiceID] = true
