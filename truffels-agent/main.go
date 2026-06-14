@@ -1165,9 +1165,22 @@ func fetchDockerStorage() []dockerStorageItem {
 	return items
 }
 
-// walkDataDirsForever populates sizeCache by enumerating dataRoot/*/* and
-// walking each leaf. Runs forever in a goroutine; first walk happens after a
-// short delay so the HTTP server is up first.
+// walkDataDirsForever populates sizeCache by enumerating dataRoot/* AND
+// dataRoot/*/*. Indexing BOTH levels lets templates declare data dirs at
+// either granularity:
+//
+//   - bitcoind: /srv/truffels/data/bitcoin/blockchain (2 levels)
+//   - electrs:  /srv/truffels/data/electrs/db          (2 levels)
+//   - ckpool:   /srv/truffels/data/ckpool              (1 level — whole dir)
+//   - truffels: /srv/truffels/data/truffels            (1 level — whole dir)
+//
+// dev.15 only indexed the 2-level leaves when children existed, so ckpool
+// and truffels' template paths got cache misses and showed "—" in the UI.
+// Cost of indexing the parent too: one extra du -s per service per 5 min
+// — cheap.
+//
+// Runs forever in a goroutine; first walk happens after a short delay so
+// the HTTP server is up first.
 func walkDataDirsForever(c *dirSizeCache, root string) {
 	time.Sleep(5 * time.Second)
 	for {
@@ -1178,13 +1191,13 @@ func walkDataDirsForever(c *dirSizeCache, root string) {
 					continue
 				}
 				servicePath := filepath.Join(root, e.Name())
+				// Always index the top-level service path so templates that
+				// declare a 1-level path (ckpool, truffels) get a hit.
+				seen[servicePath] = true
+				c.set(servicePath, dirSizeBytes(servicePath))
+
 				children, err := os.ReadDir(servicePath)
 				if err != nil {
-					continue
-				}
-				if len(children) == 0 {
-					seen[servicePath] = true
-					c.set(servicePath, dirSizeBytes(servicePath))
 					continue
 				}
 				for _, child := range children {
