@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"truffels-api/internal/docker"
@@ -239,4 +240,174 @@ func newMockAgentError(t *testing.T) *httptest.Server {
 		w.WriteHeader(500)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "agent unavailable"})
 	}))
+}
+
+// TestReconciler_TruffelsTriggersDetachedRestart verifies that when the
+// truffels compose has drifted, the reconciler calls ComposeUpDetached
+// (so the API survives its own restart) rather than Up.
+func TestReconciler_TruffelsTriggersDetachedRestart(t *testing.T) {
+	dev14Compose := `services:
+  agent:
+    image: truffels/agent:v0.3.1-dev.14
+    container_name: truffels-agent
+    volumes:
+      - /home/truffel/Project-Truffels:/repo:rw
+  api:
+    image: truffels/api:v0.3.1-dev.14
+    container_name: truffels-api
+  web:
+    image: truffels/web:v0.3.1-dev.14
+    container_name: truffels-web
+`
+	var detachedCalled bool
+	var upCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": dev14Compose,
+			})
+		case "/v1/compose/reconcile":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/compose/up-detached":
+			var req struct {
+				ServiceID string `json:"service_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.ServiceID == "truffels" {
+				detachedCalled = true
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case "/v1/compose/up":
+			upCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "truffels", ComposeDir: "/srv/truffels/compose/truffels"},
+	})
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
+	_ = reconciler.Run()
+
+	if !detachedCalled {
+		t.Error("expected ComposeUpDetached for truffels")
+	}
+	if upCalled {
+		t.Error("ComposeUp must NOT be called for truffels (would kill the running API)")
+	}
+}
+
+// TestReconciler_ProxyWritesBothComposeAndCaddyfile verifies the proxy
+// reconciler also writes /srv/truffels/config/proxy/Caddyfile.
+func TestReconciler_ProxyWritesBothComposeAndCaddyfile(t *testing.T) {
+	oldProxy := `services:
+  proxy:
+    image: caddy:2.11.2-alpine
+    container_name: truffels-proxy
+`
+	writes := make(map[string]string)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": oldProxy,
+			})
+		case "/v1/compose/reconcile":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/file/reconcile":
+			var req struct {
+				Path            string `json:"path"`
+				ExpectedContent string `json:"expected_content"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			writes[req.Path] = req.ExpectedContent
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/compose/up":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "proxy", ComposeDir: "/srv/truffels/compose/proxy"},
+	})
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
+	_ = reconciler.Run()
+
+	caddy, ok := writes["/srv/truffels/config/proxy/Caddyfile"]
+	if !ok {
+		t.Errorf("Caddyfile not written; got writes=%v", writes)
+	}
+	if !strings.Contains(caddy, "/proxy-health") {
+		t.Errorf("Caddyfile missing /proxy-health route: %s", caddy)
+	}
+}
+
+// TestReconciler_EnsureDirFailsButComposeStillWritten — even if ensure-dir
+// fails (e.g. agent permission issue), the new compose still gets written
+// and a critical alert is emitted. Mempool will fail loud rather than
+// silently skipping the whole reconciliation.
+func TestReconciler_EnsureDirFailsButComposeStillWritten(t *testing.T) {
+	mempoolOld := `services:
+  mempool-backend:
+    image: mempool/backend:v3.3.1
+  mempool-frontend:
+    image: mempool/frontend:v3.3.1
+  mempool-db:
+    image: mariadb:lts
+`
+	var composeWritten bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": mempoolOld,
+			})
+		case "/v1/fs/ensure-dir":
+			w.WriteHeader(500)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "boom"})
+		case "/v1/compose/reconcile":
+			composeWritten = true
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/compose/up":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{
+			ID: "mempool", ComposeDir: "/srv/truffels/compose/mempool",
+			EnsureDirs: []model.EnsureDir{
+				{Path: "/srv/truffels/data/mempool/cache", UID: 1000, GID: 1000, Mode: "0755"},
+			},
+		},
+	})
+	store := &captureAlertStore{}
+
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), store)
+	_ = reconciler.Run()
+
+	if !composeWritten {
+		t.Error("compose should be written even when ensure-dir fails")
+	}
+	if len(store.alerts) == 0 {
+		t.Error("expected ensure-dir failure to emit an alert")
+	}
 }
