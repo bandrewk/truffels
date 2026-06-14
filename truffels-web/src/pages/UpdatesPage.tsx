@@ -4,7 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import { truncDigest, formatTime, logStatusMap, phaseLabel, formatElapsed } from '@/lib/updates'
+import { truncDigest, formatTime, logStatusMap, phaseLabel, formatElapsed, compareVersion } from '@/lib/updates'
 
 function DockerIcon() {
   return (
@@ -163,23 +163,6 @@ export default function UpdatesPage() {
     } finally {
       setPreflightLoading(null)
     }
-  }
-
-  // dev.17: parse a version string into a sortable []number for compare.
-  function parseVersion(v: string): number[] {
-    let s = v.replace(/^v/, '')
-    s = s.replace(/[^0-9.].*$/, '')
-    if (!s) return []
-    return s.split('.').map((p) => parseInt(p, 10)).filter((n) => !isNaN(n))
-  }
-  function compareVersion(a: string, b: string): number {
-    const pa = parseVersion(a), pb = parseVersion(b)
-    const n = Math.max(pa.length, pb.length)
-    for (let i = 0; i < n; i++) {
-      const av = pa[i] ?? 0, bv = pb[i] ?? 0
-      if (av !== bv) return av - bv
-    }
-    return 0
   }
 
   // dev.17: ensure we've fetched the versions list for a service.
@@ -447,8 +430,22 @@ export default function UpdatesPage() {
                     }
                     if (!target) return null
                     const cmp = cur ? compareVersion(target, cur) : 1
-                    // Same version → no button (no-op).
-                    if (cmp === 0) return null
+                    // dev.20: same semver, different tag string → variant switch
+                    // (e.g. 31.0 → 31.0-arm64, 16.14 → 16.14-alpine). compareVersion
+                    // returns 0 because the version math is identical; the tags
+                    // are still distinct images that we can swap between.
+                    if (cmp === 0) {
+                      if (target === cur) return null
+                      return (
+                        <button
+                          onClick={() => handlePreflight(c.service_id)}
+                          disabled={actionPending !== null || preflightLoading !== null}
+                          className="px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400"
+                        >
+                          {preflightLoading === c.service_id ? 'Checking...' : actionPending === c.service_id ? 'Switching...' : `Switch to ${target}`}
+                        </button>
+                      )
+                    }
                     // Downgrade.
                     if (cmp < 0) {
                       return (

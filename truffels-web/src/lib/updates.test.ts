@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { truncDigest, formatTime, logStatusMap } from './updates'
+import { truncDigest, formatTime, logStatusMap, parseVersion, compareVersion } from './updates'
 
 describe('truncDigest', () => {
   it('returns em-dash for empty string', () => {
@@ -90,5 +90,51 @@ describe('logStatusMap', () => {
 
   it('maps unrecognized status to unknown', () => {
     expect(logStatusMap('something_else')).toBe('unknown')
+  })
+})
+
+describe('parseVersion', () => {
+  it('strips leading v prefix', () => {
+    expect(parseVersion('v31.0')).toEqual([31, 0])
+  })
+
+  it('strips tag-variant suffix', () => {
+    expect(parseVersion('31.0-arm64')).toEqual([31, 0])
+    expect(parseVersion('16.14-alpine')).toEqual([16, 14])
+  })
+
+  it('returns empty array for non-numeric input', () => {
+    expect(parseVersion('a01fcb3e0a53')).toEqual([])
+  })
+
+  it('parses multi-segment semver', () => {
+    expect(parseVersion('v0.3.1')).toEqual([0, 3, 1])
+  })
+})
+
+describe('compareVersion', () => {
+  it('returns positive for upgrade', () => {
+    expect(compareVersion('31.1', '31.0')).toBeGreaterThan(0)
+    expect(compareVersion('v3.3.1', 'v3.2.1')).toBeGreaterThan(0)
+  })
+
+  it('returns negative for downgrade', () => {
+    expect(compareVersion('30.2', '31.0')).toBeLessThan(0)
+  })
+
+  it('returns 0 for tag variants of the same semver', () => {
+    // dev.20: 31.0 and 31.0-arm64 are the same release, distinct images.
+    // compareVersion returning 0 is correct; the UI surfaces a "Switch to"
+    // button when the strings differ.
+    expect(compareVersion('31.0-arm64', '31.0')).toBe(0)
+    expect(compareVersion('31.0-arm32', '31.0-arm64')).toBe(0)
+  })
+
+  it('returns 0 for alpine variant of same semver', () => {
+    expect(compareVersion('16.14-alpine', '16.14')).toBe(0)
+  })
+
+  it('treats v-prefix as equivalent', () => {
+    expect(compareVersion('v31.0', '31.0')).toBe(0)
   })
 })
