@@ -11,8 +11,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}
 FROM debian:bookworm-slim
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="${VERSION}"
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates wget && \
+# retry() wraps a command in 3 attempts with backoff so a transient flake on
+# deb.debian.org doesn't kill the whole build.
+RUN set -e; \
+    retry() { for i in 1 2 3; do "$@" && return 0; sleep $((i*2)); done; return 1; }; \
+    retry apt-get update && \
+    retry apt-get install -y --no-install-recommends ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /truffels-api /usr/local/bin/truffels-api

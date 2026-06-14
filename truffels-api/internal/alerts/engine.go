@@ -60,6 +60,12 @@ func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compos
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 		containerStartedAt: make(map[string]time.Time),
+		// Initialize snapshotTick to 9 so the first ++ on first evaluate
+		// makes it 10 — triggering both the metric-snapshot (%2==0) AND
+		// the trend check (%10==0) immediately. Otherwise stale memory_trend
+		// alerts from the prior engine instance linger for up to 5 min
+		// (one full trend tick window) after every truffels self-update.
+		snapshotTick: 9,
 	}
 }
 

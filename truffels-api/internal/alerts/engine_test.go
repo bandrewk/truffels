@@ -171,6 +171,21 @@ func TestEngine_StartStop(t *testing.T) {
 	// Should not panic or hang
 }
 
+// dev.18: NewEngine seeds snapshotTick=9 so the first evaluate() runs the
+// trend check (tick%10==0). Otherwise stale memory_trend alerts hang
+// around for ~5 min after every engine restart (truffels self-update).
+func TestNewEngine_SeedsSnapshotTickForImmediateTrend(t *testing.T) {
+	s := newTestStore(t)
+	e := NewEngine(s, nil, nil, nil)
+	if e.snapshotTick != 9 {
+		t.Errorf("expected snapshotTick=9 after NewEngine, got %d", e.snapshotTick)
+	}
+	// One increment in evaluate() makes it 10. 10%10==0 → trend check runs.
+	if (e.snapshotTick+1)%10 != 0 {
+		t.Errorf("first evaluate must hit the trend check window (tick+1=%d, want %% 10 == 0)", e.snapshotTick+1)
+	}
+}
+
 // --- Restart loop detection ---
 
 func newTestEngine(t *testing.T) (*Engine, *store.Store) {

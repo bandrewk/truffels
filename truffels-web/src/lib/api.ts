@@ -195,6 +195,10 @@ export interface UpdateCheck {
   has_update: boolean
   checked_at: string
   error?: string
+  // dev.18: gates the version-selector dropdown to "dockerhub" only.
+  // SHA-based sources (github, bitbucket) and floating-tag (docker_digest)
+  // don't have meaningful pickable versions.
+  source_type?: string
 }
 
 export interface UpdateLog {
