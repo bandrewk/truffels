@@ -37,6 +37,14 @@ type Engine struct {
 
 	// Monitoring: previous container stats for delta computation
 	prevContainerStats map[string]docker.ContainerResourceStats
+
+	// containerStartedAt records the first StartedAt the engine observes per
+	// container after its own boot. Used by the trend gate to detect
+	// containers that restarted around the same time as the engine itself
+	// (e.g. during truffels stack self-update) — those restarts can't be
+	// detected from RestartCount deltas because the engine had no prior
+	// baseline.
+	containerStartedAt map[string]time.Time
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compose *docker.ComposeClient) *Engine {
@@ -51,6 +59,7 @@ func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compos
 		autoStopped:        make(map[string]bool),
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
+		containerStartedAt: make(map[string]time.Time),
 	}
 }
 
@@ -240,6 +249,16 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			e.resolve(alertType, tmpl.ID)
 		}
 
+		// Record container's StartedAt on first observation per engine
+		// lifetime — used by the trend gate to skip containers that
+		// restarted concurrently with the engine itself (when no
+		// RestartCount delta could be observed).
+		if _, seen := e.containerStartedAt[name]; !seen && cs.StartedAt != "" {
+			if t, err := time.Parse(time.RFC3339Nano, cs.StartedAt); err == nil {
+				e.containerStartedAt[name] = t
+			}
+		}
+
 		// Restart loop detection (windowed)
 		e.recordRestartIncrements(name, cs.RestartCount)
 		e.evalRestartLoop(tmpl.ID, name, threshold, windowMin, maxRetries)
@@ -349,6 +368,16 @@ func (e *Engine) checkTrends() {
 			if ev.EventType == "restart" {
 				restartedContainers[ev.Container] = true
 			}
+		}
+	}
+	// Also mark containers whose StartedAt (first observed by this engine
+	// instance) falls within the lookback window. Catches the case where
+	// the engine restarted concurrently with its containers (truffels
+	// stack self-update) — no restart event was inserted because there
+	// was no prior baseline to compare RestartCount against.
+	for name, startedAt := range e.containerStartedAt {
+		if startedAt.After(since) {
+			restartedContainers[name] = true
 		}
 	}
 
