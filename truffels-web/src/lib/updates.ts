@@ -37,6 +37,35 @@ export function phaseLabel(status: string): string {
   }
 }
 
+/**
+ * Parse a version string into a sortable []number.
+ * Strips leading "v" and any non-numeric suffix (e.g. "31.0-arm64" → [31, 0],
+ * "16.14-alpine" → [16, 14]). Tag variants that share a semver compare equal
+ * — they're the same release, differentiated by the tag string, not the
+ * version math (the action button in UpdatesPage handles that case).
+ */
+export function parseVersion(v: string): number[] {
+  let s = v.replace(/^v/, '')
+  s = s.replace(/[^0-9.].*$/, '')
+  if (!s) return []
+  return s.split('.').map((p) => parseInt(p, 10)).filter((n) => !isNaN(n))
+}
+
+/**
+ * Compare two version strings. Returns negative if a < b, positive if a > b,
+ * 0 if they parse to the same []number (which includes tag-variant pairs
+ * like "31.0" vs "31.0-arm64").
+ */
+export function compareVersion(a: string, b: string): number {
+  const pa = parseVersion(a), pb = parseVersion(b)
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i++) {
+    const av = pa[i] ?? 0, bv = pb[i] ?? 0
+    if (av !== bv) return av - bv
+  }
+  return 0
+}
+
 /** Format elapsed time since an ISO timestamp as "47s", "2m 14s", or "1h 03m". */
 export function formatElapsed(iso: string): string {
   if (!iso) return ''
