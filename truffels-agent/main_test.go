@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- Health ---
@@ -1917,5 +1918,53 @@ func TestValidateUnderRoot_AllowsNestedUnderExistingRoot(t *testing.T) {
 	}
 	if cleaned != target {
 		t.Errorf("expected cleaned=%q, got %q", target, cleaned)
+	}
+}
+
+// --- dirSizeCache ---
+
+func TestDirSizeCache_HitMiss(t *testing.T) {
+	c := newDirSizeCache()
+	if _, _, hit := c.get("/foo"); hit {
+		t.Fatal("expected miss before set")
+	}
+	c.set("/foo", 42)
+	size, walked, hit := c.get("/foo")
+	if !hit {
+		t.Fatal("expected hit after set")
+	}
+	if size != 42 {
+		t.Errorf("size: %d", size)
+	}
+	if walked.IsZero() {
+		t.Error("walked timestamp should be non-zero")
+	}
+}
+
+func TestDirSizeCache_ForgetRemoves(t *testing.T) {
+	c := newDirSizeCache()
+	c.set("/foo", 1)
+	c.set("/bar", 2)
+	c.forget("/foo")
+	if _, _, hit := c.get("/foo"); hit {
+		t.Error("expected forget to remove the entry")
+	}
+	if _, _, hit := c.get("/bar"); !hit {
+		t.Error("forget must not affect other entries")
+	}
+}
+
+func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
+	c := newDirSizeCache()
+	c.set("/foo", 12345)
+	c.mu.Lock()
+	c.walked["/foo"] = time.Now().Add(-2 * time.Hour)
+	c.mu.Unlock()
+	_, walked, hit := c.get("/foo")
+	if !hit {
+		t.Fatal("expected hit")
+	}
+	if time.Since(walked) < time.Hour {
+		t.Errorf("walked was %v ago, expected >1h", time.Since(walked))
 	}
 }

@@ -604,8 +604,9 @@ function SystemInfoTab() {
   }
 
   // Build the joined view: a row per (template DataDir × measured size from agent).
-  // Service data from the agent is keyed by path; template DataDirs supply
-  // service id, label, description, and clearable flag.
+  // Sizes from data.service_data are looked up by path; missing rows show "—".
+  // The panel renders as soon as services is loaded, even if the agent's size
+  // cache hasn't been populated yet (dev.15 background-cache behaviour).
   type ServiceDataRow = {
     serviceId: string
     serviceName: string
@@ -617,8 +618,8 @@ function SystemInfoTab() {
     sizeRaw: number
   }
   const serviceDataRows: ServiceDataRow[] = []
-  if (services && data?.service_data) {
-    const sizeByPath = new Map(data.service_data.map((s) => [s.path, s]))
+  if (services) {
+    const sizeByPath = new Map((data?.service_data ?? []).map((s) => [s.path, s]))
     for (const svc of services) {
       const tmpl = svc.template
       if (!tmpl.data_dirs) continue
@@ -631,12 +632,18 @@ function SystemInfoTab() {
           label: dd.label,
           description: dd.description,
           clearable: dd.clearable,
-          size: sz?.size ?? '—',
-          sizeRaw: sz?.size_raw ?? 0,
+          size: sz && sz.size_raw >= 0 ? sz.size : '—',
+          sizeRaw: sz?.size_raw ?? -1,
         })
       }
     }
-    serviceDataRows.sort((a, b) => b.sizeRaw - a.sizeRaw)
+    // Sort biggest first; rows with sizeRaw < 0 (unwalked) sink to bottom.
+    serviceDataRows.sort((a, b) => {
+      if (a.sizeRaw < 0 && b.sizeRaw < 0) return 0
+      if (a.sizeRaw < 0) return 1
+      if (b.sizeRaw < 0) return -1
+      return b.sizeRaw - a.sizeRaw
+    })
   }
 
   const Row = ({ label, value }: { label: string; value: string | number }) => (

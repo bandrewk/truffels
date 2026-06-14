@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -53,6 +54,7 @@ var allowedContainers = map[string]bool{
 
 var composeRoot string
 var dataRoot string
+var sizeCache *dirSizeCache
 
 var version = "dev" // overridden via -ldflags "-X main.version=v0.2.0"
 
@@ -72,6 +74,9 @@ func main() {
 	composeRoot = envOr("TRUFFELS_COMPOSE_ROOT", "/srv/truffels/compose")
 	dataRoot = envOr("TRUFFELS_DATA_ROOT", "/srv/truffels/data")
 	listen := envOr("TRUFFELS_AGENT_LISTEN", ":9090")
+
+	sizeCache = newDirSizeCache()
+	go walkDataDirsForever(sizeCache, dataRoot)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
@@ -978,10 +983,9 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Service data: enumerate /srv/truffels/data/* leaf paths and du each.
-	// Walking down one level past dataRoot gives us per-service entries like
-	// mempool/cache, mempool/mysql, ckpool/logs, etc. — granularity matches
-	// what the service templates declare as DataDirs in the API.
+	// Service data: serve sizes from the background cache. Paths not yet
+	// walked return "calculating..." with SizeRaw: -1 so the frontend can
+	// render the row immediately and show a placeholder.
 	var serviceData []serviceDataItem
 	if entries, err := os.ReadDir(dataRoot); err == nil {
 		for _, e := range entries {
@@ -993,27 +997,37 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			for _, c := range children {
-				if !c.IsDir() {
-					continue
+			addRow := func(full string) {
+				if sizeCache == nil {
+					serviceData = append(serviceData, serviceDataItem{
+						Path: full, Size: "calculating...", SizeRaw: -1,
+					})
+					return
 				}
-				full := filepath.Join(servicePath, c.Name())
-				size := dirSizeBytes(full)
+				size, walked, hit := sizeCache.get(full)
+				if !hit {
+					serviceData = append(serviceData, serviceDataItem{
+						Path: full, Size: "calculating...", SizeRaw: -1,
+					})
+					return
+				}
+				sizeStr := formatBytes(size)
+				if time.Since(walked) > time.Hour {
+					sizeStr += " (stale)"
+				}
 				serviceData = append(serviceData, serviceDataItem{
-					Path:    full,
-					Size:    formatBytes(size),
-					SizeRaw: size,
+					Path: full, Size: sizeStr, SizeRaw: size,
 				})
 			}
-			// Also include the bare top-level dir (e.g. /srv/truffels/data/truffels)
-			// if it has files but no leaf subdirs the template references.
 			if len(children) == 0 {
-				size := dirSizeBytes(servicePath)
-				serviceData = append(serviceData, serviceDataItem{
-					Path:    servicePath,
-					Size:    formatBytes(size),
-					SizeRaw: size,
-				})
+				addRow(servicePath)
+				continue
+			}
+			for _, child := range children {
+				if !child.IsDir() {
+					continue
+				}
+				addRow(filepath.Join(servicePath, child.Name()))
 			}
 		}
 	}
@@ -1032,6 +1046,94 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		DockerStorage: dockerStorage,
 		ServiceData:   serviceData,
 	})
+}
+
+// dirSizeCache stores cached directory sizes. Walks are expensive on
+// blockchain-size directories; the agent populates this in a background
+// goroutine and handleSystemInfo serves from cache to keep responses fast.
+type dirSizeCache struct {
+	mu     sync.RWMutex
+	sizes  map[string]int64
+	walked map[string]time.Time
+}
+
+func newDirSizeCache() *dirSizeCache {
+	return &dirSizeCache{
+		sizes:  make(map[string]int64),
+		walked: make(map[string]time.Time),
+	}
+}
+
+func (c *dirSizeCache) get(path string) (int64, time.Time, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	size, ok := c.sizes[path]
+	if !ok {
+		return 0, time.Time{}, false
+	}
+	return size, c.walked[path], true
+}
+
+func (c *dirSizeCache) set(path string, size int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sizes[path] = size
+	c.walked[path] = time.Now()
+}
+
+func (c *dirSizeCache) forget(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.sizes, path)
+	delete(c.walked, path)
+}
+
+// walkDataDirsForever populates sizeCache by enumerating dataRoot/*/* and
+// walking each leaf. Runs forever in a goroutine; first walk happens after a
+// short delay so the HTTP server is up first.
+func walkDataDirsForever(c *dirSizeCache, root string) {
+	time.Sleep(5 * time.Second)
+	for {
+		seen := make(map[string]bool)
+		if entries, err := os.ReadDir(root); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				servicePath := filepath.Join(root, e.Name())
+				children, err := os.ReadDir(servicePath)
+				if err != nil {
+					continue
+				}
+				if len(children) == 0 {
+					seen[servicePath] = true
+					c.set(servicePath, dirSizeBytes(servicePath))
+					continue
+				}
+				for _, child := range children {
+					if !child.IsDir() {
+						continue
+					}
+					full := filepath.Join(servicePath, child.Name())
+					seen[full] = true
+					c.set(full, dirSizeBytes(full))
+				}
+			}
+		}
+		// Forget paths that vanished between walks.
+		c.mu.RLock()
+		toDrop := make([]string, 0)
+		for path := range c.sizes {
+			if !seen[path] {
+				toDrop = append(toDrop, path)
+			}
+		}
+		c.mu.RUnlock()
+		for _, path := range toDrop {
+			c.forget(path)
+		}
+		time.Sleep(5 * time.Minute)
+	}
 }
 
 // dirSizeBytes walks `path` and returns total size in bytes. Returns 0 on any
