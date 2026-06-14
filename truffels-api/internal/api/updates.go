@@ -257,10 +257,21 @@ func (s *Server) handleRollbackService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	checks, _ := s.store.GetAllUpdateChecks()
+	rawChecks, _ := s.store.GetAllUpdateChecks()
 	pendingCount, _ := s.store.PendingUpdateCount()
-	if checks == nil {
-		checks = []model.UpdateCheck{}
+
+	// dev.19: enrich checks with source_type — same shape as handleGetUpdates.
+	// Without this, the frontend's `c.source_type === 'dockerhub'` gate is
+	// always false (undefined !== "dockerhub"), so the version-selector
+	// dropdown never renders for any service. dev.18 added source_type to
+	// /updates but the UI reads /updates/status; this catches that miss.
+	checks := make([]UpdateCheckResponse, 0, len(rawChecks))
+	for _, c := range rawChecks {
+		entry := UpdateCheckResponse{UpdateCheck: c}
+		if tmpl, ok := s.registry.Get(c.ServiceID); ok && tmpl.UpdateSource != nil {
+			entry.SourceType = string(tmpl.UpdateSource.Type)
+		}
+		checks = append(checks, entry)
 	}
 
 	updating := make(map[string]bool)
@@ -306,11 +317,11 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"pending_count":    pendingCount,
-		"checks":           checks,
-		"updating":         updating,
-		"sources":          sources,
+		"pending_count":     pendingCount,
+		"checks":            checks,
+		"updating":          updating,
+		"sources":           sources,
 		"floating_services": floating,
-		"display_names":    displayNames,
+		"display_names":     displayNames,
 	})
 }
