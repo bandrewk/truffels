@@ -1890,3 +1890,32 @@ func TestHandleClearDir_RejectsRelativeEscape(t *testing.T) {
 		t.Errorf("expected 403 for relative escape, got %d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestValidateUnderRoot_AllowsMissingRoot(t *testing.T) {
+	// Replicate the production bug: the root itself doesn't exist (the agent
+	// container has no /srv/truffels/data mount). validateUnderRoot must walk
+	// past root up to the nearest existing ancestor and not flag it as a symlink
+	// redirect just because the ancestor doesn't match root.
+	tmpBase := t.TempDir()
+	root := tmpBase + "/notyet" // root itself doesn't exist
+	target := root + "/mempool/cache/subdir"
+	cleaned, err := validateUnderRoot(target, root)
+	if err != nil {
+		t.Fatalf("expected accept, got error: %v", err)
+	}
+	if cleaned != target {
+		t.Errorf("expected cleaned=%q, got %q", target, cleaned)
+	}
+}
+
+func TestValidateUnderRoot_AllowsNestedUnderExistingRoot(t *testing.T) {
+	root := t.TempDir() // root exists
+	target := root + "/foo/bar/baz"
+	cleaned, err := validateUnderRoot(target, root)
+	if err != nil {
+		t.Fatalf("expected accept, got error: %v", err)
+	}
+	if cleaned != target {
+		t.Errorf("expected cleaned=%q, got %q", target, cleaned)
+	}
+}

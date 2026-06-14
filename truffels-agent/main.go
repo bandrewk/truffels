@@ -1633,8 +1633,12 @@ func validateUnderRoot(p, root string) (string, error) {
 		probe = parent
 	}
 	resolved, err := filepath.EvalSymlinks(probe)
-	if err == nil && !strings.HasPrefix(resolved+"/", root+"/") && resolved != root {
-		return "", fmt.Errorf("symlink redirects outside root")
+	if err == nil && resolved != probe {
+		// A symlink was traversed somewhere up the chain. Verify the target
+		// still lies under root; reject if it escaped.
+		if !strings.HasPrefix(resolved+"/", root+"/") && resolved != root {
+			return "", fmt.Errorf("symlink redirects outside root")
+		}
 	}
 	return cleaned, nil
 }
