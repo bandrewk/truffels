@@ -87,6 +87,38 @@ func TestRender_UnknownService(t *testing.T) {
 	}
 }
 
+func TestRender_Truffels(t *testing.T) {
+	got, err := Render("truffels", TruffelsParams{
+		AgentTag: "truffels/agent:v0.3.1-dev.15",
+		APITag:   "truffels/api:v0.3.1-dev.15",
+		WebTag:   "truffels/web:v0.3.1-dev.15",
+		RepoSrc:  "/home/truffel/Project-Truffels",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The dev.15 mount fix is the whole point — verify it's there.
+	assertContains(t, got, "/srv/truffels/data:/srv/truffels/data:rw")
+	assertContains(t, got, "TRUFFELS_DATA_ROOT")
+	// And config flipped from :ro to :rw so the proxy Caddyfile can be reconciled.
+	assertContains(t, got, "/srv/truffels/config:/srv/truffels/config:rw")
+	assertContains(t, got, "TRUFFELS_CONFIG_ROOT")
+	// Image tags from params land in the rendered output.
+	assertContains(t, got, "image: truffels/agent:v0.3.1-dev.15")
+	assertContains(t, got, "image: truffels/api:v0.3.1-dev.15")
+	assertContains(t, got, "image: truffels/web:v0.3.1-dev.15")
+	// Build contexts pick up RepoSrc.
+	assertContains(t, got, "context: /home/truffel/Project-Truffels/truffels-agent")
+	assertContains(t, got, "context: /home/truffel/Project-Truffels/truffels-api")
+	assertContains(t, got, "context: /home/truffel/Project-Truffels/truffels-web")
+	// /repo mount on agent for source access during build.
+	assertContains(t, got, "/home/truffel/Project-Truffels:/repo:rw")
+	// Container names.
+	assertContains(t, got, "container_name: truffels-agent")
+	assertContains(t, got, "container_name: truffels-api")
+	assertContains(t, got, "container_name: truffels-web")
+}
+
 func assertContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
