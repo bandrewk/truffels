@@ -373,6 +373,26 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 	return result, nil
 }
 
+// ListAvailableVersions returns the list of versions the user can pick from
+// for this service. Empty list for source types that aren't version-selectable
+// (GitHub commit SHAs, BitbucketSourceBuild, GitHubRelease, DockerDigest).
+func (e *Engine) ListAvailableVersions(serviceID string) ([]string, error) {
+	tmpl, ok := e.registry.Get(serviceID)
+	if !ok {
+		return nil, fmt.Errorf("unknown service: %s", serviceID)
+	}
+	if tmpl.UpdateSource == nil {
+		return nil, nil
+	}
+	if tmpl.UpdateSource.Type != model.SourceDockerHub {
+		return nil, nil
+	}
+	if len(tmpl.UpdateSource.Images) == 0 {
+		return nil, nil
+	}
+	return ListDockerHubVersions(tmpl.UpdateSource.Images[0], tmpl.UpdateSource.TagFilter)
+}
+
 func (e *Engine) alertUpdateFailed(serviceID, msg string) {
 	_ = e.store.UpsertAlert(&model.Alert{
 		Type:      "update_failed",
@@ -383,7 +403,17 @@ func (e *Engine) alertUpdateFailed(serviceID, msg string) {
 }
 
 // ApplyUpdate performs the update for a single service with automatic rollback on health failure.
+// ApplyUpdate applies the auto-detected latest version.
+// Equivalent to ApplyUpdateToVersion(serviceID, "").
 func (e *Engine) ApplyUpdate(serviceID string) error {
+	return e.ApplyUpdateToVersion(serviceID, "")
+}
+
+// ApplyUpdateToVersion applies a specific version. If targetVersion is empty,
+// uses the auto-detected check.LatestVersion (unchanged dev.16 behavior).
+// Otherwise overrides check.LatestVersion with the user-selected version
+// — this allows the UI's version-selector dropdown to drive the update.
+func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 	tmpl, ok := e.registry.Get(serviceID)
 	if !ok {
 		return &UpdateError{Msg: "unknown service"}
@@ -406,7 +436,13 @@ func (e *Engine) ApplyUpdate(serviceID string) error {
 	}()
 
 	check, _ := e.store.GetLatestUpdateCheck(serviceID)
-	if check == nil || !check.HasUpdate {
+	if check == nil {
+		return &UpdateError{Msg: "no update check available"}
+	}
+	if targetVersion != "" {
+		check.LatestVersion = targetVersion
+		check.HasUpdate = true
+	} else if !check.HasUpdate {
 		return &UpdateError{Msg: "no update available"}
 	}
 

@@ -1,7 +1,10 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -35,16 +38,127 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional body: { "target_version": "31.0" }. Empty body / no field =
+	// use auto-detected latest (unchanged dev.16 behavior).
+	var body struct {
+		TargetVersion string `json:"target_version"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	// If target_version is set and looks like a downgrade, gate on allow_downgrade.
+	if body.TargetVersion != "" {
+		if err := s.checkDowngradeAllowed(id, body.TargetVersion); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	// Run update in background
+	target := body.TargetVersion
 	go func() {
-		if err := s.updateEngine.ApplyUpdate(id); err != nil {
+		if err := s.updateEngine.ApplyUpdateToVersion(id, target); err != nil {
 			_ = s.store.LogAudit("update_failed", id, err.Error(), r.RemoteAddr)
 		} else {
-			_ = s.store.LogAudit("update_applied", id, "", r.RemoteAddr)
+			_ = s.store.LogAudit("update_applied", id, "to "+target, r.RemoteAddr)
 		}
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "update_started"})
+}
+
+// handleGetUpdateVersions returns the list of pickable versions for a service.
+// Used by the Updates page's version selector dropdown.
+func (s *Server) handleGetUpdateVersions(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, ok := s.registry.Get(id); !ok {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	check, _ := s.store.GetLatestUpdateCheck(id)
+	available, err := s.updateEngine.ListAvailableVersions(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := map[string]interface{}{
+		"current":   "",
+		"latest":    "",
+		"available": available,
+	}
+	if check != nil {
+		resp["current"] = check.CurrentVersion
+		resp["latest"] = check.LatestVersion
+	}
+	if available == nil {
+		resp["available"] = []string{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// checkDowngradeAllowed rejects target-version requests that go backwards
+// in version unless the admin has explicitly enabled allow_downgrade in
+// settings.
+func (s *Server) checkDowngradeAllowed(serviceID, targetVersion string) error {
+	check, _ := s.store.GetLatestUpdateCheck(serviceID)
+	if check == nil {
+		return nil
+	}
+	if compareSemverLike(targetVersion, check.CurrentVersion) >= 0 {
+		return nil
+	}
+	if s.getSettingStr("allow_downgrade", "false") == "true" {
+		return nil
+	}
+	return fmt.Errorf("downgrade from %s to %s is not allowed; enable allow_downgrade in Settings", check.CurrentVersion, targetVersion)
+}
+
+// compareSemverLike parses two version strings into []int and compares. Same
+// algorithm as updates.ListDockerHubVersions, kept local to avoid an api->updates
+// import cycle for what's effectively a small utility.
+func compareSemverLike(a, b string) int {
+	pa := parseSemverLike(a)
+	pb := parseSemverLike(b)
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(pa) {
+			av = pa[i]
+		}
+		if i < len(pb) {
+			bv = pb[i]
+		}
+		if av != bv {
+			return av - bv
+		}
+	}
+	return 0
+}
+
+func parseSemverLike(s string) []int {
+	s = strings.TrimPrefix(s, "v")
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '.' && (c < '0' || c > '9') {
+			s = s[:i]
+			break
+		}
+	}
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func (s *Server) handleApplyAllUpdates(w http.ResponseWriter, r *http.Request) {
