@@ -720,6 +720,16 @@ type buildRequest struct {
 	Services  []string          `json:"services,omitempty"` // compose service names to build (empty = all)
 }
 
+// composeBuildMaxAttempts is the number of times handleComposeBuild will
+// re-run `docker compose build` if it fails. Tuned at 3 — with layer cache
+// enabled (no --no-cache), retries resume from the cached layer just before
+// the failed RUN step, so the cost of an extra attempt is low. Most transient
+// network flakes (download.docker.com, deb.debian.org, registry.npmjs.org)
+// are handled inside Dockerfiles via the retry shell function; this is the
+// outer safety net for flakes that outlast the in-Dockerfile budget.
+const composeBuildMaxAttempts = 3
+const composeBuildRetrySleep = 30 * time.Second
+
 func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	var req buildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -735,25 +745,47 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	dir := composeDir(req.ServiceID)
 	slog.Info("building service", "service", req.ServiceID, "dir", dir)
 
+	// 20 min total budget covers 3 build attempts + 2x 30s sleeps. With layer
+	// cache enabled (--no-cache removed in dev.19), retries are typically
+	// fast because successful layers stay cached.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
-	dockerArgs := []string{"docker", "compose", "-f", dir + "/docker-compose.yml", "build", "--no-cache"}
+	dockerArgs := []string{"docker", "compose", "-f", dir + "/docker-compose.yml", "build"}
 	for k, v := range req.BuildArgs {
 		dockerArgs = append(dockerArgs, "--build-arg", k+"="+v)
 	}
 	dockerArgs = append(dockerArgs, req.Services...)
-	// Run via nsenter so build-context paths resolve on the host filesystem
+	// Run via nsenter so build-context paths resolve on the host filesystem.
 	nsArgs := append([]string{"-t", "1", "-m", "--"}, dockerArgs...)
-	cmd := exec.CommandContext(ctx, "nsenter", nsArgs...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out.String()})
-		return
+
+	var lastErr error
+	var lastOutput string
+	for attempt := 1; attempt <= composeBuildMaxAttempts; attempt++ {
+		var out bytes.Buffer
+		cmd := exec.CommandContext(ctx, "nsenter", nsArgs...)
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		if err == nil {
+			writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+			return
+		}
+		lastErr = err
+		lastOutput = out.String()
+		slog.Warn("compose build failed", "service", req.ServiceID, "attempt", attempt, "max", composeBuildMaxAttempts, "error", err.Error())
+		if attempt < composeBuildMaxAttempts {
+			select {
+			case <-ctx.Done():
+			case <-time.After(composeBuildRetrySleep):
+			}
+		}
 	}
-	writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+	writeJSON(w, 500, map[string]string{
+		"error":    lastErr.Error(),
+		"output":   lastOutput,
+		"attempts": fmt.Sprint(composeBuildMaxAttempts),
+	})
 }
 
 // --- Helpers ---
@@ -817,10 +849,11 @@ func handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 // --- System Info ---
 
 type dockerStorageItem struct {
-	Type        string `json:"type"`
-	Count       int    `json:"count"`
-	TotalSize   string `json:"total_size"`
-	Reclaimable string `json:"reclaimable"`
+	Type           string `json:"type"`
+	Count          int    `json:"count"`
+	TotalSize      string `json:"total_size"`
+	Reclaimable    string `json:"reclaimable"`
+	ReclaimableRaw int64  `json:"reclaimable_raw"` // bytes — for client-side threshold gates
 }
 
 type systemInfoResponse struct {
@@ -987,6 +1020,14 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	// Service data: serve sizes from the background cache. Paths not yet
 	// walked return "calculating..." with SizeRaw: -1 so the frontend can
 	// render the row immediately and show a placeholder.
+	//
+	// We emit BOTH the top-level service path and any 2-level child dirs.
+	// Templates declare data dirs at either granularity:
+	//   - 1-level: ckpool (/srv/truffels/data/ckpool), truffels
+	//   - 2-level: bitcoind (.../bitcoin/blockchain), electrs, mempool, ckstats
+	// dev.18 only emitted child rows when child dirs existed, so 1-level
+	// templates got a "—" in the UI. Frontend filters by template path so
+	// extra rows are harmless.
 	var serviceData []serviceDataItem
 	if entries, err := os.ReadDir(dataRoot); err == nil {
 		for _, e := range entries {
@@ -994,10 +1035,6 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			servicePath := filepath.Join(dataRoot, e.Name())
-			children, err := os.ReadDir(servicePath)
-			if err != nil {
-				continue
-			}
 			addRow := func(full string) {
 				if sizeCache == nil {
 					serviceData = append(serviceData, serviceDataItem{
@@ -1020,8 +1057,9 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 					Path: full, Size: sizeStr, SizeRaw: size,
 				})
 			}
-			if len(children) == 0 {
-				addRow(servicePath)
+			addRow(servicePath)
+			children, err := os.ReadDir(servicePath)
+			if err != nil {
 				continue
 			}
 			for _, child := range children {
@@ -1169,11 +1207,18 @@ func fetchDockerStorage() []dockerStorageItem {
 		}
 		if err := json.Unmarshal([]byte(line), &raw); err == nil {
 			count, _ := strconv.Atoi(raw.TotalCount)
+			// Strip " (NN%)" trailer (docker appends this to Images/Containers/Volumes
+			// rows but not Build Cache). parseBytes needs a plain "47.33GB" string.
+			reclaimRaw := raw.Reclaimable
+			if i := strings.Index(reclaimRaw, " ("); i > 0 {
+				reclaimRaw = reclaimRaw[:i]
+			}
 			items = append(items, dockerStorageItem{
-				Type:        raw.Type,
-				Count:       count,
-				TotalSize:   formatSize(raw.Size),
-				Reclaimable: formatSize(raw.Reclaimable),
+				Type:           raw.Type,
+				Count:          count,
+				TotalSize:      formatSize(raw.Size),
+				Reclaimable:    formatSize(raw.Reclaimable),
+				ReclaimableRaw: int64(parseBytes(reclaimRaw)),
 			})
 		}
 	}

@@ -3,7 +3,7 @@ FROM golang:1.24-bookworm AS builder
 
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN go mod download || (sleep 2 && go mod download) || (sleep 5 && go mod download)
+RUN go mod download || (sleep 10 && go mod download) || (sleep 30 && go mod download) || (sleep 60 && go mod download)
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /truffels-api .
@@ -11,10 +11,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}
 FROM debian:bookworm-slim
 ARG VERSION=dev
 LABEL org.opencontainers.image.version="${VERSION}"
-# retry() wraps a command in 3 attempts with backoff so a transient flake on
-# deb.debian.org doesn't kill the whole build.
+# retry() wraps a command in 4 attempts with 10/30/60s backoff so a transient
+# flake on deb.debian.org doesn't kill the whole build. Total worst-case sleep
+# budget: 100s before giving up.
 RUN set -e; \
-    retry() { for i in 1 2 3; do "$@" && return 0; sleep $((i*2)); done; return 1; }; \
+    retry() { "$@" && return 0; for s in 10 30 60; do sleep $s; "$@" && return 0; done; return 1; }; \
     retry apt-get update && \
     retry apt-get install -y --no-install-recommends ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*

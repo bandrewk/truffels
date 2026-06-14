@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -728,6 +729,80 @@ func TestHandleSystemInfo_ReturnsJSON(t *testing.T) {
 	if resp.CPUCores < 0 {
 		t.Fatal("cpu_cores should not be negative")
 	}
+}
+
+// dev.19: when a service data dir has no child subdirectories (only files,
+// e.g. truffels/truffels.db) OR has only one child (e.g. ckpool/logs),
+// the top-level service path must still be emitted as a row so 1-level
+// template paths (ckpool, truffels) get a hit instead of "—" in the UI.
+func TestHandleSystemInfo_EmitsTopLevelServiceDataPath(t *testing.T) {
+	tmpRoot := t.TempDir()
+	// Set up data dirs that mirror real-world cases:
+	//   - "ckpool" with a single child dir "logs"
+	//   - "truffels" with only a file (no child dirs)
+	//   - "bitcoin" with a child dir "blockchain" (2-level template path)
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "ckpool", "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "truffels"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpRoot, "truffels", "truffels.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "bitcoin", "blockchain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	prevRoot := dataRoot
+	prevCache := sizeCache
+	dataRoot = tmpRoot
+	sizeCache = newDirSizeCache()
+	// Seed cache so paths return real sizes instead of "calculating..."
+	for _, p := range []string{
+		filepath.Join(tmpRoot, "ckpool"),
+		filepath.Join(tmpRoot, "ckpool", "logs"),
+		filepath.Join(tmpRoot, "truffels"),
+		filepath.Join(tmpRoot, "bitcoin"),
+		filepath.Join(tmpRoot, "bitcoin", "blockchain"),
+	} {
+		sizeCache.set(p, 1024)
+	}
+	defer func() {
+		dataRoot = prevRoot
+		sizeCache = prevCache
+	}()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/v1/system/info", nil)
+	handleSystemInfo(w, r)
+
+	var resp systemInfoResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	gotPaths := make(map[string]bool)
+	for _, sd := range resp.ServiceData {
+		gotPaths[sd.Path] = true
+	}
+	mustHave := []string{
+		filepath.Join(tmpRoot, "ckpool"),              // 1-level template path
+		filepath.Join(tmpRoot, "truffels"),            // 1-level + no child dirs
+		filepath.Join(tmpRoot, "bitcoin", "blockchain"), // 2-level template path
+	}
+	for _, p := range mustHave {
+		if !gotPaths[p] {
+			t.Errorf("expected service_data to include %q, got paths: %v", p, mapKeys(gotPaths))
+		}
+	}
+}
+
+func mapKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // --- handleSystemTuningGet ---
