@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,12 +20,14 @@ var dockerfileMapping = map[string]string{
 
 // serviceIDs that have compose templates.
 //
-// "truffels" is special: its compose contains the API itself, so a normal
-// `compose up` would kill the running reconciler. The reconcileService path
-// dispatches to ComposeUpDetached for that ID — the agent writes a shell
-// script to host /tmp and execs it via nsenter, so the restart survives the
-// API process exiting.
-var reconciledServices = []string{"bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy", "truffels"}
+// "truffels" is FIRST and dispatches to ComposeUpDetached when it needs a
+// restart — the agent writes a shell script to host /tmp and execs it via
+// nsenter, so the restart survives the API process exiting. By running it
+// first, the agent gets its new mounts (e.g. /srv/truffels/config:rw) before
+// any downstream service that depends on those mounts (e.g. proxy writing
+// the Caddyfile). On a detected truffels-compose drift we short-circuit the
+// loop entirely — the next API boot picks up the rest of the services.
+var reconciledServices = []string{"truffels", "bitcoind", "electrs", "ckpool", "mempool", "ckstats", "proxy"}
 
 // AlertStore is the subset of the store interface the reconciler needs to
 // surface reconciliation failures as alerts. Defined here (not imported) to
@@ -48,6 +51,12 @@ func NewReconciler(registry *service.Registry, compose *docker.ComposeClient, al
 }
 
 // Run reads each managed compose file, renders the expected content from templates,
+// errShortCircuit signals that the reconciler dispatched a detached restart
+// (truffels stack) — the API is about to be replaced, so the remaining
+// services should not be reconciled in this cycle. The next API boot picks
+// them up.
+var errShortCircuit = fmt.Errorf("reconciler: short-circuiting after detached restart")
+
 // and writes + restarts if different. Retries on agent connection failures.
 func (r *Reconciler) Run() error {
 	seen := map[string]bool{}
@@ -65,10 +74,17 @@ func (r *Reconciler) Run() error {
 		}
 		seen[tmpl.ComposeDir] = true
 
-		if err := r.reconcileService(serviceID); err != nil {
-			slog.Warn("compose reconciliation failed", "service", serviceID, "err", err)
-			errs = append(errs, fmt.Errorf("%s: %w", serviceID, err))
+		err := r.reconcileService(serviceID)
+		if err == nil {
+			continue
 		}
+		if errors.Is(err, errShortCircuit) {
+			slog.Info("reconciliation short-circuited; next boot will resume",
+				"after_service", serviceID)
+			return nil
+		}
+		slog.Warn("compose reconciliation failed", "service", serviceID, "err", err)
+		errs = append(errs, fmt.Errorf("%s: %w", serviceID, err))
 	}
 
 	if len(errs) > 0 {
@@ -149,6 +165,13 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 			// silently breaks the service while self-update reports success.
 			r.raiseAlert(serviceID, fmt.Sprintf("compose reconcile restart failed: %v", upErr))
 			return fmt.Errorf("restart after reconcile: %w", upErr)
+		}
+		if serviceID == "truffels" {
+			// The detached script is about to recreate the API. Any further
+			// reconciliation in this cycle would hit either the dying agent
+			// (connection refused) or the about-to-be-replaced agent (still
+			// using OLD mounts). The next API boot does a clean pass.
+			return errShortCircuit
 		}
 	}
 

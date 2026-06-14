@@ -242,6 +242,70 @@ func newMockAgentError(t *testing.T) *httptest.Server {
 	}))
 }
 
+// TestReconciler_TruffelsShortCircuitsLoop verifies that when truffels
+// reconciliation triggers a detached restart, no subsequent service is
+// reconciled in this cycle (the next API boot picks them up).
+func TestReconciler_TruffelsShortCircuitsLoop(t *testing.T) {
+	truffelsOld := `services:
+  agent:
+    image: truffels/agent:v0.3.1-dev.15
+    container_name: truffels-agent
+    volumes:
+      - /home/truffel/Project-Truffels:/repo:rw
+  api:
+    image: truffels/api:v0.3.1-dev.15
+    container_name: truffels-api
+  web:
+    image: truffels/web:v0.3.1-dev.15
+    container_name: truffels-web
+`
+	proxyOld := `services:
+  proxy:
+    image: caddy:2.11.2-alpine
+    container_name: truffels-proxy
+`
+	var proxyComposeReadCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/compose/read":
+			var req struct {
+				ServiceID string `json:"service_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.ServiceID == "proxy" {
+				proxyComposeReadCalled = true
+			}
+			content := truffelsOld
+			if req.ServiceID == "proxy" {
+				content = proxyOld
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "content": content,
+			})
+		case "/v1/compose/reconcile":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok", "changed": true,
+			})
+		case "/v1/compose/up-detached":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	reg := service.NewTestRegistry([]model.ServiceTemplate{
+		{ID: "truffels", ComposeDir: "/srv/truffels/compose/truffels"},
+		{ID: "proxy", ComposeDir: "/srv/truffels/compose/proxy"},
+	})
+	reconciler := NewReconciler(reg, docker.NewComposeClient(srv.URL), nil)
+	_ = reconciler.Run()
+
+	if proxyComposeReadCalled {
+		t.Error("proxy must NOT be reconciled when truffels triggered a short-circuit")
+	}
+}
+
 // TestReconciler_TruffelsTriggersDetachedRestart verifies that when the
 // truffels compose has drifted, the reconciler calls ComposeUpDetached
 // (so the API survives its own restart) rather than Up.
