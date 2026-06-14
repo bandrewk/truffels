@@ -541,3 +541,124 @@ func TestExtractCurrentVersion_GitHubRelease_NoTag(t *testing.T) {
 		t.Errorf("expected unknown, got %s", got)
 	}
 }
+
+// dev.17: btcpayserver/bitcoin republishes "29.2" after "31.0" was already
+// published, so last_updated puts 29.2 first. The check must pick 31.0
+// (highest version), not 29.2 (most-recently-updated).
+func TestCheckLatestVersion_DockerHub_PicksHighestVersionNotLastUpdated(t *testing.T) {
+	tags := []struct {
+		Name string `json:"name"`
+	}{
+		{"29.2"},  // last_updated first — but lower version
+		{"31.0"},  // higher version, less recent
+		{"30.2"},
+		{"30.1"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+	}))
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type:   model.SourceDockerHub,
+		Images: []string{"btcpayserver/bitcoin"},
+	}
+	got, err := CheckLatestVersion(src, "stable")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "31.0" {
+		t.Errorf("expected 31.0 (highest version), got %s", got)
+	}
+}
+
+func TestCheckLatestVersion_DockerHub_HandlesVPrefix(t *testing.T) {
+	tags := []struct {
+		Name string `json:"name"`
+	}{
+		{"v3.2.1"}, // last_updated first
+		{"v3.3.1"}, // higher
+		{"v3.3.0"},
+		{"v3.2.0"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+	}))
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type:   model.SourceDockerHub,
+		Images: []string{"mempool/backend"},
+	}
+	got, _ := CheckLatestVersion(src, "stable")
+	if got != "v3.3.1" {
+		t.Errorf("expected v3.3.1, got %s", got)
+	}
+}
+
+func TestCheckLatestVersion_DockerHub_HandlesTagFilterSuffix(t *testing.T) {
+	tags := []struct {
+		Name string `json:"name"`
+	}{
+		{"2.11.1-alpine"},
+		{"2.11.2-alpine"},
+		{"2.10.0-alpine"},
+		{"3.0.0"}, // doesn't match filter
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+	}))
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	src := &model.UpdateSource{
+		Type:      model.SourceDockerHub,
+		Images:    []string{"caddy"},
+		TagFilter: "2-alpine",
+	}
+	got, _ := CheckLatestVersion(src, "stable")
+	if got != "2.11.2-alpine" {
+		t.Errorf("expected 2.11.2-alpine, got %s", got)
+	}
+}
+
+func TestListDockerHubVersions_ReturnsSortedDescending(t *testing.T) {
+	tags := []struct {
+		Name string `json:"name"`
+	}{
+		{"29.2"},
+		{"31.0"},
+		{"30.2"},
+		{"30.1"},
+		{"30.2.1"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
+	}))
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := ListDockerHubVersions("btcpayserver/bitcoin", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"31.0", "30.2.1", "30.2", "30.1", "29.2"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("pos %d: got %s want %s", i, got[i], want[i])
+		}
+	}
+}

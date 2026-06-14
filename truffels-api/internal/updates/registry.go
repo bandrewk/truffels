@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,10 +44,28 @@ func CheckLatestVersion(src *model.UpdateSource, channel string) (string, error)
 	}
 }
 
-// checkDockerHub fetches the latest non-latest tag sorted by last_updated.
-// tagFilter narrows results to tags starting with a specific prefix (e.g. "16-alpine", "2.9-alpine").
+// checkDockerHub returns the highest-version stable tag available for the
+// image. Delegates to ListDockerHubVersions and returns the first result.
 func checkDockerHub(image string, tagFilter string) (string, error) {
-	// Official images (no slash) need "library/" prefix for the API
+	versions, err := ListDockerHubVersions(image, tagFilter)
+	if err != nil {
+		return "", err
+	}
+	if len(versions) == 0 {
+		return "", fmt.Errorf("no suitable tags found for %s", image)
+	}
+	return versions[0], nil
+}
+
+// ListDockerHubVersions returns ALL stable tags matching the optional
+// tagFilter, sorted by parsed version descending (highest first). Capped
+// at 20 entries so the UI selector stays compact.
+//
+// Replaces the dev.16 "first match by last_updated" behavior, which would
+// pick a recently-republished backport (e.g. btcpayserver/bitcoin:29.2
+// republished after 31.0 was the active release) over the actual highest
+// version.
+func ListDockerHubVersions(image string, tagFilter string) ([]string, error) {
 	apiImage := image
 	if !strings.Contains(image, "/") {
 		apiImage = "library/" + image
@@ -54,12 +74,12 @@ func checkDockerHub(image string, tagFilter string) (string, error) {
 
 	resp, err := httpClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("dockerhub request: %w", err)
+		return nil, fmt.Errorf("dockerhub request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("dockerhub: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("dockerhub: HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -69,30 +89,117 @@ func checkDockerHub(image string, tagFilter string) (string, error) {
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("dockerhub decode: %w", err)
+		return nil, fmt.Errorf("dockerhub decode: %w", err)
 	}
 
-	// Find the latest stable tag (skip "latest", dev builds, etc.)
-	// Results are already ordered by last_updated descending
+	type parsed struct {
+		name    string
+		version []int
+	}
+	var parsedTags []parsed
 	for _, t := range result.Results {
 		name := t.Name
 		if name == "latest" || name == "edge" || name == "nightly" {
 			continue
 		}
-		// Skip dev/rc/alpha/beta tags
 		lower := strings.ToLower(name)
 		if strings.Contains(lower, "-dev") || strings.Contains(lower, "-rc") ||
 			strings.Contains(lower, "alpha") || strings.Contains(lower, "beta") {
 			continue
 		}
-		// Apply tag filter: only accept tags matching the filter pattern
 		if tagFilter != "" && !matchTagFilter(name, tagFilter) {
 			continue
 		}
-		return name, nil
+		v, ok := extractVersion(name, tagFilter)
+		if !ok {
+			continue
+		}
+		parsedTags = append(parsedTags, parsed{name: name, version: v})
 	}
 
-	return "", fmt.Errorf("no suitable tags found for %s", image)
+	sort.Slice(parsedTags, func(i, j int) bool {
+		return compareVersions(parsedTags[i].version, parsedTags[j].version) > 0
+	})
+
+	out := make([]string, 0, len(parsedTags))
+	for _, p := range parsedTags {
+		out = append(out, p.name)
+	}
+	if len(out) > 20 {
+		out = out[:20]
+	}
+	return out, nil
+}
+
+// extractVersion pulls a []int version from a tag name. Strips a leading "v"
+// and, if a tagFilter is present, strips its non-version portion from either
+// end so e.g. "2.11.2-alpine" with filter "2-alpine" parses as [2,11,2].
+// Returns ok=false for tags that don't contain any numeric components.
+func extractVersion(name, tagFilter string) ([]int, bool) {
+	v := name
+	// Strip the tagFilter's suffix if it's not a pure prefix-only filter.
+	// install.sh uses filters like "2-alpine" (matches "2.X.Y-alpine") and
+	// "16-alpine" (matches "16.X-alpine"). The trailing "-alpine" is the
+	// non-version part we want to remove.
+	if tagFilter != "" {
+		// Find the first non-digit non-dot char in the filter — everything
+		// from there onward is the suffix to strip.
+		for i := 0; i < len(tagFilter); i++ {
+			c := tagFilter[i]
+			if c != '.' && (c < '0' || c > '9') {
+				suffix := tagFilter[i:]
+				v = strings.TrimSuffix(v, suffix)
+				break
+			}
+		}
+	}
+	v = strings.TrimPrefix(v, "v")
+	// Discard everything after the first non-version char (handles `2.11.2-alpha1` etc.)
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c != '.' && (c < '0' || c > '9') {
+			v = v[:i]
+			break
+		}
+	}
+	if v == "" {
+		return nil, false
+	}
+	parts := strings.Split(v, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// compareVersions returns >0 if a is higher, <0 if lower, 0 if equal.
+// Shorter slices are treated as having 0s in the missing positions.
+func compareVersions(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			return av - bv
+		}
+	}
+	return 0
 }
 
 // checkDockerDigest queries the Docker Hub registry v2 API for the remote manifest digest.
