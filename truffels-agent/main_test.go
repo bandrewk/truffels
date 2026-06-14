@@ -1993,6 +1993,33 @@ func TestHandleFileReconcile_AcceptsConfigRoot(t *testing.T) {
 	}
 }
 
+func TestDockerStorageCache_HitMiss(t *testing.T) {
+	c := newDockerStorageCache(100 * time.Millisecond)
+	if _, hit := c.get(); hit {
+		t.Fatal("expected miss before set")
+	}
+	c.set([]dockerStorageItem{{Type: "Images", Count: 5}})
+	if items, hit := c.get(); !hit || len(items) != 1 || items[0].Count != 5 {
+		t.Fatalf("expected hit after set; got hit=%v items=%v", hit, items)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if _, hit := c.get(); hit {
+		t.Error("expected miss after TTL expiry")
+	}
+}
+
+func TestDockerStorageCache_InvalidateClearsCache(t *testing.T) {
+	c := newDockerStorageCache(1 * time.Hour)
+	c.set([]dockerStorageItem{{Type: "Images", Count: 5}})
+	if _, hit := c.get(); !hit {
+		t.Fatal("expected hit after set")
+	}
+	c.invalidate()
+	if _, hit := c.get(); hit {
+		t.Error("expected miss after invalidate")
+	}
+}
+
 func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
 	c := newDirSizeCache()
 	c.set("/foo", 12345)
