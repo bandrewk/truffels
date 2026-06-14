@@ -3,6 +3,7 @@ package compose
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Parameter structs for each compose template.
@@ -42,6 +43,11 @@ type TruffelsParams struct {
 	// as the build context for all three truffels images. Extracted from the
 	// agent's "- <path>:/repo:rw" volume line on disk.
 	RepoSrc string
+	// Version is the bare version string (e.g. "v0.3.1-dev.16") derived from
+	// the agent image tag. Used in build.args.VERSION so docker compose build
+	// (called by applySelfUpdate) sets the ldflag and OCI label correctly even
+	// when --build-arg is dropped by buildkit on a no-args compose block.
+	Version string
 }
 
 // repoSrcRe extracts the host path from a line like
@@ -135,11 +141,17 @@ func ExtractParams(serviceID, content string) (any, error) {
 		if repoSrc == "" {
 			return nil, fmt.Errorf("missing /repo:rw mount for truffels (extract RepoSrc)")
 		}
+		// Derive bare version from the agent image tag: truffels/agent:vX → vX.
+		version := agent
+		if idx := strings.LastIndex(agent, ":"); idx >= 0 {
+			version = agent[idx+1:]
+		}
 		return TruffelsParams{
 			AgentTag: agent,
 			APITag:   api,
 			WebTag:   web,
 			RepoSrc:  repoSrc,
+			Version:  version,
 		}, nil
 
 	default:

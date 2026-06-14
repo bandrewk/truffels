@@ -209,6 +209,9 @@ func TestExtractParams_Truffels(t *testing.T) {
 	if tp.RepoSrc != "/home/truffel/Project-Truffels" {
 		t.Errorf("repo: %q", tp.RepoSrc)
 	}
+	if tp.Version != "v0.3.1-dev.14" {
+		t.Errorf("version: %q", tp.Version)
+	}
 }
 
 func TestExtractParams_Truffels_MissingRepoMount(t *testing.T) {

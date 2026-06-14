@@ -427,6 +427,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-agent
       dockerfile: {{.RepoSrc}}/truffels-agent/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.AgentTag}}
     container_name: truffels-agent
     pid: "host"
@@ -463,6 +465,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-api
       dockerfile: {{.RepoSrc}}/truffels-api/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.APITag}}
     container_name: truffels-api
     user: "1000:1000"
@@ -513,6 +517,8 @@ services:
     build:
       context: {{.RepoSrc}}/truffels-web
       dockerfile: {{.RepoSrc}}/truffels-web/Dockerfile
+      args:
+        VERSION: {{.Version}}
     image: {{.WebTag}}
     container_name: truffels-web
     restart: unless-stopped

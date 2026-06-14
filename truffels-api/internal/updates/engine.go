@@ -722,6 +722,11 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 			e.alertUpdateFailed(serviceID, "build failed ("+svc+"): "+err.Error())
 			return &UpdateError{Msg: "build failed (" + svc + "): " + err.Error()}
 		}
+		// The truffelsTemplate.build.args.VERSION block (added in dev.16)
+		// is the primary mechanism that gets VERSION into the binary's
+		// ldflag and the image's OCI version label. A post-build label
+		// verification would be defense-in-depth but requires a new
+		// agent-side endpoint to expose image labels — tracked for dev.17+.
 	}
 
 	// Step 4: Detached restart — agent calls docker compose up -d via nsenter
