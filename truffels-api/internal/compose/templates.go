@@ -401,7 +401,7 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:80/proxy-health"]
       interval: 30s
       timeout: 5s
       retries: 3

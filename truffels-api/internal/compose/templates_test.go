@@ -78,6 +78,10 @@ func TestRender_Proxy(t *testing.T) {
 	assertContains(t, got, "image: caddy:2.11.2-alpine")
 	assertContains(t, got, "container_name: truffels-proxy")
 	assertContains(t, got, "memory: 128M")
+	// dev.15: healthcheck must hit a path that doesn't depend on any upstream
+	// (the Caddyfile's catch-all reverse-proxies to mempool; using "/" caused
+	// Caddy to be marked unhealthy whenever mempool was stopped).
+	assertContains(t, got, "http://127.0.0.1:80/proxy-health")
 }
 
 func TestRender_UnknownService(t *testing.T) {
