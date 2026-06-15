@@ -77,7 +77,21 @@ type MonitoringContainer struct {
 // MonitoringResponse is the full payload for GET /monitoring.
 type MonitoringResponse struct {
 	Containers []MonitoringContainer `json:"containers"`
-	Events     []ServiceEvent       `json:"events"`
+	Events     []ServiceEvent        `json:"events"`
 	Metrics    MonitoringMetrics     `json:"metrics"`
-	Alerts     []Alert              `json:"alerts"`
+	Alerts     []Alert               `json:"alerts"`
+	DirSizes   []DirSizeSeries       `json:"dir_sizes,omitempty"`
+}
+
+// DirSizeSeries is the time series for one watched data dir, used by the
+// monitoring chart that warns about runaway caches (mempool rbfcache.json).
+type DirSizeSeries struct {
+	Label  string           `json:"label"`
+	Path   string           `json:"path"`
+	Points []DirSizePoint   `json:"points"`
+}
+
+type DirSizePoint struct {
+	Timestamp string `json:"timestamp"`
+	SizeBytes int64  `json:"size_bytes"`
 }

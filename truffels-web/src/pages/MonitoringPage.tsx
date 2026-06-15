@@ -9,7 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { api, MetricSnapshot, MonitoringResponse } from '@/lib/api'
+import { api, DirSizeSeries, MetricSnapshot, MonitoringResponse } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -25,7 +25,13 @@ const CHART_COLORS = {
   netRx: '#10b981',
   netTx: '#ef4444',
   diskIO: '#ec4899',
+  dirSize: '#eab308',
 } as const
+
+// Threshold lines on the dir-size chart, kept in sync with the alert engine
+// (alerts/engine.go: watchedDirs). Bytes.
+const DIR_SIZE_WARN_MB = 700
+const DIR_SIZE_CRIT_MB = 900
 
 function formatDataSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -122,6 +128,82 @@ function MetricChart({ data, dataKey, color, label, unit, current, avg, peak, do
         <span>Current: <span className="text-gray-200 font-mono">{current.toFixed(1)}{unit}</span></span>
         <span>Avg: <span className="text-gray-200 font-mono">{avg.toFixed(1)}{unit}</span></span>
         <span>Peak: <span className="text-gray-200 font-mono">{peak.toFixed(1)}{unit}</span></span>
+      </div>
+    </Card>
+  )
+}
+
+// DirSizeChart renders one watched-dir size series with warn/critical hint
+// lines drawn at 700/900 MB. Used to catch the mempool rbfcache.json runaway
+// (which caused the dev.20 OOM) before it crosses the heap ceiling again.
+function DirSizeChart({ series }: { series: DirSizeSeries }) {
+  const data = series.points.map(p => ({
+    timestamp: p.timestamp,
+    size_mb: p.size_bytes / (1024 * 1024),
+  }))
+  const currentMb = data.length > 0 ? data[data.length - 1].size_mb : 0
+  const peakMb = data.length > 0 ? Math.max(...data.map(d => d.size_mb)) : 0
+  let status: 'ok' | 'warn' | 'crit' = 'ok'
+  if (currentMb >= DIR_SIZE_CRIT_MB) status = 'crit'
+  else if (currentMb >= DIR_SIZE_WARN_MB) status = 'warn'
+
+  return (
+    <Card>
+      <CardTitle>{series.label} size</CardTitle>
+      <div className="h-40">
+        {data.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+            Collecting data...
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="timestamp"
+                tickFormatter={formatTime}
+                tick={{ fill: '#6b7280', fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: '#6b7280', fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v) => `${Math.round(v)}M`}
+              />
+              <Tooltip
+                contentStyle={{ background: '#1e1e2e', border: '1px solid #2e2e3e', borderRadius: 8, fontSize: 12 }}
+                labelFormatter={formatTimestamp}
+                formatter={(value: number) => [`${value.toFixed(0)} MB`, series.label]}
+              />
+              <Area
+                type="monotone"
+                dataKey="size_mb"
+                stroke={CHART_COLORS.dirSize}
+                fill={CHART_COLORS.dirSize}
+                fillOpacity={0.15}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap items-center">
+        <span>
+          Current: <span className={`font-mono ${
+            status === 'crit' ? 'text-red-400' : status === 'warn' ? 'text-yellow-400' : 'text-gray-200'
+          }`}>{currentMb.toFixed(0)} MB</span>
+        </span>
+        <span>Peak: <span className="text-gray-200 font-mono">{peakMb.toFixed(0)} MB</span></span>
+        <span className="text-gray-500">warn ≥ {DIR_SIZE_WARN_MB} MB · critical ≥ {DIR_SIZE_CRIT_MB} MB</span>
+        {status !== 'ok' && (
+          <span className={status === 'crit' ? 'text-red-400' : 'text-yellow-400'}>
+            Clear via Settings → Data Dirs → {series.label}
+          </span>
+        )}
       </div>
     </Card>
   )
@@ -419,6 +501,15 @@ export default function MonitoringPage() {
           domain={[0, 100]}
         />
       </div>
+
+      {/* Watched data-dir sizes (mempool cache today; extendable) */}
+      {data.dir_sizes && data.dir_sizes.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {data.dir_sizes.map((s) => (
+            <DirSizeChart key={s.path} series={s} />
+          ))}
+        </div>
+      )}
 
       {/* Section B: Container Status Table */}
       <Card>

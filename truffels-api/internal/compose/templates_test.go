@@ -48,10 +48,12 @@ func TestRender_Mempool(t *testing.T) {
 	assertContains(t, got, "image: mempool/frontend:v3.3.1")
 	assertContains(t, got, "image: mariadb:lts@sha256:abc123")
 	assertContains(t, got, "container_name: truffels-mempool-backend")
-	// Backend OOM-fix shape: bind-mounted cache, bumped heap, healthcheck.
+	// Backend OOM-fix shape: bind-mounted cache, bumped heap + cgroup
+	// (raised in v0.3.1-dev.21 after rbfcache.json runaway hit the V8 heap
+	// ceiling at 1792 MB on mainnet), healthcheck.
 	assertContains(t, got, "/srv/truffels/data/mempool/cache:/backend/cache")
-	assertContains(t, got, "--max-old-space-size=1792")
-	assertContains(t, got, "memory: 2048M")
+	assertContains(t, got, "--max-old-space-size=2560")
+	assertContains(t, got, "memory: 3072M")
 	assertContains(t, got, "start_period: 300s")
 	// Frontend healthcheck.
 	assertContains(t, got, "http://127.0.0.1:8080/")

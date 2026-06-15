@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"strings"
 	"time"
 
@@ -203,6 +204,66 @@ func (s *Store) GetContainerSnapshotsByNames(since time.Time, containers []strin
 func (s *Store) PruneContainerSnapshots(olderThan time.Time) error {
 	ts := olderThan.UTC().Format("2006-01-02 15:04:05")
 	_, err := s.db.Exec(`DELETE FROM container_snapshots WHERE timestamp < ?`, ts)
+	return err
+}
+
+// InsertDirSizeSnapshot records the current size of a watched data dir.
+func (s *Store) InsertDirSizeSnapshot(path string, sizeBytes int64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO dir_size_snapshots (path, size_bytes) VALUES (?, ?)`,
+		path, sizeBytes)
+	return err
+}
+
+// LatestDirSize returns the most recent recorded size (bytes) for path,
+// or (0, false, nil) if no snapshot exists yet.
+func (s *Store) LatestDirSize(path string) (int64, bool, error) {
+	var size int64
+	err := s.db.QueryRow(
+		`SELECT size_bytes FROM dir_size_snapshots WHERE path = ? ORDER BY id DESC LIMIT 1`,
+		path).Scan(&size)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return size, true, nil
+}
+
+// DirSizeSnapshot is one row from dir_size_snapshots, for charting.
+type DirSizeSnapshot struct {
+	Timestamp string `json:"timestamp"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// DirSizeSnapshotsSince returns all rows for path with timestamp >= since,
+// oldest-first (for chart rendering).
+func (s *Store) DirSizeSnapshotsSince(path string, since time.Time) ([]DirSizeSnapshot, error) {
+	rows, err := s.db.Query(
+		`SELECT timestamp, path, size_bytes FROM dir_size_snapshots
+		 WHERE path = ? AND timestamp >= ? ORDER BY id ASC`,
+		path, since.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []DirSizeSnapshot
+	for rows.Next() {
+		var snap DirSizeSnapshot
+		if err := rows.Scan(&snap.Timestamp, &snap.Path, &snap.SizeBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, snap)
+	}
+	return out, rows.Err()
+}
+
+// PruneDirSizeSnapshots drops rows older than the given time.
+func (s *Store) PruneDirSizeSnapshots(olderThan time.Time) error {
+	ts := olderThan.UTC().Format("2006-01-02 15:04:05")
+	_, err := s.db.Exec(`DELETE FROM dir_size_snapshots WHERE timestamp < ?`, ts)
 	return err
 }
 

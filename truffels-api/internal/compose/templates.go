@@ -174,7 +174,7 @@ services:
     env_file:
       - /srv/truffels/secrets/mempool-backend.env
     environment:
-      NODE_OPTIONS: "--max-old-space-size=1792"
+      NODE_OPTIONS: "--max-old-space-size=2560"
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
       ELECTRUM_PORT: "50001"
@@ -194,7 +194,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2048M
+          memory: 3072M
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 || exit 1"]
       interval: 30s
