@@ -96,6 +96,7 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
+	mux.HandleFunc("GET /v1/host/dir-size", handleHostDirSize)
 	mux.HandleFunc("POST /v1/system/shutdown", handleSystemShutdown)
 	mux.HandleFunc("POST /v1/system/restart", handleSystemRestart)
 	mux.HandleFunc("POST /v1/system/journal", handleSystemJournal)
@@ -182,6 +183,48 @@ type inspectResult struct {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok", "version": version})
+}
+
+// handleHostDirSize returns the cached size of a single data-dir path.
+//
+// Reads from the same `sizeCache` populated by walkDataDirsForever (5-min
+// cadence), so callers don't trigger a fresh walk. Path must be under
+// dataRoot — anything else is rejected to keep the API a narrow shim over the
+// existing cache, not a general "size any host path you want" oracle.
+//
+// Added in v0.3.1-dev.21 for the mempool cache-dir warn metric (700M / 900M
+// thresholds) — see FUTURE_WORK.md and the dev.20 rbfcache OOM post-mortem.
+func handleHostDirSize(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing path"})
+		return
+	}
+	clean := filepath.Clean(path)
+	rootClean := filepath.Clean(dataRoot)
+	if clean != rootClean && !strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
+		writeJSON(w, 400, map[string]string{"error": "path not under data root"})
+		return
+	}
+	if sizeCache == nil {
+		writeJSON(w, 200, map[string]interface{}{
+			"path": clean, "size_bytes": int64(-1), "walked_at": "", "fresh": false,
+		})
+		return
+	}
+	size, walked, hit := sizeCache.get(clean)
+	if !hit {
+		writeJSON(w, 200, map[string]interface{}{
+			"path": clean, "size_bytes": int64(-1), "walked_at": "", "fresh": false,
+		})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"path":       clean,
+		"size_bytes": size,
+		"walked_at":  walked.UTC().Format(time.RFC3339),
+		"fresh":      time.Since(walked) < time.Hour,
+	})
 }
 
 func handleComposeUp(w http.ResponseWriter, r *http.Request) {
@@ -2033,6 +2076,14 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 	if err := os.Chmod(cleaned, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
 		return
+	}
+
+	// Update the dir-size cache so the System Info "Service Data" panel
+	// reflects the clear immediately, instead of showing the pre-clear size
+	// until the next 5-min walk. The panel header says "Clearing a directory
+	// updates immediately" — this makes that contract true.
+	if sizeCache != nil {
+		sizeCache.set(cleaned, 0)
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"status": "ok"})

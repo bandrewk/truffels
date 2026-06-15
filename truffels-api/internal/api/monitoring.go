@@ -85,6 +85,9 @@ func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request) {
 		alerts = []model.Alert{}
 	}
 
+	// Watched data-dir size series (currently just mempool cache).
+	dirSeries := s.collectDirSizeSeries(since)
+
 	writeJSON(w, http.StatusOK, model.MonitoringResponse{
 		Containers: containers,
 		Events:     events,
@@ -93,8 +96,44 @@ func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request) {
 			History: snapshots,
 			Summary: summary,
 		},
-		Alerts: alerts,
+		Alerts:   alerts,
+		DirSizes: dirSeries,
 	})
+}
+
+// dirSizeWatch mirrors alerts/engine.go watchedDirs so the API surfaces the
+// same paths the engine alerts on. Kept tiny + literal for now; if the list
+// grows or the engine and API need to share, hoist into a single registry.
+type dirSizeWatch struct {
+	label string
+	path  string
+}
+
+var dirSizeWatches = []dirSizeWatch{
+	{label: "mempool cache", path: "/srv/truffels/data/mempool/cache"},
+}
+
+func (s *Server) collectDirSizeSeries(since time.Time) []model.DirSizeSeries {
+	out := make([]model.DirSizeSeries, 0, len(dirSizeWatches))
+	for _, w := range dirSizeWatches {
+		rows, err := s.store.DirSizeSnapshotsSince(w.path, since)
+		if err != nil {
+			continue
+		}
+		points := make([]model.DirSizePoint, 0, len(rows))
+		for _, r := range rows {
+			points = append(points, model.DirSizePoint{
+				Timestamp: r.Timestamp,
+				SizeBytes: r.SizeBytes,
+			})
+		}
+		out = append(out, model.DirSizeSeries{
+			Label:  w.label,
+			Path:   w.path,
+			Points: points,
+		})
+	}
+	return out
 }
 
 func (s *Server) handleServiceMonitoring(w http.ResponseWriter, r *http.Request) {

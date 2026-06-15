@@ -148,6 +148,11 @@ func (e *Engine) evaluate() {
 				slog.Error("insert container snapshots", "err", err)
 			}
 		}
+
+		// Watched data-dir sizes: poll once per 60s tick, persist, evaluate.
+		// Currently mempool cache only — the path that has historically grown
+		// unbounded (rbfcache.json) and OOM'd the backend. Easy to extend.
+		e.evalWatchedDirs()
 	}
 
 	// Service health alerts + monitoring state change detection
@@ -173,6 +178,71 @@ func (e *Engine) evaluate() {
 		}
 		if err := e.store.PruneContainerSnapshots(time.Now().Add(-168 * time.Hour)); err != nil {
 			slog.Error("prune container snapshots", "err", err)
+		}
+		if err := e.store.PruneDirSizeSnapshots(time.Now().Add(-168 * time.Hour)); err != nil {
+			slog.Error("prune dir size snapshots", "err", err)
+		}
+	}
+}
+
+// watchedDir is a data-dir we track size for, with warn/critical thresholds
+// in bytes. Currently the only entry is mempool's cache — added after the
+// dev.20 rbfcache.json runaway that OOM'd the backend.
+type watchedDir struct {
+	serviceID    string
+	path         string
+	warnBytes    int64
+	criticalByte int64
+	humanLabel   string
+}
+
+var watchedDirs = []watchedDir{
+	{
+		serviceID:    "mempool",
+		path:         "/srv/truffels/data/mempool/cache",
+		warnBytes:    700 * 1024 * 1024,
+		criticalByte: 900 * 1024 * 1024,
+		humanLabel:   "mempool cache",
+	},
+}
+
+// evalWatchedDirs polls each watched data-dir size via the agent, persists a
+// snapshot, and upserts/resolves alerts at the configured thresholds.
+func (e *Engine) evalWatchedDirs() {
+	if e.compose == nil {
+		return
+	}
+	for _, w := range watchedDirs {
+		size, _, err := e.compose.HostDirSize(w.path)
+		if err != nil {
+			slog.Debug("dir-size fetch failed", "path", w.path, "err", err)
+			continue
+		}
+		if size < 0 {
+			// Agent hasn't walked this path yet — no data to persist or alert.
+			continue
+		}
+		if err := e.store.InsertDirSizeSnapshot(w.path, size); err != nil {
+			slog.Error("insert dir size snapshot", "path", w.path, "err", err)
+		}
+
+		critType := "dir_size_critical"
+		warnType := "dir_size_warning"
+		mb := size / (1024 * 1024)
+		switch {
+		case size >= w.criticalByte:
+			e.upsert(critType, w.serviceID, model.SeverityCritical,
+				"%s reached %d MB — will OOM the backend on next restart. Stop the service and clear the dir via Settings → Data Dirs.",
+				w.humanLabel, mb)
+			e.resolve(warnType, w.serviceID)
+		case size >= w.warnBytes:
+			e.upsert(warnType, w.serviceID, model.SeverityWarning,
+				"%s reached %d MB — approaching the size that caused the dev.20 OOM. Consider clearing via Settings → Data Dirs.",
+				w.humanLabel, mb)
+			e.resolve(critType, w.serviceID)
+		default:
+			e.resolve(warnType, w.serviceID)
+			e.resolve(critType, w.serviceID)
 		}
 	}
 }
@@ -336,7 +406,10 @@ func (e *Engine) checkDependencyHealth() {
 				if mode == "flag_and_stop" && e.compose != nil && !e.autoStopped[tmpl.ID+"_dep"] {
 					slog.Warn("auto-stopping dependent service",
 						"service", tmpl.ID, "upstream", depID)
-					if err := e.compose.Down(tmpl.ID); err != nil {
+					// Stop, not Down: containers should remain in Exited state so
+					// the user can recover with one click in the UI. Down removes
+					// them entirely and the only way back is `compose up`.
+					if err := e.compose.Stop(tmpl.ID); err != nil {
 						slog.Error("auto-stop dependent failed", "service", tmpl.ID, "err", err)
 					} else {
 						e.autoStopped[tmpl.ID+"_dep"] = true
@@ -491,7 +564,11 @@ func (e *Engine) evalRestartLoop(serviceID, containerName string, threshold, win
 			slog.Warn("auto-stopping service due to restart loop",
 				"service", serviceID, "restarts", len(recent), "max", maxRetries)
 			if e.compose != nil {
-				if err := e.compose.Down(serviceID); err != nil {
+				// Stop, not Down: containers remain in Exited state so the user
+				// can recover from the UI Start button. Down vaporises the stack
+				// and the next compose up is the only way back (see dev.20 incident
+				// where mempool auto-stop wiped the containers entirely).
+				if err := e.compose.Stop(serviceID); err != nil {
 					slog.Error("auto-stop failed", "service", serviceID, "err", err)
 				} else {
 					e.autoStopped[serviceID] = true

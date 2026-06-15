@@ -332,6 +332,17 @@ export interface ServiceMonitoringResponse {
   current: ContainerCurrentStats[]
 }
 
+export interface DirSizePoint {
+  timestamp: string
+  size_bytes: number
+}
+
+export interface DirSizeSeries {
+  label: string
+  path: string
+  points: DirSizePoint[]
+}
+
 export interface MonitoringResponse {
   containers: MonitoringContainer[]
   events: ServiceEvent[]
@@ -341,6 +352,7 @@ export interface MonitoringResponse {
     summary: MetricsSummary
   }
   alerts: Alert[]
+  dir_sizes?: DirSizeSeries[]
 }
 
 export interface BootEntry {

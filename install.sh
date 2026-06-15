@@ -536,7 +536,7 @@ services:
     env_file:
       - /srv/truffels/secrets/mempool-backend.env
     environment:
-      NODE_OPTIONS: "--max-old-space-size=1792"
+      NODE_OPTIONS: "--max-old-space-size=2560"
       MEMPOOL_BACKEND: "electrum"
       ELECTRUM_HOST: "truffels-electrs"
       ELECTRUM_PORT: "50001"
@@ -556,7 +556,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2048M
+          memory: 3072M
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -897,7 +897,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.20}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.21}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"

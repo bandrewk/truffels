@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -238,6 +239,24 @@ func (c *ComposeClient) SystemInfoGet() (*SystemInfo, error) {
 		return nil, fmt.Errorf("agent system info decode: %w", err)
 	}
 	return &info, nil
+}
+
+// HostDirSize asks the agent for the cached size of a data-dir path.
+// Returns (-1, false, nil) if the agent has not yet walked the path.
+func (c *ComposeClient) HostDirSize(path string) (int64, bool, error) {
+	resp, err := c.httpClient.Get(c.agentURL + "/v1/host/dir-size?path=" + url.QueryEscape(path))
+	if err != nil {
+		return 0, false, fmt.Errorf("agent dir-size: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		SizeBytes int64 `json:"size_bytes"`
+		Fresh     bool  `json:"fresh"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, false, fmt.Errorf("agent dir-size decode: %w", err)
+	}
+	return out.SizeBytes, out.Fresh, nil
 }
 
 // SystemJournal fetches journalctl output via the agent.
