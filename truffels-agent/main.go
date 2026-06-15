@@ -2078,6 +2078,14 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update the dir-size cache so the System Info "Service Data" panel
+	// reflects the clear immediately, instead of showing the pre-clear size
+	// until the next 5-min walk. The panel header says "Clearing a directory
+	// updates immediately" — this makes that contract true.
+	if sizeCache != nil {
+		sizeCache.set(cleaned, 0)
+	}
+
 	writeJSON(w, 200, map[string]interface{}{"status": "ok"})
 }
 
