@@ -62,15 +62,6 @@ func TestExtractCurrentVersion_UnknownType(t *testing.T) {
 
 // ---------- CheckLatestVersion ----------
 
-// helper: save and restore the package-level httpClient
-func withMockClient(srv *httptest.Server) func() {
-	original := httpClient
-	httpClient = srv.Client()
-	return func() {
-		httpClient = original
-	}
-}
-
 // newTagListServer serves the anonymous token endpoint plus a single-page
 // registry /tags/list carrying the given tag names. Paired with
 // newRedirectClient, which points every outbound request at the test server.
