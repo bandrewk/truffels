@@ -62,49 +62,33 @@ func TestExtractCurrentVersion_UnknownType(t *testing.T) {
 
 // ---------- CheckLatestVersion ----------
 
-// helper: save and restore the package-level httpClient
-func withMockClient(srv *httptest.Server) func() {
-	original := httpClient
-	httpClient = srv.Client()
-	return func() {
-		httpClient = original
-	}
+// newTagListServer serves the anonymous token endpoint plus a single-page
+// registry /tags/list carrying the given tag names. Paired with
+// newRedirectClient, which points every outbound request at the test server.
+func newTagListServer(tags ...string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"name": "test/image",
+			"tags": tags,
+		})
+	}))
 }
 
 func TestCheckLatestVersion_DockerHub_PicksFirstStableTag(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"latest"},
-		{"v2.0.0"},
-		{"v1.9.0"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer("latest", "v2.0.0", "v1.9.0")
 	defer srv.Close()
-	defer withMockClient(srv)()
 
-	// Override the URL by using the test server address as the image name.
-	// The function builds: https://hub.docker.com/v2/repositories/<image>/tags/...
-	// We need to intercept at the HTTP client level. The mock client routes all
-	// requests to srv regardless of host, so any image name works.
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
 	src := &model.UpdateSource{
 		Type:   model.SourceDockerHub,
 		Images: []string{"test/image"},
-	}
-
-	// The httpClient from httptest only talks to the test server, but the URL
-	// the code builds points to hub.docker.com. We need a transport that
-	// redirects all requests to the test server.
-	src.Images = []string{"test/image"}
-	httpClient = &http.Client{
-		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			// Rewrite the URL to point at our test server
-			req.URL.Scheme = "http"
-			req.URL.Host = strings.TrimPrefix(srv.URL, "http://")
-			return http.DefaultTransport.RoundTrip(req)
-		}),
 	}
 
 	got, err := CheckLatestVersion(src, "stable")
@@ -135,21 +119,11 @@ func newRedirectClient(srv *httptest.Server) *http.Client {
 }
 
 func TestCheckLatestVersion_DockerHub_FiltersUnstableTags(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"latest"},
-		{"edge"},
-		{"nightly"},
-		{"v3.0.0-dev"},
-		{"v2.5.0-rc1"},
-		{"v2.0.0alpha1"},
-		{"v1.8.0beta2"},
-		{"v1.5.0"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer(
+		"latest", "edge", "nightly",
+		"v3.0.0-dev", "v2.5.0-rc1", "v2.0.0alpha1", "v1.8.0beta2",
+		"v1.5.0",
+	)
 	defer srv.Close()
 
 	original := httpClient
@@ -170,15 +144,7 @@ func TestCheckLatestVersion_DockerHub_FiltersUnstableTags(t *testing.T) {
 }
 
 func TestCheckLatestVersion_DockerHub_NoSuitableTags(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"latest"},
-		{"edge"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer("latest", "edge")
 	defer srv.Close()
 
 	original := httpClient
@@ -543,20 +509,11 @@ func TestExtractCurrentVersion_GitHubRelease_NoTag(t *testing.T) {
 }
 
 // dev.17: btcpayserver/bitcoin republishes "29.2" after "31.0" was already
-// published, so last_updated puts 29.2 first. The check must pick 31.0
-// (highest version), not 29.2 (most-recently-updated).
+// published, so any listing order that favours recency puts 29.2 first. The
+// check must pick 31.0 (highest version), not 29.2.
 func TestCheckLatestVersion_DockerHub_PicksHighestVersionNotLastUpdated(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"29.2"},  // last_updated first — but lower version
-		{"31.0"},  // higher version, less recent
-		{"30.2"},
-		{"30.1"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	// 29.2 deliberately listed before the higher versions.
+	srv := newTagListServer("29.2", "31.0", "30.2", "30.1")
 	defer srv.Close()
 	original := httpClient
 	httpClient = newRedirectClient(srv)
@@ -576,17 +533,7 @@ func TestCheckLatestVersion_DockerHub_PicksHighestVersionNotLastUpdated(t *testi
 }
 
 func TestCheckLatestVersion_DockerHub_HandlesVPrefix(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"v3.2.1"}, // last_updated first
-		{"v3.3.1"}, // higher
-		{"v3.3.0"},
-		{"v3.2.0"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer("v3.2.1", "v3.3.1", "v3.3.0", "v3.2.0")
 	defer srv.Close()
 	original := httpClient
 	httpClient = newRedirectClient(srv)
@@ -603,17 +550,10 @@ func TestCheckLatestVersion_DockerHub_HandlesVPrefix(t *testing.T) {
 }
 
 func TestCheckLatestVersion_DockerHub_HandlesTagFilterSuffix(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"2.11.1-alpine"},
-		{"2.11.2-alpine"},
-		{"2.10.0-alpine"},
-		{"3.0.0"}, // doesn't match filter
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer(
+		"2.11.1-alpine", "2.11.2-alpine", "2.10.0-alpine",
+		"3.0.0", // doesn't match filter
+	)
 	defer srv.Close()
 	original := httpClient
 	httpClient = newRedirectClient(srv)
@@ -631,18 +571,7 @@ func TestCheckLatestVersion_DockerHub_HandlesTagFilterSuffix(t *testing.T) {
 }
 
 func TestListDockerHubVersions_ReturnsSortedDescending(t *testing.T) {
-	tags := []struct {
-		Name string `json:"name"`
-	}{
-		{"29.2"},
-		{"31.0"},
-		{"30.2"},
-		{"30.1"},
-		{"30.2.1"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": tags})
-	}))
+	srv := newTagListServer("29.2", "31.0", "30.2", "30.1", "30.2.1")
 	defer srv.Close()
 	original := httpClient
 	httpClient = newRedirectClient(srv)
@@ -659,6 +588,269 @@ func TestListDockerHubVersions_ReturnsSortedDescending(t *testing.T) {
 	for i := range got {
 		if got[i] != want[i] {
 			t.Errorf("pos %d: got %s want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// ---------- Docker Registry v2 tag listing ----------
+//
+// hub.docker.com sits behind Cloudflare bot management, which answers Go's
+// HTTP client with a 403 challenge page regardless of headers. Tag discovery
+// therefore goes through registry-1.docker.io, which is not bot-managed.
+
+// registryPage is one response of a paginated /tags/list endpoint.
+type registryPage struct {
+	tags []string
+	// next is the value served in the Link rel="next" header. Empty means
+	// this is the last page.
+	next string
+}
+
+// newRegistryServer serves the anonymous auth token endpoint and a paginated
+// /v2/<repo>/tags/list. Pages are keyed by the "last" query parameter; the
+// first page is keyed by "". Requests are recorded in *seen.
+func newRegistryServer(t *testing.T, pages map[string]registryPage, seen *[]*http.Request) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*seen = append(*seen, r.Clone(r.Context()))
+
+		if r.URL.Path == "/token" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/tags/list") {
+			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		page, ok := pages[r.URL.Query().Get("last")]
+		if !ok {
+			http.Error(w, "no page for last="+r.URL.Query().Get("last"), http.StatusNotFound)
+			return
+		}
+		if page.next != "" {
+			w.Header().Set("Link", "<"+r.URL.Path+"?n=1000&last="+page.next+`>; rel="next"`)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"name": "test/image",
+			"tags": page.tags,
+		})
+	}))
+}
+
+func TestListDockerHubVersions_QueriesRegistryTagsList(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"": {tags: []string{"latest", "v1.9.0", "v2.0.0"}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := ListDockerHubVersions("test/image", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 || got[0] != "v2.0.0" || got[1] != "v1.9.0" {
+		t.Errorf("expected [v2.0.0 v1.9.0], got %v", got)
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 requests (token, tags), got %d", len(seen))
+	}
+	if seen[0].URL.Path != "/token" {
+		t.Errorf("first request should be the token endpoint, got %s", seen[0].URL.Path)
+	}
+	if scope := seen[0].URL.Query().Get("scope"); scope != "repository:test/image:pull" {
+		t.Errorf("unexpected token scope: %s", scope)
+	}
+	if seen[1].URL.Path != "/v2/test/image/tags/list" {
+		t.Errorf("unexpected tags path: %s", seen[1].URL.Path)
+	}
+	if auth := seen[1].Header.Get("Authorization"); auth != "Bearer test-token" {
+		t.Errorf("tags request missing bearer token, got %q", auth)
+	}
+}
+
+func TestListDockerHubVersions_PrefixesOfficialImagesWithLibrary(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"": {tags: []string{"2.11.4-alpine"}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	if _, err := ListDockerHubVersions("caddy", "2-alpine"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if scope := seen[0].URL.Query().Get("scope"); scope != "repository:library/caddy:pull" {
+		t.Errorf("unofficial scope for official image: %s", scope)
+	}
+	if seen[1].URL.Path != "/v2/library/caddy/tags/list" {
+		t.Errorf("unexpected tags path: %s", seen[1].URL.Path)
+	}
+}
+
+func TestListDockerHubVersions_FollowsPaginationLink(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"":       {tags: []string{"v1.0.0", "v1.1.0"}, next: "v1.1.0"},
+		"v1.1.0": {tags: []string{"v1.2.0", "v3.0.0"}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := ListDockerHubVersions("test/image", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"v3.0.0", "v1.2.0", "v1.1.0", "v1.0.0"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pos %d: got %s want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestListDockerHubVersions_TokenErrorSurfaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	_, err := ListDockerHubVersions("test/image", "")
+	if err == nil {
+		t.Fatal("expected error when the token endpoint fails")
+	}
+	if !strings.Contains(err.Error(), "docker registry auth: HTTP 403") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestListDockerHubVersions_TagsListErrorSurfaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
+			return
+		}
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	_, err := ListDockerHubVersions("test/image", "")
+	if err == nil {
+		t.Fatal("expected error when tags/list fails")
+	}
+	if !strings.Contains(err.Error(), "docker registry tags: HTTP 429") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// The registry returns the complete tag list, including the per-architecture
+// variants Docker publishes alongside each release. Those parse to the same
+// version as the plain tag (31.0-arm64v8 -> [31 0]), so without filtering they
+// tie with it and an unstable sort can hand back an arch-pinned tag as the
+// update target.
+func TestListDockerHubVersions_SkipsArchVariantTags(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"": {tags: []string{
+			"31.0", "31.0-amd64", "31.0-arm32v7", "31.0-arm64v8",
+			"30.2", "30.2-amd64", "30.2-arm64v8",
+		}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := ListDockerHubVersions("btcpayserver/bitcoin", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"31.0", "30.2"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pos %d: got %s want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// An arch variant explicitly asked for via tagFilter must still be listed.
+func TestListDockerHubVersions_KeepsArchVariantWhenFiltered(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"": {tags: []string{"31.0", "31.0-arm64v8", "30.2-arm64v8"}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	got, err := ListDockerHubVersions("btcpayserver/bitcoin", "-arm64v8")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"31.0-arm64v8", "30.2-arm64v8"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pos %d: got %s want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// Tags that parse to the same version must order deterministically, with the
+// plain tag ahead of any suffixed sibling — CheckLatestVersion returns [0].
+func TestListDockerHubVersions_PrefersPlainTagOnVersionTie(t *testing.T) {
+	var seen []*http.Request
+	srv := newRegistryServer(t, map[string]registryPage{
+		"": {tags: []string{"31.0-zesty", "31.0", "31.0-abc"}},
+	}, &seen)
+	defer srv.Close()
+
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	for i := 0; i < 5; i++ {
+		got, err := ListDockerHubVersions("test/image", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"31.0", "31.0-abc", "31.0-zesty"}
+		if len(got) != len(want) {
+			t.Fatalf("run %d: expected %v, got %v", i, want, got)
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("run %d pos %d: got %s want %s", i, j, got[j], want[j])
+			}
 		}
 	}
 }

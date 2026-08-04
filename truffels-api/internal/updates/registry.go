@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,39 +58,45 @@ func checkDockerHub(image string, tagFilter string) (string, error) {
 	return versions[0], nil
 }
 
+// registryTagPageSize is the page size requested from /tags/list. The registry
+// caps this server-side, so pagination still has to be followed.
+const registryTagPageSize = 1000
+
+// registryMaxPages bounds pagination so a misbehaving registry cannot spin us
+// forever. 20 pages covers every image in the service registry with room to spare.
+const registryMaxPages = 20
+
 // ListDockerHubVersions returns ALL stable tags matching the optional
 // tagFilter, sorted by parsed version descending (highest first). Capped
 // at 20 entries so the UI selector stays compact.
 //
-// Replaces the dev.16 "first match by last_updated" behavior, which would
-// pick a recently-republished backport (e.g. btcpayserver/bitcoin:29.2
-// republished after 31.0 was the active release) over the actual highest
-// version.
+// Tags come from registry-1.docker.io rather than hub.docker.com: the Hub web
+// API sits behind Cloudflare bot management, which serves Go's HTTP client a
+// "Just a moment..." challenge page with HTTP 403 no matter what headers we
+// send (UA spoofing does not help — the block is fingerprint-based). The
+// registry API is not bot-managed and needs only an anonymous pull token.
+//
+// The registry returns bare tag names with no timestamps, which costs us
+// nothing: sorting has been version-based since dev.16, when "first match by
+// last_updated" was dropped for picking a recently-republished backport
+// (e.g. btcpayserver/bitcoin:29.2 republished after 31.0 was the active
+// release) over the actual highest version.
 func ListDockerHubVersions(image string, tagFilter string) ([]string, error) {
-	apiImage := image
-	if !strings.Contains(image, "/") {
-		apiImage = "library/" + image
-	}
-	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags/?page_size=100&ordering=last_updated", apiImage)
+	repo := normalizeRepo(image)
 
-	resp, err := httpClient.Get(url)
+	token, err := registryToken(repo)
 	if err != nil {
-		return nil, fmt.Errorf("dockerhub request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("dockerhub: HTTP %d", resp.StatusCode)
+		return nil, err
 	}
 
-	var result struct {
-		Results []struct {
-			Name        string `json:"name"`
-			LastUpdated string `json:"last_updated"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("dockerhub decode: %w", err)
+	var names []string
+	next := fmt.Sprintf("https://registry-1.docker.io/v2/%s/tags/list?n=%d", repo, registryTagPageSize)
+	for page := 0; next != "" && page < registryMaxPages; page++ {
+		var err error
+		names, next, err = fetchTagPage(next, token, names)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	type parsed struct {
@@ -97,14 +104,16 @@ func ListDockerHubVersions(image string, tagFilter string) ([]string, error) {
 		version []int
 	}
 	var parsedTags []parsed
-	for _, t := range result.Results {
-		name := t.Name
+	for _, name := range names {
 		if name == "latest" || name == "edge" || name == "nightly" {
 			continue
 		}
 		lower := strings.ToLower(name)
 		if strings.Contains(lower, "-dev") || strings.Contains(lower, "-rc") ||
 			strings.Contains(lower, "alpha") || strings.Contains(lower, "beta") {
+			continue
+		}
+		if isArchVariant(name, tagFilter) {
 			continue
 		}
 		if tagFilter != "" && !matchTagFilter(name, tagFilter) {
@@ -117,8 +126,18 @@ func ListDockerHubVersions(image string, tagFilter string) ([]string, error) {
 		parsedTags = append(parsedTags, parsed{name: name, version: v})
 	}
 
+	// Ties are broken by name so the result is deterministic: sort.Slice is
+	// not stable, and per-release variants ("31.0-foo") parse to the same
+	// version as the plain tag ("31.0"). Shortest-then-lexicographic puts the
+	// plain tag first, which is what CheckLatestVersion hands back as latest.
 	sort.Slice(parsedTags, func(i, j int) bool {
-		return compareVersions(parsedTags[i].version, parsedTags[j].version) > 0
+		if c := compareVersions(parsedTags[i].version, parsedTags[j].version); c != 0 {
+			return c > 0
+		}
+		if len(parsedTags[i].name) != len(parsedTags[j].name) {
+			return len(parsedTags[i].name) < len(parsedTags[j].name)
+		}
+		return parsedTags[i].name < parsedTags[j].name
 	})
 
 	out := make([]string, 0, len(parsedTags))
@@ -129,6 +148,118 @@ func ListDockerHubVersions(image string, tagFilter string) ([]string, error) {
 		out = out[:20]
 	}
 	return out, nil
+}
+
+// fetchTagPage appends one page of /tags/list to names and returns the URL of
+// the next page ("" when the registry sent no Link rel="next" header).
+func fetchTagPage(pageURL, token string, names []string) ([]string, string, error) {
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("docker registry tags: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("docker registry tags: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		return nil, "", fmt.Errorf("docker registry tags: HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("docker registry tags decode: %w", err)
+	}
+
+	// req.URL is the resolved base for the (relative) Link header the
+	// registry sends, e.g. `</v2/library/postgres/tags/list?n=1000&last=17.9>`.
+	return append(names, result.Tags...), nextPageURL(req.URL, resp.Header.Get("Link")), nil
+}
+
+// nextPageURL extracts the rel="next" target from a Link header and resolves
+// it against base. Returns "" when there is no next page.
+func nextPageURL(base *url.URL, link string) string {
+	for _, part := range strings.Split(link, ",") {
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start < 0 || end <= start {
+			continue
+		}
+		ref, err := url.Parse(strings.TrimSpace(part[start+1 : end]))
+		if err != nil {
+			continue
+		}
+		return base.ResolveReference(ref).String()
+	}
+	return ""
+}
+
+// archVariantSuffixes are the per-architecture and per-OS tag variants Docker
+// images publish alongside their plain release tag. They parse to the same
+// version as that tag, so they have to be dropped or they compete with it for
+// "latest" — and pinning a service to an arch-specific tag breaks it on any
+// other host.
+var archVariantSuffixes = map[string]bool{
+	"amd64": true, "x86_64": true, "i386": true, "386": true,
+	"arm64": true, "arm64v8": true, "aarch64": true,
+	"arm32v5": true, "arm32v6": true, "arm32v7": true,
+	"armv6": true, "armv7": true, "armhf": true,
+	"ppc64le": true, "s390x": true, "riscv64": true, "mips64le": true,
+}
+
+// isArchVariant reports whether tag is an architecture variant that was not
+// explicitly asked for. A tagFilter naming the variant (e.g. "-arm64v8") opts
+// back in, so an operator can still pin one deliberately.
+func isArchVariant(tag, tagFilter string) bool {
+	idx := strings.LastIndex(tag, "-")
+	if idx < 0 {
+		return false
+	}
+	suffix := tag[idx+1:]
+	if !archVariantSuffixes[suffix] {
+		return false
+	}
+	return !strings.Contains(tagFilter, suffix)
+}
+
+// normalizeRepo maps an image name to its registry repository path. Official
+// images ("caddy") live under "library/".
+func normalizeRepo(image string) string {
+	if !strings.Contains(image, "/") {
+		return "library/" + image
+	}
+	return image
+}
+
+// registryToken fetches an anonymous pull token for repo. Public images need
+// no credentials.
+func registryToken(repo string) (string, error) {
+	tokenURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", repo)
+	resp, err := httpClient.Get(tokenURL)
+	if err != nil {
+		return "", fmt.Errorf("docker registry auth: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("docker registry auth: HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("docker registry auth decode: %w", err)
+	}
+	return result.Token, nil
 }
 
 // extractVersion pulls a []int version from a tag name. Strips a leading "v"
@@ -207,34 +338,18 @@ func compareVersions(a, b []int) int {
 // the remote digest against the locally running image digest.
 func checkDockerDigest(image, tag string) (string, error) {
 	// Official images need "library/" prefix for the registry API
-	repo := image
-	if !strings.Contains(image, "/") {
-		repo = "library/" + image
-	}
+	repo := normalizeRepo(image)
 
 	// Step 1: Get auth token (anonymous, no credentials needed for public images)
-	tokenURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", repo)
-	tokenResp, err := httpClient.Get(tokenURL)
+	token, err := registryToken(repo)
 	if err != nil {
-		return "", fmt.Errorf("docker registry auth: %w", err)
-	}
-	defer tokenResp.Body.Close()
-
-	if tokenResp.StatusCode != 200 {
-		return "", fmt.Errorf("docker registry auth: HTTP %d", tokenResp.StatusCode)
-	}
-
-	var tokenResult struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenResult); err != nil {
-		return "", fmt.Errorf("docker registry auth decode: %w", err)
+		return "", err
 	}
 
 	// Step 2: HEAD the manifest to get the remote digest
 	manifestURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", repo, tag)
 	req, _ := http.NewRequest("HEAD", manifestURL, nil)
-	req.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", strings.Join([]string{
 		"application/vnd.docker.distribution.manifest.list.v2+json",
 		"application/vnd.oci.image.index.v1+json",
