@@ -171,14 +171,30 @@ func TestTryReclaim_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get audit log: %v", err)
 	}
-	var reclaimRows int
+	var reclaimRows, completeRows int
 	for _, ent := range entries {
-		if ent.Action == "auto_reclaim" && ent.Target == "mempool" {
+		if ent.Target != "mempool" {
+			continue
+		}
+		switch ent.Action {
+		case auditReclaimAttempt:
 			reclaimRows++
+		case auditReclaimComplete:
+			completeRows++
 		}
 	}
 	if reclaimRows != 1 {
 		t.Fatalf("expected exactly 1 auto_reclaim audit row, got %d", reclaimRows)
+	}
+	// A success used to leave no distinguishable trace at all, and — worse —
+	// nothing that told the next engine start the sequence had finished.
+	if completeRows != 1 {
+		t.Fatalf("expected exactly 1 auto_reclaim_complete audit row, got %d", completeRows)
+	}
+	attemptID, _, _ := e.store.LastAuditID("mempool", auditReclaimAttempt)
+	termID, hasTerm, _ := e.store.LastAuditID("mempool", reclaimTerminalActions...)
+	if !hasTerm || termID <= attemptID {
+		t.Fatalf("terminal row must follow the attempt row by id (attempt=%d terminal=%d has=%v)", attemptID, termID, hasTerm)
 	}
 
 	alerts, _ := e.store.GetActiveAlerts()
@@ -320,4 +336,161 @@ func TestTryReclaim_AuditWriteFailureAbortsBeforeStop(t *testing.T) {
 	if !strings.Contains(logged, "auto-reclaim failed") {
 		t.Fatalf("expected the alert-raising log line to have run, got: %s", logged)
 	}
+}
+
+// --- Interrupted-sequence recovery (fix round 3, Important I1) ---
+//
+// An ordinary restart of truffels-api inside the reclaim's stop→up window —
+// including the stack self-update path, which restarts the API by design —
+// used to leave mempool stopped indefinitely: the cooldown row is written
+// before Stop, so the next tick refused to act, and the only symptom was a
+// Warning-severity service_unhealthy indistinguishable from a user-initiated
+// stop.
+
+// TestRecoverInterruptedReclaim_RestartsService seeds an attempt row with no
+// terminal row after it — exactly what a mid-sequence death leaves behind —
+// and asserts the engine restarts the service once and raises a Critical
+// alert. The container is deliberately "exited" here: that is the state an
+// interrupted sequence leaves, and it is also the state that makes every
+// later tick refuse to act.
+func TestRecoverInterruptedReclaim_RestartsService(t *testing.T) {
+	e, mock := newReclaimTestEngine(t, 10*1024*1024, "exited", true, true)
+
+	if err := e.store.LogAudit(auditReclaimAttempt, "mempool",
+		"attempting to clear /srv/truffels/data/mempool/cache (950 MB) and restart the service", ""); err != nil {
+		t.Fatalf("seed attempt row: %v", err)
+	}
+
+	e.recoverInterruptedReclaims()
+
+	if _, _, up := mock.counts(); up != 1 {
+		t.Fatalf("expected exactly 1 compose Up after an interrupted reclaim, got %d", up)
+	}
+
+	active, _ := e.store.GetActiveAlerts()
+	var found bool
+	for _, a := range active {
+		if a.Type == "auto_reclaim_interrupted" && a.ServiceID == "mempool" {
+			found = true
+			if a.Severity != model.SeverityCritical {
+				t.Errorf("expected Critical severity, got %v", a.Severity)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected an auto_reclaim_interrupted alert, active alerts: %+v", active)
+	}
+
+	// Recovery is one-shot per interruption: the terminal row it writes must
+	// keep the next engine start from restarting the service all over again.
+	e.recoverInterruptedReclaims()
+	if _, _, up := mock.counts(); up != 1 {
+		t.Fatalf("recovery must run once per interruption, got %d Up calls after a second start", up)
+	}
+}
+
+// TestRecoverInterruptedReclaim_CompletedSequenceUntouched is the regression
+// test for the correctness trap this branch has already hit once: the two
+// rows below are written back to back and therefore share an audit_log
+// timestamp (one-second resolution), so "is the terminal row after the
+// attempt?" can only be answered by comparing ids. A timestamp comparison
+// would call this completed sequence interrupted and stop/start the service
+// on every single API start.
+func TestRecoverInterruptedReclaim_CompletedSequenceUntouched(t *testing.T) {
+	e, mock := newReclaimTestEngine(t, 10*1024*1024, "running", true, true)
+
+	_ = e.store.LogAudit(auditReclaimAttempt, "mempool", "attempting", "")
+	_ = e.store.LogAudit(auditReclaimComplete, "mempool", "cleared", "")
+
+	entries, _ := e.store.GetAuditLog(10)
+	if len(entries) >= 2 && entries[0].Timestamp != entries[1].Timestamp {
+		t.Logf("note: the two rows landed in different seconds (%q vs %q); the identical-timestamp case is pinned deterministically by store.TestLastAuditID_SameTimestampOrdersByID",
+			entries[1].Timestamp, entries[0].Timestamp)
+	}
+
+	e.recoverInterruptedReclaims()
+
+	if _, _, up := mock.counts(); up != 0 {
+		t.Fatalf("a completed sequence must not be recovered, got %d Up calls", up)
+	}
+	active, _ := e.store.GetActiveAlerts()
+	for _, a := range active {
+		if a.Type == "auto_reclaim_interrupted" {
+			t.Fatalf("a completed sequence must not raise auto_reclaim_interrupted: %+v", a)
+		}
+	}
+}
+
+// TestRecoverInterruptedReclaim_FailedSequenceUntouched pins that a reclaim
+// that failed and said so is a finished sequence, not an interrupted one.
+func TestRecoverInterruptedReclaim_FailedSequenceUntouched(t *testing.T) {
+	e, mock := newReclaimTestEngine(t, 10*1024*1024, "running", true, true)
+
+	_ = e.store.LogAudit(auditReclaimAttempt, "mempool", "attempting", "")
+	_ = e.store.LogAudit(auditReclaimFailed, "mempool", "clear-dir failed", "")
+
+	e.recoverInterruptedReclaims()
+
+	if _, _, up := mock.counts(); up != 0 {
+		t.Fatalf("a failed-but-terminated sequence must not be recovered, got %d Up calls", up)
+	}
+}
+
+// --- Alert copy tracks the real verdict (fix round 3, Important I2) ---
+
+// TestDirSizeCritical_TailPromisesReclaimWhenItWillRun is the positive case.
+func TestDirSizeCritical_TailPromisesReclaimWhenItWillRun(t *testing.T) {
+	e, _ := newReclaimTestEngine(t, 950*1024*1024, "running", true, true)
+
+	waitReclaim(t, e)
+
+	msg := criticalDirSizeMessage(t, e)
+	if !strings.Contains(msg, "cleared automatically") {
+		t.Fatalf("expected the alert to announce the automatic reclaim, got: %s", msg)
+	}
+}
+
+// TestDirSizeCritical_TailDropsPromiseInsideCooldown covers the reported
+// defect: after a reclaim attempt (successful or failed) the cooldown blocks
+// any further attempt, and the alert used to keep promising an automatic
+// clear "(~60 s)" for the whole window — suppressing the manual clear that
+// was by then the only remedy.
+func TestDirSizeCritical_TailDropsPromiseInsideCooldown(t *testing.T) {
+	e, _ := newReclaimTestEngine(t, 950*1024*1024, "running", true, true)
+	_ = e.store.LogAudit(auditReclaimAttempt, "mempool", "prior attempt", "")
+
+	waitReclaim(t, e)
+
+	msg := criticalDirSizeMessage(t, e)
+	if strings.Contains(msg, "cleared automatically") {
+		t.Fatalf("alert promises an automatic reclaim the cooldown is refusing: %s", msg)
+	}
+	if !strings.Contains(msg, "Settings → Data Dirs") {
+		t.Fatalf("expected the manual remediation to be named, got: %s", msg)
+	}
+}
+
+// TestDirSizeCritical_TailDropsPromiseWhenNotRunning covers the other
+// guardrail the old wording ignored.
+func TestDirSizeCritical_TailDropsPromiseWhenNotRunning(t *testing.T) {
+	e, _ := newReclaimTestEngine(t, 950*1024*1024, "exited", true, true)
+
+	waitReclaim(t, e)
+
+	msg := criticalDirSizeMessage(t, e)
+	if strings.Contains(msg, "cleared automatically") {
+		t.Fatalf("alert promises an automatic reclaim while the service is stopped: %s", msg)
+	}
+}
+
+func criticalDirSizeMessage(t *testing.T, e *Engine) string {
+	t.Helper()
+	active, _ := e.store.GetActiveAlerts()
+	for _, a := range active {
+		if a.Type == "dir_size_critical" && a.ServiceID == "mempool" {
+			return a.Message
+		}
+	}
+	t.Fatalf("no dir_size_critical alert raised, active alerts: %+v", active)
+	return ""
 }
