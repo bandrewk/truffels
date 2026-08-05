@@ -140,37 +140,31 @@ func TestLastAuditAt(t *testing.T) {
 		t.Fatalf("expected no row, got ok=%v err=%v", ok, err)
 	}
 
-	// Insert first row for this action/target pair.
-	if err := s.LogAudit("auto_reclaim", "mempool", "cleared 900 MB", ""); err != nil {
-		t.Fatalf("LogAudit first: %v", err)
+	// Old row, written directly so it carries a timestamp far in the past.
+	// LogAudit only ever writes datetime('now') at one-second resolution, which
+	// is too coarse to distinguish two rows written back to back — and this
+	// test must be able to tell which row LastAuditAt picked.
+	if _, err := s.db.Exec(
+		`INSERT INTO audit_log (action, target, detail, ip, timestamp)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"auto_reclaim", "mempool", "old", "", "2020-01-01 00:00:00"); err != nil {
+		t.Fatalf("insert old row: %v", err)
 	}
-
-	// Insert second row for the same action/target pair.
-	// This tests that LastAuditAt returns the most recent (not the oldest).
-	if err := s.LogAudit("auto_reclaim", "mempool", "cleared 1000 MB", ""); err != nil {
-		t.Fatalf("LogAudit second: %v", err)
+	if err := s.LogAudit("auto_reclaim", "mempool", "new", ""); err != nil {
+		t.Fatalf("LogAudit: %v", err)
 	}
 
 	ts, ok, err := s.LastAuditAt("auto_reclaim", "mempool")
 	if err != nil || !ok {
 		t.Fatalf("expected a row, got ok=%v err=%v", ok, err)
 	}
+	// The decisive assertion: swapping ORDER BY id DESC for ASC returns the
+	// 2020 row and fails here.
+	if ts.Year() == 2020 {
+		t.Fatal("LastAuditAt returned the oldest row, not the most recent")
+	}
 	if time.Since(ts) > time.Minute {
 		t.Errorf("timestamp %v is not recent", ts)
-	}
-
-	// Verify the returned timestamp corresponds to the second (most recent) row
-	// by checking that the most recent entry has detail="cleared 1000 MB".
-	entries, err := s.GetAuditLog(2)
-	if err != nil {
-		t.Fatalf("GetAuditLog: %v", err)
-	}
-	if len(entries) < 2 {
-		t.Fatalf("expected at least 2 entries, got %d", len(entries))
-	}
-	// Most recent entry is first in the returned list (ORDER BY id DESC)
-	if entries[0].Detail != "cleared 1000 MB" {
-		t.Fatalf("expected most recent detail to be 'cleared 1000 MB', got %q", entries[0].Detail)
 	}
 
 	// A different target must not match.
