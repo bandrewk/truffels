@@ -503,7 +503,10 @@ export const api = {
   serviceMonitoring: (id: string, hours = 24) => get<ServiceMonitoringResponse>(`/services/${id}/monitoring?hours=${hours}`),
   settings: () => get<Settings>('/settings'),
   updateSettings: (settings: Partial<Settings>) => put<{ status: string }>('/settings', settings),
-  getAuditLog: (limit = 100) => get<AuditEntry[]>(`/audit?limit=${limit}`),
+  // action filters server-side. Without it a caller looking for a rare
+  // action has to page the whole log and hope the row is still on the page.
+  getAuditLog: (limit = 100, action?: string) =>
+    get<AuditEntry[]>(`/audit?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ''}`),
   systemRestart: (password: string) => post<{ status: string }>('/system/restart', { password }),
   systemShutdown: (password: string) => post<{ status: string }>('/system/shutdown', { password }),
   systemJournal: (lines = 200, priority = '', unit = '', since = '', boot = 0) => {

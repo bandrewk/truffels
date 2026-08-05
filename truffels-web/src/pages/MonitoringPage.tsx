@@ -28,10 +28,14 @@ const CHART_COLORS = {
   dirSize: '#eab308',
 } as const
 
-// Threshold lines on the dir-size chart, kept in sync with the alert engine
-// (alerts/engine.go: watchedDirs). Bytes.
-const DIR_SIZE_WARN_MB = 700
-const DIR_SIZE_CRIT_MB = 900
+// Fallbacks for the dir-size chart's thresholds, used only until the settings
+// request resolves (or if it fails). The live values come from Settings —
+// dir_size_warning_mb / dir_size_critical_mb — because an operator can change
+// them, and a chart drawing a green badge on a directory the alert engine is
+// about to reclaim is worse than no badge. These two numbers match the
+// engine's own defaults in alerts/engine.go (evalWatchedDirs).
+const DIR_SIZE_WARN_MB_DEFAULT = 700
+const DIR_SIZE_CRIT_MB_DEFAULT = 900
 
 function formatDataSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -48,6 +52,14 @@ function formatTime(ts: string): string {
 function formatTimestamp(ts: string): string {
   const d = new Date(ts)
   return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// audit_log timestamps arrive as SQLite's "YYYY-MM-DD HH:MM:SS" in UTC. The
+// space separator is outside the format the ES spec requires engines to
+// parse — V8 accepts it, JavaScriptCore has historically returned Invalid
+// Date — so normalise to the ISO "T" form before appending the zone.
+function formatAuditTimestamp(ts: string): string {
+  return new Date(ts.replace(' ', 'T') + 'Z').toLocaleString()
 }
 
 function formatUptime(startedAt: string): string {
@@ -133,10 +145,11 @@ function MetricChart({ data, dataKey, color, label, unit, current, avg, peak, do
   )
 }
 
-// DirSizeChart renders one watched-dir size series with warn/critical hint
-// lines drawn at 700/900 MB. Used to catch the mempool rbfcache.json runaway
-// (which caused the dev.20 OOM) before it crosses the heap ceiling again.
-function DirSizeChart({ series }: { series: DirSizeSeries }) {
+// DirSizeChart renders one watched-dir size series against the operator's
+// configured warn/critical thresholds. Used to catch the mempool rbfcache.json
+// runaway (which caused the dev.20 OOM) before it crosses the heap ceiling
+// again.
+function DirSizeChart({ series, warnMb, critMb }: { series: DirSizeSeries; warnMb: number; critMb: number }) {
   const data = series.points.map(p => ({
     timestamp: p.timestamp,
     size_mb: p.size_bytes / (1024 * 1024),
@@ -144,8 +157,8 @@ function DirSizeChart({ series }: { series: DirSizeSeries }) {
   const currentMb = data.length > 0 ? data[data.length - 1].size_mb : 0
   const peakMb = data.length > 0 ? Math.max(...data.map(d => d.size_mb)) : 0
   let status: 'ok' | 'warn' | 'crit' = 'ok'
-  if (currentMb >= DIR_SIZE_CRIT_MB) status = 'crit'
-  else if (currentMb >= DIR_SIZE_WARN_MB) status = 'warn'
+  if (currentMb >= critMb) status = 'crit'
+  else if (currentMb >= warnMb) status = 'warn'
 
   return (
     <Card>
@@ -198,7 +211,7 @@ function DirSizeChart({ series }: { series: DirSizeSeries }) {
           }`}>{currentMb.toFixed(0)} MB</span>
         </span>
         <span>Peak: <span className="text-gray-200 font-mono">{peakMb.toFixed(0)} MB</span></span>
-        <span className="text-gray-500">warn ≥ {DIR_SIZE_WARN_MB} MB · critical ≥ {DIR_SIZE_CRIT_MB} MB</span>
+        <span className="text-gray-500">warn ≥ {warnMb} MB · critical ≥ {critMb} MB</span>
         {status !== 'ok' && (
           <span className={status === 'crit' ? 'text-red-400' : 'text-yellow-400'}>
             Clear via Settings → Data Dirs → {series.label}
@@ -220,9 +233,23 @@ export default function MonitoringPage() {
   const fetcher = useCallback(() => api.monitoring(hours), [hours])
   const { data, error, loading } = useApi(fetcher, 10000)
 
-  const auditFetcher = useCallback(() => api.getAuditLog(100), [])
+  // Ask the server for the one row we want instead of paging the whole log
+  // every 10s and scanning it: auto_reclaim fires roughly weekly by design,
+  // so on an unfiltered feed of logins, service actions, updates and tuning
+  // changes it drops off the page within days and the readout silently
+  // reverts to "never".
+  const auditFetcher = useCallback(() => api.getAuditLog(1, 'auto_reclaim'), [])
   const { data: auditEntries } = useApi(auditFetcher, 10000)
-  const lastReclaim = auditEntries?.find((e: AuditEntry) => e.action === 'auto_reclaim')
+  const lastReclaim: AuditEntry | undefined = auditEntries?.[0]
+
+  // Thresholds are operator-configurable, so read them rather than assuming
+  // the defaults (see DIR_SIZE_*_DEFAULT).
+  // Re-read slowly (60s) rather than once on mount, so a threshold changed in
+  // Settings shows up here without a reload.
+  const settingsFetcher = useCallback(() => api.settings(), [])
+  const { data: settings } = useApi(settingsFetcher, 60000)
+  const dirWarnMb = settings?.dir_size_warning_mb ?? DIR_SIZE_WARN_MB_DEFAULT
+  const dirCritMb = settings?.dir_size_critical_mb ?? DIR_SIZE_CRIT_MB_DEFAULT
 
   const sortedContainers = useMemo(() => {
     if (!data) return []
@@ -511,12 +538,12 @@ export default function MonitoringPage() {
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {data.dir_sizes.map((s) => (
-              <DirSizeChart key={s.path} series={s} />
+              <DirSizeChart key={s.path} series={s} warnMb={dirWarnMb} critMb={dirCritMb} />
             ))}
           </div>
           <p className="text-sm text-gray-400">
             {lastReclaim
-              ? `Last automatic reclaim: ${new Date(lastReclaim.timestamp + 'Z').toLocaleString()}`
+              ? `Last automatic reclaim: ${formatAuditTimestamp(lastReclaim.timestamp)}`
               : 'No automatic reclaim has run yet.'}
           </p>
         </>
