@@ -252,9 +252,13 @@ func (e *Engine) evalWatchedDirs() {
 		mb := size / (1024 * 1024)
 		switch {
 		case size >= criticalBytes:
+			tail := "Stop the service and clear the dir via Settings → Data Dirs."
+			if e.getSettingStr("dir_size_autoreclaim_enabled", "true") == "true" {
+				tail = "It will be cleared automatically and the service restarted (~60 s)."
+			}
 			e.upsert(critType, w.serviceID, model.SeverityCritical,
-				"%s reached %d MB — will OOM the backend on next restart. Stop the service and clear the dir via Settings → Data Dirs.",
-				w.humanLabel, mb)
+				"%s reached %d MB — will OOM the backend on next restart. %s",
+				w.humanLabel, mb, tail)
 			e.resolve(warnType, w.serviceID)
 		case size >= warnBytes:
 			e.upsert(warnType, w.serviceID, model.SeverityWarning,
