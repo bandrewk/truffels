@@ -213,7 +213,14 @@ services:
         limits:
           memory: 3072M
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1; rc=$$?; rm -f /backend/cache/.starting 2>/dev/null; exit $$rc"]
+      # Clears the boot-guard sentinel, but only on a probe that actually
+      # succeeded: Docker also runs this during start_period (those runs just
+      # don't count toward the retries budget), so an unconditional rm deletes the
+      # sentinel at t≈30s while the backend is still parsing the cache — and
+      # the guard would then be inert for exactly the slow-start OOM loop it
+      # exists to break. rc is captured before the rm so a failing rm can
+      # never flip a passing check to failing.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1; rc=$$?; if [ $$rc -eq 0 ]; then rm -f /backend/cache/.starting 2>/dev/null; fi; exit $$rc"]
       interval: 30s
       timeout: 5s
       retries: 5

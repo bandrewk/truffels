@@ -79,6 +79,15 @@ func TestRender_Mempool(t *testing.T) {
 	if strings.Contains(got, "&& rm -f /backend/cache/.starting || exit 1") {
 		t.Error("healthcheck must not couple rm's exit status to service health")
 	}
+	// ...and the removal must happen ONLY on a successful probe. Docker runs
+	// the healthcheck during start_period as well (those runs merely don't
+	// count toward `retries`), so an unconditional rm deletes the sentinel at
+	// the first probe — t≈30s, while the backend is still parsing an
+	// oversized rbfcache.json — and the boot guard is then inert for exactly
+	// the slow-start OOM loop it exists to break. Pinning the `if` keeps both
+	// properties at once: conditional removal, and an rm whose own exit
+	// status can never flip the verdict.
+	assertContains(t, got, "if [ $$rc -eq 0 ]; then rm -f /backend/cache/.starting")
 }
 
 func TestRender_Ckstats(t *testing.T) {
