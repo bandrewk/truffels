@@ -165,6 +165,23 @@ services:
     image: {{.BackendImageTag}}
     container_name: truffels-mempool-backend
     restart: unless-stopped
+    # Boot guard: the sentinel is written at every start and removed by the
+    # healthcheck on first success. If it is still here at the next start, the
+    # previous one never became healthy — almost always a heap OOM while
+    # reloading an oversized cache — so drop the cache and rebuild from live
+    # data. Ported from Start9Labs/mempool-startos.
+    # Must exec start.sh (the image's own Cmd): it renders mempool-config.json
+    # from the MEMPOOL_* env vars before starting node.
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        if [ -e /backend/cache/.starting ]; then
+        echo "mempool: previous start did not reach readiness; clearing backend disk cache to break a possible out-of-memory boot loop" >&2;
+        rm -rf /backend/cache/* /backend/cache/.[!.]* 2>/dev/null || true;
+        fi;
+        : > /backend/cache/.starting;
+        exec /backend/start.sh
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -196,7 +213,7 @@ services:
         limits:
           memory: 3072M
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8999/api/v1/blocks/tip/height >/dev/null 2>&1 && rm -f /backend/cache/.starting || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

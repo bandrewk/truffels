@@ -57,6 +57,16 @@ func TestRender_Mempool(t *testing.T) {
 	assertContains(t, got, "start_period: 300s")
 	// Frontend healthcheck.
 	assertContains(t, got, "http://127.0.0.1:8080/")
+	// Boot guard: a start that never became healthy leaves the sentinel behind,
+	// so the next start clears the cache instead of OOMing on the same file.
+	assertContains(t, got, "/backend/cache/.starting")
+	assertContains(t, got, "exec /backend/start.sh")
+	// Must wrap start.sh, not node — start.sh renders mempool-config.json from
+	// the MEMPOOL_* env vars, so wrapping node would drop all configuration.
+	if strings.Contains(got, "exec node ") {
+		t.Error("boot guard must exec /backend/start.sh, not node directly")
+	}
+	assertContains(t, got, "rm -f /backend/cache/.starting")
 }
 
 func TestRender_Ckstats(t *testing.T) {
