@@ -57,6 +57,37 @@ func TestRender_Mempool(t *testing.T) {
 	assertContains(t, got, "start_period: 300s")
 	// Frontend healthcheck.
 	assertContains(t, got, "http://127.0.0.1:8080/")
+	// Boot guard: a start that never became healthy leaves the sentinel behind,
+	// so the next start clears the cache instead of OOMing on the same file.
+	assertContains(t, got, "/backend/cache/.starting")
+	assertContains(t, got, "exec /backend/start.sh")
+	// Must wrap start.sh, not node — start.sh renders mempool-config.json from
+	// the MEMPOOL_* env vars, so wrapping node would drop all configuration.
+	if strings.Contains(got, "exec node ") {
+		t.Error("boot guard must exec /backend/start.sh, not node directly")
+	}
+	assertContains(t, got, "rm -f /backend/cache/.starting")
+	// The healthcheck's exit status must reflect wget alone, not wget-&& rm.
+	// Capture the real status before cleanup so a failed rm (e.g. read-only or
+	// mis-owned cache dir) can never flip a passing check to failing.
+	// $$ (not $) because this is a docker-compose file: compose interpolates
+	// bare $VAR/$? itself, so a literal $ must be written as $$ in the
+	// template or compose silently blanks "rc" and mangles "$?" before the
+	// shell ever sees it — asserting the doubled form pins that behavior.
+	assertContains(t, got, "rc=$$?")
+	assertContains(t, got, "exit $$rc")
+	if strings.Contains(got, "&& rm -f /backend/cache/.starting || exit 1") {
+		t.Error("healthcheck must not couple rm's exit status to service health")
+	}
+	// ...and the removal must happen ONLY on a successful probe. Docker runs
+	// the healthcheck during start_period as well (those runs merely don't
+	// count toward `retries`), so an unconditional rm deletes the sentinel at
+	// the first probe — t≈30s, while the backend is still parsing an
+	// oversized rbfcache.json — and the boot guard is then inert for exactly
+	// the slow-start OOM loop it exists to break. Pinning the `if` keeps both
+	// properties at once: conditional removal, and an rm whose own exit
+	// status can never flip the verdict.
+	assertContains(t, got, "if [ $$rc -eq 0 ]; then rm -f /backend/cache/.starting")
 }
 
 func TestRender_Ckstats(t *testing.T) {

@@ -315,6 +315,10 @@ function AlertsTab({ settings, saving, onSave }: {
   const [trendHorizon, setTrendHorizon] = useState(settings.trend_alert_horizon_hours)
   const [trendLookback, setTrendLookback] = useState(settings.trend_alert_lookback_hours)
   const [trendMinData, setTrendMinData] = useState(settings.trend_alert_min_data_hours)
+  const [reclaimEnabled, setReclaimEnabled] = useState(settings.dir_size_autoreclaim_enabled)
+  const [warnMb, setWarnMb] = useState(settings.dir_size_warning_mb)
+  const [criticalMb, setCriticalMb] = useState(settings.dir_size_critical_mb)
+  const [reclaimIntervalH, setReclaimIntervalH] = useState(settings.dir_size_autoreclaim_min_interval_hours)
 
   const changed = tempWarning !== settings.temp_warning
     || tempCritical !== settings.temp_critical
@@ -322,6 +326,10 @@ function AlertsTab({ settings, saving, onSave }: {
     || trendHorizon !== settings.trend_alert_horizon_hours
     || trendLookback !== settings.trend_alert_lookback_hours
     || trendMinData !== settings.trend_alert_min_data_hours
+    || reclaimEnabled !== settings.dir_size_autoreclaim_enabled
+    || warnMb !== settings.dir_size_warning_mb
+    || criticalMb !== settings.dir_size_critical_mb
+    || reclaimIntervalH !== settings.dir_size_autoreclaim_min_interval_hours
 
   return (
     <div className="space-y-6">
@@ -417,9 +425,72 @@ function AlertsTab({ settings, saving, onSave }: {
         </div>
       </Card>
 
+      <Card>
+        <CardTitle>Mempool Cache Auto-Reclaim</CardTitle>
+        <p className="text-sm text-gray-400 mb-4">
+          Watches the mempool backend's cache directory and warns as it grows.
+          The rbfcache.json runaway that caused the dev.20 OOM is the reason
+          these thresholds exist.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer mb-4">
+          <input
+            type="checkbox" checked={reclaimEnabled} onChange={(e) => setReclaimEnabled(e.target.checked)}
+            className="accent-accent w-4 h-4"
+          />
+          <span className="text-sm text-white font-medium">Reclaim the mempool cache automatically</span>
+        </label>
+        <p className="text-sm text-gray-400 mb-4">
+          When the cache passes the critical threshold, the service is stopped, the
+          cache directory is cleared and the service is started again. This takes
+          about 60 seconds, during which the statistics charts have a gap. Without
+          it the cache keeps growing until the backend runs out of heap.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-lg">
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Warning threshold</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={100} step={1}
+                value={warnMb}
+                onChange={(e) => setWarnMb(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">MB</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Critical threshold</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={100} step={1}
+                value={criticalMb}
+                onChange={(e) => setCriticalMb(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">MB</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Min interval between reclaims</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} step={1}
+                value={reclaimIntervalH}
+                onChange={(e) => setReclaimIntervalH(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-surface-overlay border border-border rounded text-sm text-white"
+              />
+              <span className="text-sm text-gray-400">h</span>
+            </div>
+          </div>
+        </div>
+        {warnMb >= criticalMb && (
+          <p className="text-sm text-yellow-400 mt-3">Warning threshold should be lower than critical threshold.</p>
+        )}
+      </Card>
+
       <div className="flex justify-end">
         <button
-          disabled={!changed || saving || tempWarning >= tempCritical}
+          disabled={!changed || saving || tempWarning >= tempCritical || warnMb >= criticalMb}
           onClick={() => onSave({
             temp_warning: tempWarning,
             temp_critical: tempCritical,
@@ -427,6 +498,10 @@ function AlertsTab({ settings, saving, onSave }: {
             trend_alert_horizon_hours: trendHorizon,
             trend_alert_lookback_hours: trendLookback,
             trend_alert_min_data_hours: trendMinData,
+            dir_size_autoreclaim_enabled: reclaimEnabled,
+            dir_size_warning_mb: warnMb,
+            dir_size_critical_mb: criticalMb,
+            dir_size_autoreclaim_min_interval_hours: reclaimIntervalH,
           })}
           className="px-4 py-2 bg-accent text-black font-medium rounded text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
         >

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"truffels-api/internal/model"
 )
@@ -128,6 +129,94 @@ func TestAuditLog_Limit(t *testing.T) {
 	entries, _ := s.GetAuditLog(3)
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries with limit, got %d", len(entries))
+	}
+}
+
+func TestLastAuditAt(t *testing.T) {
+	s := newTestStore(t)
+
+	// No matching row yet.
+	if _, ok, err := s.LastAuditAt("auto_reclaim", "mempool"); err != nil || ok {
+		t.Fatalf("expected no row, got ok=%v err=%v", ok, err)
+	}
+
+	// Old row, written directly so it carries a timestamp far in the past.
+	// LogAudit only ever writes datetime('now') at one-second resolution, which
+	// is too coarse to distinguish two rows written back to back — and this
+	// test must be able to tell which row LastAuditAt picked.
+	if _, err := s.db.Exec(
+		`INSERT INTO audit_log (action, target, detail, ip, timestamp)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"auto_reclaim", "mempool", "old", "", "2020-01-01 00:00:00"); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	if err := s.LogAudit("auto_reclaim", "mempool", "new", ""); err != nil {
+		t.Fatalf("LogAudit: %v", err)
+	}
+
+	ts, ok, err := s.LastAuditAt("auto_reclaim", "mempool")
+	if err != nil || !ok {
+		t.Fatalf("expected a row, got ok=%v err=%v", ok, err)
+	}
+	// The decisive assertion: swapping ORDER BY id DESC for ASC returns the
+	// 2020 row and fails here.
+	if ts.Year() == 2020 {
+		t.Fatal("LastAuditAt returned the oldest row, not the most recent")
+	}
+	if time.Since(ts) > time.Minute {
+		t.Errorf("timestamp %v is not recent", ts)
+	}
+
+	// A different target must not match.
+	if _, ok, _ := s.LastAuditAt("auto_reclaim", "ckstats"); ok {
+		t.Error("target filter did not apply")
+	}
+}
+
+// TestLastAuditID_SameTimestampOrdersByID pins the reason LastAuditID exists.
+// The alert engine has to answer "did a terminal row follow this attempt?",
+// and audit_log.timestamp cannot answer it: its resolution is one second, so
+// an attempt and its terminal row written back to back are equal by time.
+// Both rows are forced onto the identical timestamp here so the ordering can
+// only come from id — a timestamp-based implementation fails this test.
+func TestLastAuditID_SameTimestampOrdersByID(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, ok, err := s.LastAuditID("mempool", "auto_reclaim"); err != nil || ok {
+		t.Fatalf("expected no row, got ok=%v err=%v", ok, err)
+	}
+
+	if err := s.LogAudit("auto_reclaim", "mempool", "attempt", ""); err != nil {
+		t.Fatalf("LogAudit: %v", err)
+	}
+	if err := s.LogAudit("auto_reclaim_complete", "mempool", "done", ""); err != nil {
+		t.Fatalf("LogAudit: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE audit_log SET timestamp = '2026-08-05 12:00:00'`); err != nil {
+		t.Fatalf("flatten timestamps: %v", err)
+	}
+
+	attemptID, ok, err := s.LastAuditID("mempool", "auto_reclaim")
+	if err != nil || !ok {
+		t.Fatalf("expected the attempt row, got ok=%v err=%v", ok, err)
+	}
+	termID, ok, err := s.LastAuditID("mempool", "auto_reclaim_complete", "auto_reclaim_failed")
+	if err != nil || !ok {
+		t.Fatalf("expected the terminal row, got ok=%v err=%v", ok, err)
+	}
+	if termID <= attemptID {
+		t.Fatalf("terminal row must sort after the attempt by id, got attempt=%d terminal=%d", attemptID, termID)
+	}
+
+	// A different target must not match, and neither must an unrelated action.
+	if _, ok, _ := s.LastAuditID("ckstats", "auto_reclaim"); ok {
+		t.Error("target filter did not apply")
+	}
+	if _, ok, _ := s.LastAuditID("mempool", "auto_reclaim_failed"); ok {
+		t.Error("action filter did not apply")
+	}
+	if _, ok, _ := s.LastAuditID("mempool"); ok {
+		t.Error("an empty action set must match nothing")
 	}
 }
 

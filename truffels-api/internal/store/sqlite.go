@@ -129,10 +129,25 @@ func (s *Store) LogAudit(action, target, detail, ip string) error {
 	return err
 }
 
-// GetAuditLog returns recent audit entries.
+// GetAuditLog returns recent audit entries, newest first.
 func (s *Store) GetAuditLog(limit int) ([]AuditEntry, error) {
-	rows, err := s.db.Query(
-		`SELECT id, timestamp, action, target, detail, ip FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
+	return scanAuditRows(s.db.Query(
+		`SELECT id, timestamp, action, target, detail, ip FROM audit_log
+		 ORDER BY id DESC LIMIT ?`, limit))
+}
+
+// GetAuditLogByAction returns recent audit entries for one action, newest
+// first. Server-side filtering exists so a caller that only cares about a
+// rare action (auto_reclaim fires roughly weekly) does not have to page the
+// whole log to find it — unfiltered, a handful of logins and service actions
+// pushes it off the end of any sane page size.
+func (s *Store) GetAuditLogByAction(action string, limit int) ([]AuditEntry, error) {
+	return scanAuditRows(s.db.Query(
+		`SELECT id, timestamp, action, target, detail, ip FROM audit_log
+		 WHERE action = ? ORDER BY id DESC LIMIT ?`, action, limit))
+}
+
+func scanAuditRows(rows *sql.Rows, err error) ([]AuditEntry, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +165,62 @@ func (s *Store) GetAuditLog(limit int) ([]AuditEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// LastAuditAt returns the timestamp of the most recent audit_log entry for the
+// given action/target pair. The bool is false when no such entry exists.
+// Used by guardrails that must survive an API restart.
+func (s *Store) LastAuditAt(action, target string) (time.Time, bool, error) {
+	var raw string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM audit_log WHERE action = ? AND target = ?
+		 ORDER BY id DESC LIMIT 1`, action, target).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	ts, err := time.Parse("2006-01-02 15:04:05", raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return ts.UTC(), true, nil
+}
+
+// LastAuditID returns the rowid of the most recent audit_log entry for the
+// given target whose action is any of actions. The bool is false when no such
+// entry exists.
+//
+// This exists alongside LastAuditAt because audit_log.timestamp has
+// one-second resolution: two rows written inside the same second carry
+// identical timestamps, so "did B happen after A?" cannot be answered by
+// comparing them. id is the table's INTEGER PRIMARY KEY and therefore
+// strictly increasing, which makes it the only reliable ordering key for
+// sequence questions. LastAuditAt is still the right tool for age/cooldown
+// questions and is unchanged.
+func (s *Store) LastAuditID(target string, actions ...string) (int64, bool, error) {
+	if len(actions) == 0 {
+		return 0, false, nil
+	}
+	args := make([]interface{}, 0, len(actions)+1)
+	for _, a := range actions {
+		args = append(args, a)
+	}
+	args = append(args, target)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(actions)), ",")
+
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM audit_log WHERE action IN (`+placeholders+`) AND target = ?
+		 ORDER BY id DESC LIMIT 1`, args...).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
 type AuditEntry struct {

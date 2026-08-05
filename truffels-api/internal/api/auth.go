@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -128,8 +129,42 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// maxAuditLimit caps ?limit= so a client cannot ask the API to materialise
+// the entire audit_log in one response.
+const maxAuditLimit = 1000
+
+// handleAuditLog serves GET /api/audit.
+//
+// ?limit= (default 100, capped at maxAuditLimit) and ?action= are both
+// optional; omitting them keeps the previous unfiltered 100-row behaviour for
+// existing callers. The action filter exists because the client used to pull
+// an unfiltered page and scan it for a single rare action (auto_reclaim,
+// which fires roughly weekly by design) — once 100 logins, service actions
+// and update rows had accumulated, the row it was looking for had silently
+// fallen off the end.
 func (s *Server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.store.GetAuditLog(100)
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be a positive integer"})
+			return
+		}
+		if n > maxAuditLimit {
+			n = maxAuditLimit
+		}
+		limit = n
+	}
+
+	var (
+		entries []store.AuditEntry
+		err     error
+	)
+	if action := r.URL.Query().Get("action"); action != "" {
+		entries, err = s.store.GetAuditLogByAction(action, limit)
+	} else {
+		entries, err = s.store.GetAuditLog(limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

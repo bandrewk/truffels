@@ -198,6 +198,7 @@ func newTestEngine(t *testing.T) (*Engine, *store.Store) {
 		autoStopped:        make(map[string]bool),
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
+		reclaimSlot:        newReclaimSlot(),
 	}
 	return e, s
 }
@@ -462,6 +463,7 @@ func newTestEngineWithRegistry(t *testing.T, tmpls []model.ServiceTemplate) (*En
 		autoStopped:        make(map[string]bool),
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
+		reclaimSlot:        newReclaimSlot(),
 	}
 	return e, s
 }
