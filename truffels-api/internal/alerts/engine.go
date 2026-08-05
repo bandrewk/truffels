@@ -185,24 +185,26 @@ func (e *Engine) evaluate() {
 	}
 }
 
-// watchedDir is a data-dir we track size for, with warn/critical thresholds
-// in bytes. Currently the only entry is mempool's cache — added after the
-// dev.20 rbfcache.json runaway that OOM'd the backend.
+// watchedDir is a data-dir we track size for. Currently the only entry is
+// mempool's cache — added after the dev.20 rbfcache.json runaway that
+// OOM'd the backend.
 type watchedDir struct {
-	serviceID    string
-	path         string
-	warnBytes    int64
-	criticalByte int64
-	humanLabel   string
+	serviceID  string
+	path       string
+	humanLabel string
+	// Setting keys for the thresholds, so an operator can tune them without
+	// a release. Defaults live in the getSettingInt calls in evalWatchedDirs.
+	warnKey     string
+	criticalKey string
 }
 
 var watchedDirs = []watchedDir{
 	{
-		serviceID:    "mempool",
-		path:         "/srv/truffels/data/mempool/cache",
-		warnBytes:    700 * 1024 * 1024,
-		criticalByte: 900 * 1024 * 1024,
-		humanLabel:   "mempool cache",
+		serviceID:   "mempool",
+		path:        "/srv/truffels/data/mempool/cache",
+		humanLabel:  "mempool cache",
+		warnKey:     "dir_size_warning_mb",
+		criticalKey: "dir_size_critical_mb",
 	},
 }
 
@@ -226,16 +228,19 @@ func (e *Engine) evalWatchedDirs() {
 			slog.Error("insert dir size snapshot", "path", w.path, "err", err)
 		}
 
+		warnBytes := int64(e.getSettingInt(w.warnKey, 700)) * 1024 * 1024
+		criticalBytes := int64(e.getSettingInt(w.criticalKey, 900)) * 1024 * 1024
+
 		critType := "dir_size_critical"
 		warnType := "dir_size_warning"
 		mb := size / (1024 * 1024)
 		switch {
-		case size >= w.criticalByte:
+		case size >= criticalBytes:
 			e.upsert(critType, w.serviceID, model.SeverityCritical,
 				"%s reached %d MB — will OOM the backend on next restart. Stop the service and clear the dir via Settings → Data Dirs.",
 				w.humanLabel, mb)
 			e.resolve(warnType, w.serviceID)
-		case size >= w.warnBytes:
+		case size >= warnBytes:
 			e.upsert(warnType, w.serviceID, model.SeverityWarning,
 				"%s reached %d MB — approaching the size that caused the dev.20 OOM. Consider clearing via Settings → Data Dirs.",
 				w.humanLabel, mb)
@@ -244,7 +249,110 @@ func (e *Engine) evalWatchedDirs() {
 			e.resolve(warnType, w.serviceID)
 			e.resolve(critType, w.serviceID)
 		}
+
+		if size >= criticalBytes {
+			e.tryReclaim(w, size)
+		}
 	}
+}
+
+// tryReclaim executes the stop → clear → start cycle the dir_size_critical
+// alert prescribes, once every guardrail in decideReclaim passes.
+//
+// It resolves the target through the service template's DataDirs rather than
+// trusting w.path directly: a directory that is not declared Clearable and
+// RequiresStop cannot be reached from here, so entries like mempool/mysql are
+// structurally out of range.
+func (e *Engine) tryReclaim(w watchedDir, size int64) {
+	tmpl, ok := e.registry.Get(w.serviceID)
+	if !ok {
+		return
+	}
+
+	var target *model.DataDir
+	for i := range tmpl.DataDirs {
+		if tmpl.DataDirs[i].Path == w.path {
+			target = &tmpl.DataDirs[i]
+			break
+		}
+	}
+	if target == nil {
+		slog.Warn("auto-reclaim: watched dir is not declared in DataDirs",
+			"service", w.serviceID, "path", w.path)
+		return
+	}
+
+	running := false
+	for _, name := range tmpl.ContainerNames {
+		if cs, err := docker.InspectContainer(name); err == nil && cs.Status == "running" {
+			running = true
+			break
+		}
+	}
+
+	last, hasLast, err := e.store.LastAuditAt("auto_reclaim", w.serviceID)
+	if err != nil {
+		slog.Error("auto-reclaim: audit lookup failed", "service", w.serviceID, "err", err)
+		return
+	}
+
+	decision := decideReclaim(reclaimInput{
+		SizeBytes:          size,
+		CriticalBytes:      int64(e.getSettingInt(w.criticalKey, 900)) * 1024 * 1024,
+		Enabled:            e.getSettingStr("dir_size_autoreclaim_enabled", "true") == "true",
+		MinInterval:        time.Duration(e.getSettingInt("dir_size_autoreclaim_min_interval_hours", 24)) * time.Hour,
+		LastReclaim:        last,
+		HasLastReclaim:     hasLast,
+		Now:                time.Now().UTC(),
+		ServiceRunning:     running,
+		TargetClearable:    target.Clearable,
+		TargetRequiresStop: target.RequiresStop,
+	})
+	if !decision.Act {
+		slog.Debug("auto-reclaim skipped", "service", w.serviceID, "reason", decision.Reason)
+		return
+	}
+
+	mb := size / (1024 * 1024)
+	slog.Info("auto-reclaim starting", "service", w.serviceID, "path", w.path, "size_mb", mb)
+
+	if err := e.compose.Stop(w.serviceID); err != nil {
+		e.reclaimFailed(w, "stop failed: "+err.Error())
+		return
+	}
+	if err := e.compose.FsClearDir(w.path, 1000, 1000, "0755"); err != nil {
+		// Bring the service back before reporting — a stopped service is
+		// worse than a full cache.
+		if upErr := e.compose.Up(w.serviceID); upErr != nil {
+			slog.Error("auto-reclaim: restart after failed clear also failed",
+				"service", w.serviceID, "err", upErr)
+		}
+		e.reclaimFailed(w, "clear-dir failed: "+err.Error())
+		return
+	}
+	if err := e.compose.Up(w.serviceID); err != nil {
+		// One retry: this is the dangerous state, the service is down.
+		if err2 := e.compose.Up(w.serviceID); err2 != nil {
+			e.reclaimFailed(w, "service did not restart after clear: "+err2.Error())
+			return
+		}
+	}
+
+	_ = e.store.LogAudit("auto_reclaim", w.serviceID,
+		fmt.Sprintf("cleared %s (%d MB) and restarted the service", w.path, mb), "")
+	e.resolve("auto_reclaim_failed", w.serviceID)
+	slog.Info("auto-reclaim complete", "service", w.serviceID, "reclaimed_mb", mb)
+}
+
+// reclaimFailed raises a critical alert and writes the failure to the audit
+// log. Deliberately no automatic retry: a repeated stop/start loop is worse
+// than an oversized cache.
+func (e *Engine) reclaimFailed(w watchedDir, detail string) {
+	slog.Error("auto-reclaim failed", "service", w.serviceID, "detail", detail)
+	_ = e.store.LogAudit("auto_reclaim_failed", w.serviceID, detail, "")
+	e.upsert("auto_reclaim_failed", w.serviceID, model.SeverityCritical,
+		"automatic %s reclaim failed: %s — clear it manually via Settings → Data Dirs",
+		w.humanLabel, detail)
 }
 
 func (e *Engine) checkDisk(disk model.DiskUsage) {
