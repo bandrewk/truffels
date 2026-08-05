@@ -434,6 +434,19 @@ export interface Settings {
   trend_alert_lookback_hours: number
   trend_alert_min_data_hours: number
   allow_downgrade: boolean
+  dir_size_warning_mb: number
+  dir_size_critical_mb: number
+  dir_size_autoreclaim_enabled: boolean
+  dir_size_autoreclaim_min_interval_hours: number
+}
+
+export interface AuditEntry {
+  id: number
+  timestamp: string
+  action: string
+  target?: string
+  detail?: string
+  ip?: string
 }
 
 export interface UpdateVersions {
@@ -490,6 +503,7 @@ export const api = {
   serviceMonitoring: (id: string, hours = 24) => get<ServiceMonitoringResponse>(`/services/${id}/monitoring?hours=${hours}`),
   settings: () => get<Settings>('/settings'),
   updateSettings: (settings: Partial<Settings>) => put<{ status: string }>('/settings', settings),
+  getAuditLog: (limit = 100) => get<AuditEntry[]>(`/audit?limit=${limit}`),
   systemRestart: (password: string) => post<{ status: string }>('/system/restart', { password }),
   systemShutdown: (password: string) => post<{ status: string }>('/system/shutdown', { password }),
   systemJournal: (lines = 200, priority = '', unit = '', since = '', boot = 0) => {

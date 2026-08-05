@@ -9,7 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { api, DirSizeSeries, MetricSnapshot, MonitoringResponse } from '@/lib/api'
+import { api, AuditEntry, DirSizeSeries, MetricSnapshot, MonitoringResponse } from '@/lib/api'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -219,6 +219,10 @@ export default function MonitoringPage() {
 
   const fetcher = useCallback(() => api.monitoring(hours), [hours])
   const { data, error, loading } = useApi(fetcher, 10000)
+
+  const auditFetcher = useCallback(() => api.getAuditLog(100), [])
+  const { data: auditEntries } = useApi(auditFetcher, 10000)
+  const lastReclaim = auditEntries?.find((e: AuditEntry) => e.action === 'auto_reclaim')
 
   const sortedContainers = useMemo(() => {
     if (!data) return []
@@ -504,11 +508,18 @@ export default function MonitoringPage() {
 
       {/* Watched data-dir sizes (mempool cache today; extendable) */}
       {data.dir_sizes && data.dir_sizes.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {data.dir_sizes.map((s) => (
-            <DirSizeChart key={s.path} series={s} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {data.dir_sizes.map((s) => (
+              <DirSizeChart key={s.path} series={s} />
+            ))}
+          </div>
+          <p className="text-sm text-gray-400">
+            {lastReclaim
+              ? `Last automatic reclaim: ${new Date(lastReclaim.timestamp + 'Z').toLocaleString()}`
+              : 'No automatic reclaim has run yet.'}
+          </p>
+        </>
       )}
 
       {/* Section B: Container Status Table */}
