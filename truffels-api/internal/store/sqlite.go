@@ -152,6 +152,27 @@ func (s *Store) GetAuditLog(limit int) ([]AuditEntry, error) {
 	return entries, rows.Err()
 }
 
+// LastAuditAt returns the timestamp of the most recent audit_log entry for the
+// given action/target pair. The bool is false when no such entry exists.
+// Used by guardrails that must survive an API restart.
+func (s *Store) LastAuditAt(action, target string) (time.Time, bool, error) {
+	var raw string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM audit_log WHERE action = ? AND target = ?
+		 ORDER BY id DESC LIMIT 1`, action, target).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	ts, err := time.Parse("2006-01-02 15:04:05", raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return ts.UTC(), true, nil
+}
+
 type AuditEntry struct {
 	ID        int64  `json:"id"`
 	Timestamp string `json:"timestamp"`

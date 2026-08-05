@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"truffels-api/internal/model"
 )
@@ -128,6 +129,32 @@ func TestAuditLog_Limit(t *testing.T) {
 	entries, _ := s.GetAuditLog(3)
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries with limit, got %d", len(entries))
+	}
+}
+
+func TestLastAuditAt(t *testing.T) {
+	s := newTestStore(t)
+
+	// No matching row yet.
+	if _, ok, err := s.LastAuditAt("auto_reclaim", "mempool"); err != nil || ok {
+		t.Fatalf("expected no row, got ok=%v err=%v", ok, err)
+	}
+
+	if err := s.LogAudit("auto_reclaim", "mempool", "cleared 900 MB", ""); err != nil {
+		t.Fatalf("LogAudit: %v", err)
+	}
+
+	ts, ok, err := s.LastAuditAt("auto_reclaim", "mempool")
+	if err != nil || !ok {
+		t.Fatalf("expected a row, got ok=%v err=%v", ok, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Errorf("timestamp %v is not recent", ts)
+	}
+
+	// A different target must not match.
+	if _, ok, _ := s.LastAuditAt("auto_reclaim", "ckstats"); ok {
+		t.Error("target filter did not apply")
 	}
 }
 
