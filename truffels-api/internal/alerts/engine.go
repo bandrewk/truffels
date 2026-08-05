@@ -355,11 +355,27 @@ func (e *Engine) tryReclaim(w watchedDir, size, criticalBytes int64) {
 	// (e.g. clear-dir erroring every time) would leave no row for
 	// LastAuditAt to find, decideReclaim would never see a prior attempt,
 	// and the engine would stop and restart the service on every 30s tick
-	// forever. Writing it here also makes the sequence crash-safe: if
-	// truffels-api restarts between Stop and Up, the attempt is already on
-	// record and won't be repeated within the cooldown window.
-	_ = e.store.LogAudit("auto_reclaim", w.serviceID,
-		fmt.Sprintf("attempting to clear %s (%d MB) and restart the service", target.Path, mb), "")
+	// forever.
+	//
+	// This ordering makes the sequence loop-safe, not availability-safe: if
+	// truffels-api crashes between Stop and Up (after this write succeeded),
+	// the cooldown blocks any retry for dir_size_autoreclaim_min_interval_hours
+	// and recovery is manual — the compose reconciler only issues Up when the
+	// compose file itself changed, not on every tick.
+	//
+	// If the write itself fails (e.g. SQLITE_FULL or an I/O error under disk
+	// pressure — precisely the condition this feature exists to relieve), we
+	// must not proceed to Stop: without this row on record, the cooldown
+	// guard above can't see this attempt on the next tick, and the engine
+	// would stop and restart the service forever. Refusing to act is the
+	// safe failure here — an oversized cache is a known, alerted condition;
+	// an unbounded stop/start loop is not.
+	if err := e.store.LogAudit("auto_reclaim", w.serviceID,
+		fmt.Sprintf("attempting to clear %s (%d MB) and restart the service", target.Path, mb), ""); err != nil {
+		e.reclaimFailed(w, false, fmt.Sprintf(
+			"could not record the reclaim attempt: %s — aborting before stopping the service to avoid an uncontrolled restart loop", err.Error()))
+		return
+	}
 
 	slog.Info("auto-reclaim starting", "service", w.serviceID, "path", target.Path, "size_mb", mb)
 

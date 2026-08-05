@@ -1,9 +1,12 @@
 package alerts
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -254,5 +257,67 @@ func TestTryReclaim_SkipsWhenServiceStopped(t *testing.T) {
 	stop, clear, up := mock.counts()
 	if stop != 0 || clear != 0 || up != 0 {
 		t.Fatalf("expected zero agent mutations when service is stopped, got stop=%d clear=%d up=%d", stop, clear, up)
+	}
+}
+
+// TestTryReclaim_AuditWriteFailureAbortsBeforeStop is the regression test
+// for fix-round-2's Important finding: if the pre-Stop "auto_reclaim" audit
+// write itself fails (e.g. SQLITE_FULL under disk pressure — the exact
+// condition this feature exists to relieve), tryReclaim must abort before
+// calling Stop, since a missing audit row is what would otherwise let the
+// cooldown guard miss this attempt and loop forever.
+//
+// SQLite's query_only pragma is used to force the write to fail while reads
+// (LastAuditAt, settings lookups) keep succeeding. This matters: closing the
+// whole store connection (the technique used by round-1's regression test)
+// also breaks LastAuditAt's read, which would trip the pre-existing "audit
+// lookup failed" guard a few lines earlier instead of exercising the write
+// failure this test targets — and OS-level file permissions don't reliably
+// force a write failure here because `go test` runs as root in the CI
+// container, which bypasses standard permission bits. query_only reproduces
+// the real SQLITE_FULL shape (reads still work, writes don't) without
+// either problem. e.store.DB() is the store package's existing test-only
+// accessor, already used the same way elsewhere in this package (see
+// trend_test.go).
+//
+// Because query_only blocks every write on this connection for the
+// remainder of the call — not just the one this test targets — the
+// auto_reclaim_failed alert that reclaimFailed raises also fails to persist
+// (an accurate reflection of a real SQLITE_FULL: the alert write would
+// likely fail for the same reason the audit write did, since it's the same
+// disk). What we can and do assert directly: zero Stop/Clear/Up calls, and
+// — via captured log output, since reclaimFailed logs unconditionally
+// before attempting any DB write — that the abort path actually ran with
+// its distinguishing message, not the pre-existing "audit lookup failed"
+// early return.
+func TestTryReclaim_AuditWriteFailureAbortsBeforeStop(t *testing.T) {
+	e, mock := newReclaimTestEngine(t, 950*1024*1024, "running", true, true)
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	if _, err := e.store.DB().Exec("PRAGMA query_only = ON"); err != nil {
+		t.Fatalf("set query_only: %v", err)
+	}
+	t.Cleanup(func() { _, _ = e.store.DB().Exec("PRAGMA query_only = OFF") })
+
+	waitReclaim(t, e)
+
+	stop, clear, up := mock.counts()
+	if stop != 0 || clear != 0 || up != 0 {
+		t.Fatalf("expected zero agent mutations when the audit write fails, got stop=%d clear=%d up=%d", stop, clear, up)
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "could not record the reclaim attempt") {
+		t.Fatalf("expected log evidence the write-failure abort path ran (not the earlier audit-lookup guard), got: %s", logged)
+	}
+	if strings.Contains(logged, "audit lookup failed") {
+		t.Fatalf("hit the pre-existing LastAuditAt read-failure guard instead of the write-failure path under test: %s", logged)
+	}
+	if !strings.Contains(logged, "auto-reclaim failed") {
+		t.Fatalf("expected the alert-raising log line to have run, got: %s", logged)
 	}
 }
