@@ -173,6 +173,41 @@ func (s *Store) LastAuditAt(action, target string) (time.Time, bool, error) {
 	return ts.UTC(), true, nil
 }
 
+// LastAuditID returns the rowid of the most recent audit_log entry for the
+// given target whose action is any of actions. The bool is false when no such
+// entry exists.
+//
+// This exists alongside LastAuditAt because audit_log.timestamp has
+// one-second resolution: two rows written inside the same second carry
+// identical timestamps, so "did B happen after A?" cannot be answered by
+// comparing them. id is the table's INTEGER PRIMARY KEY and therefore
+// strictly increasing, which makes it the only reliable ordering key for
+// sequence questions. LastAuditAt is still the right tool for age/cooldown
+// questions and is unchanged.
+func (s *Store) LastAuditID(target string, actions ...string) (int64, bool, error) {
+	if len(actions) == 0 {
+		return 0, false, nil
+	}
+	args := make([]interface{}, 0, len(actions)+1)
+	for _, a := range actions {
+		args = append(args, a)
+	}
+	args = append(args, target)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(actions)), ",")
+
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM audit_log WHERE action IN (`+placeholders+`) AND target = ?
+		 ORDER BY id DESC LIMIT 1`, args...).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
 type AuditEntry struct {
 	ID        int64  `json:"id"`
 	Timestamp string `json:"timestamp"`
