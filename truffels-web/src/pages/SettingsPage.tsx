@@ -483,11 +483,14 @@ function AlertsTab({ settings, saving, onSave }: {
             </div>
           </div>
         </div>
+        {warnMb >= criticalMb && (
+          <p className="text-sm text-yellow-400 mt-3">Warning threshold should be lower than critical threshold.</p>
+        )}
       </Card>
 
       <div className="flex justify-end">
         <button
-          disabled={!changed || saving || tempWarning >= tempCritical}
+          disabled={!changed || saving || tempWarning >= tempCritical || warnMb >= criticalMb}
           onClick={() => onSave({
             temp_warning: tempWarning,
             temp_critical: tempCritical,
