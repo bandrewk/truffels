@@ -30,6 +30,10 @@ var settingsDefaults = map[string]string{
 	"trend_alert_lookback_hours":     "6",
 	"trend_alert_min_data_hours":     "2",
 	"allow_downgrade":                "false",
+	"dir_size_warning_mb":                     "700",
+	"dir_size_critical_mb":                    "900",
+	"dir_size_autoreclaim_enabled":            "true",
+	"dir_size_autoreclaim_min_interval_hours": "24",
 }
 
 type settingsResponse struct {
@@ -52,6 +56,10 @@ type settingsResponse struct {
 	TrendAlertLookbackHours  int     `json:"trend_alert_lookback_hours"`
 	TrendAlertMinDataHours   int     `json:"trend_alert_min_data_hours"`
 	AllowDowngrade           bool    `json:"allow_downgrade"`
+	DirSizeWarningMB                   int  `json:"dir_size_warning_mb"`
+	DirSizeCriticalMB                  int  `json:"dir_size_critical_mb"`
+	DirSizeAutoreclaimEnabled          bool `json:"dir_size_autoreclaim_enabled"`
+	DirSizeAutoreclaimMinIntervalHours int  `json:"dir_size_autoreclaim_min_interval_hours"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +83,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		TrendAlertLookbackHours:  s.getSettingInt("trend_alert_lookback_hours", 6),
 		TrendAlertMinDataHours:   s.getSettingInt("trend_alert_min_data_hours", 2),
 		AllowDowngrade:           s.getSettingStr("allow_downgrade", "false") == "true",
+		DirSizeWarningMB:                   s.getSettingInt("dir_size_warning_mb", 700),
+		DirSizeCriticalMB:                  s.getSettingInt("dir_size_critical_mb", 900),
+		DirSizeAutoreclaimEnabled:          s.getSettingStr("dir_size_autoreclaim_enabled", "true") == "true",
+		DirSizeAutoreclaimMinIntervalHours: s.getSettingInt("dir_size_autoreclaim_min_interval_hours", 24),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -83,6 +95,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var body map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	// Validate the dir_size_* settings before writing anything. These drive
+	// the unattended stop/clear/restart auto-reclaim behaviour, so a bad
+	// value (e.g. dir_size_critical_mb = 0) has real consequences — see
+	// task-3b brief. This pass must complete before the first SetSetting
+	// call below for any of these keys.
+	if msg := s.validateDirSizeSettings(body); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -424,6 +446,72 @@ func (s *Server) handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 
 	_ = s.store.LogAudit("system_tuning", "", "Tuning: "+body.Action+"="+body.Value, r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// validateDirSizeSettings validates the dir_size_* keys in an incoming PUT
+// body, if present. It returns a non-empty error message (naming the
+// offending key) if validation fails, or "" if the request is valid.
+//
+// The two thresholds are compared as "effective" values: the value in this
+// request if the key is present, otherwise the value currently stored (or
+// its default). A PUT may carry only one of the two thresholds, so
+// validating the request body in isolation is not enough to catch e.g.
+// dir_size_warning_mb raised above an unrelated, already-stored critical
+// value.
+func (s *Server) validateDirSizeSettings(body map[string]json.RawMessage) string {
+	if raw, ok := body["dir_size_critical_mb"]; ok {
+		n, valid := parseIntFromRaw(raw)
+		if !valid || n < 1 {
+			return "dir_size_critical_mb must be an integer >= 1"
+		}
+	}
+	if raw, ok := body["dir_size_warning_mb"]; ok {
+		n, valid := parseIntFromRaw(raw)
+		if !valid || n < 1 {
+			return "dir_size_warning_mb must be an integer >= 1"
+		}
+	}
+	if raw, ok := body["dir_size_autoreclaim_min_interval_hours"]; ok {
+		n, valid := parseIntFromRaw(raw)
+		if !valid || n < 1 {
+			return "dir_size_autoreclaim_min_interval_hours must be an integer >= 1"
+		}
+	}
+
+	warningRaw, warningPresent := body["dir_size_warning_mb"]
+	criticalRaw, criticalPresent := body["dir_size_critical_mb"]
+	if warningPresent || criticalPresent {
+		effectiveWarning := s.getSettingInt("dir_size_warning_mb", 700)
+		if warningPresent {
+			effectiveWarning, _ = parseIntFromRaw(warningRaw)
+		}
+		effectiveCritical := s.getSettingInt("dir_size_critical_mb", 900)
+		if criticalPresent {
+			effectiveCritical, _ = parseIntFromRaw(criticalRaw)
+		}
+		if effectiveWarning >= effectiveCritical {
+			return "dir_size_warning_mb must be strictly less than dir_size_critical_mb"
+		}
+	}
+
+	return ""
+}
+
+// parseIntFromRaw extracts an int from a raw JSON value that may be encoded
+// as a JSON number or as a numeric string (handleUpdateSettings accepts
+// both). Returns ok=false if the value can't be parsed as an integer.
+func parseIntFromRaw(raw json.RawMessage) (n int, ok bool) {
+	var num float64
+	if err := json.Unmarshal(raw, &num); err == nil {
+		return int(num), true
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		if v, err := strconv.Atoi(str); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 func (s *Server) getSettingStr(key, def string) string {
