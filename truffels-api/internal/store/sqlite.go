@@ -129,10 +129,25 @@ func (s *Store) LogAudit(action, target, detail, ip string) error {
 	return err
 }
 
-// GetAuditLog returns recent audit entries.
+// GetAuditLog returns recent audit entries, newest first.
 func (s *Store) GetAuditLog(limit int) ([]AuditEntry, error) {
-	rows, err := s.db.Query(
-		`SELECT id, timestamp, action, target, detail, ip FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
+	return scanAuditRows(s.db.Query(
+		`SELECT id, timestamp, action, target, detail, ip FROM audit_log
+		 ORDER BY id DESC LIMIT ?`, limit))
+}
+
+// GetAuditLogByAction returns recent audit entries for one action, newest
+// first. Server-side filtering exists so a caller that only cares about a
+// rare action (auto_reclaim fires roughly weekly) does not have to page the
+// whole log to find it — unfiltered, a handful of logins and service actions
+// pushes it off the end of any sane page size.
+func (s *Store) GetAuditLogByAction(action string, limit int) ([]AuditEntry, error) {
+	return scanAuditRows(s.db.Query(
+		`SELECT id, timestamp, action, target, detail, ip FROM audit_log
+		 WHERE action = ? ORDER BY id DESC LIMIT ?`, action, limit))
+}
+
+func scanAuditRows(rows *sql.Rows, err error) ([]AuditEntry, error) {
 	if err != nil {
 		return nil, err
 	}

@@ -427,6 +427,64 @@ func TestHandleAuditLog(t *testing.T) {
 	}
 }
 
+// TestHandleAuditLog_LimitAndActionFilter covers the two query parameters the
+// handler used to ignore. The client sent ?limit= and got a hardcoded 100
+// rows back, then scanned that unfiltered page for a single rare action —
+// which quietly stopped being present once 100 logins and service actions had
+// accumulated ahead of it.
+func TestHandleAuditLog_LimitAndActionFilter(t *testing.T) {
+	srv, st := newTestServer(t)
+	for i := 0; i < 5; i++ {
+		_ = st.LogAudit("noise", "", "", "")
+	}
+	_ = st.LogAudit("auto_reclaim", "mempool", "attempting", "")
+	for i := 0; i < 5; i++ {
+		_ = st.LogAudit("noise", "", "", "")
+	}
+
+	get := func(query string) []map[string]interface{} {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := authenticatedRequest(t, srv, "GET", "/api/truffels/audit"+query, "")
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("GET %s: expected 200, got %d: %s", query, w.Code, w.Body.String())
+		}
+		var entries []map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return entries
+	}
+
+	// limit is honoured, not ignored.
+	if entries := get("?limit=3"); len(entries) != 3 {
+		t.Fatalf("expected 3 entries with ?limit=3, got %d", len(entries))
+	}
+
+	// The action filter reaches past the noise that would bury the row.
+	entries := get("?limit=1&action=auto_reclaim")
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 auto_reclaim entry, got %d", len(entries))
+	}
+	if entries[0]["action"] != "auto_reclaim" {
+		t.Fatalf("expected the auto_reclaim row, got %v", entries[0]["action"])
+	}
+
+	// No parameters keeps the previous behaviour for existing callers.
+	if entries := get(""); len(entries) < 11 {
+		t.Fatalf("unfiltered default must still return the whole recent log, got %d", len(entries))
+	}
+
+	// A nonsensical limit is rejected rather than silently reinterpreted.
+	w := httptest.NewRecorder()
+	req := authenticatedRequest(t, srv, "GET", "/api/truffels/audit?limit=0", "")
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for ?limit=0, got %d", w.Code)
+	}
+}
+
 // --- System Restart / Shutdown ---
 
 func TestSystemRestart_WrongPassword(t *testing.T) {
