@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"truffels-api/internal/docker"
@@ -45,6 +46,21 @@ type Engine struct {
 	// detected from RestartCount deltas because the engine had no prior
 	// baseline.
 	containerStartedAt map[string]time.Time
+
+	// reclaiming guards tryReclaim so at most one stop/clear/start cycle
+	// runs at a time. tryReclaim runs on its own goroutine because each
+	// ComposeClient call (Stop/FsClearDir/Up) can take up to the agent's
+	// 6-minute HTTP timeout — up to four such calls back to back would
+	// otherwise stall this engine's single evaluate() goroutine for ~24
+	// minutes, during which no other alert (temperature, disk, container
+	// health, restart-loop) would be checked and no metric snapshot would
+	// be written.
+	reclaiming atomic.Bool
+
+	// reclaimDone, when non-nil, receives one value after each tryReclaim
+	// goroutine finishes. Test-only synchronization hook so tests can wait
+	// for the goroutine instead of sleeping; production code never sets it.
+	reclaimDone chan struct{}
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compose *docker.ComposeClient) *Engine {
@@ -251,19 +267,36 @@ func (e *Engine) evalWatchedDirs() {
 		}
 
 		if size >= criticalBytes {
-			e.tryReclaim(w, size)
+			if e.reclaiming.CompareAndSwap(false, true) {
+				go func(w watchedDir, size, criticalBytes int64) {
+					defer func() {
+						e.reclaiming.Store(false)
+						if e.reclaimDone != nil {
+							e.reclaimDone <- struct{}{}
+						}
+					}()
+					e.tryReclaim(w, size, criticalBytes)
+				}(w, size, criticalBytes)
+			} else {
+				slog.Debug("auto-reclaim: previous attempt still running, skipping this tick",
+					"service", w.serviceID)
+			}
 		}
 	}
 }
 
 // tryReclaim executes the stop → clear → start cycle the dir_size_critical
-// alert prescribes, once every guardrail in decideReclaim passes.
+// alert prescribes, once every guardrail in decideReclaim passes. Called on
+// its own goroutine (see evalWatchedDirs) — never called concurrently with
+// itself because of the e.reclaiming CAS guard, but still runs concurrently
+// with the rest of the engine's evaluate() loop, so it must not touch any of
+// the Engine's maps.
 //
 // It resolves the target through the service template's DataDirs rather than
 // trusting w.path directly: a directory that is not declared Clearable and
 // RequiresStop cannot be reached from here, so entries like mempool/mysql are
 // structurally out of range.
-func (e *Engine) tryReclaim(w watchedDir, size int64) {
+func (e *Engine) tryReclaim(w watchedDir, size, criticalBytes int64) {
 	tmpl, ok := e.registry.Get(w.serviceID)
 	if !ok {
 		return
@@ -298,7 +331,7 @@ func (e *Engine) tryReclaim(w watchedDir, size int64) {
 
 	decision := decideReclaim(reclaimInput{
 		SizeBytes:          size,
-		CriticalBytes:      int64(e.getSettingInt(w.criticalKey, 900)) * 1024 * 1024,
+		CriticalBytes:      criticalBytes,
 		Enabled:            e.getSettingStr("dir_size_autoreclaim_enabled", "true") == "true",
 		MinInterval:        time.Duration(e.getSettingInt("dir_size_autoreclaim_min_interval_hours", 24)) * time.Hour,
 		LastReclaim:        last,
@@ -314,45 +347,73 @@ func (e *Engine) tryReclaim(w watchedDir, size int64) {
 	}
 
 	mb := size / (1024 * 1024)
-	slog.Info("auto-reclaim starting", "service", w.serviceID, "path", w.path, "size_mb", mb)
+
+	// Log the attempt BEFORE touching the service, not on success. The 24h
+	// cooldown above is enforced by decideReclaim reading this exact row
+	// back via LastAuditAt("auto_reclaim", serviceID) on the next tick. If
+	// this were only written after a successful Up, a persistent failure
+	// (e.g. clear-dir erroring every time) would leave no row for
+	// LastAuditAt to find, decideReclaim would never see a prior attempt,
+	// and the engine would stop and restart the service on every 30s tick
+	// forever. Writing it here also makes the sequence crash-safe: if
+	// truffels-api restarts between Stop and Up, the attempt is already on
+	// record and won't be repeated within the cooldown window.
+	_ = e.store.LogAudit("auto_reclaim", w.serviceID,
+		fmt.Sprintf("attempting to clear %s (%d MB) and restart the service", target.Path, mb), "")
+
+	slog.Info("auto-reclaim starting", "service", w.serviceID, "path", target.Path, "size_mb", mb)
 
 	if err := e.compose.Stop(w.serviceID); err != nil {
-		e.reclaimFailed(w, "stop failed: "+err.Error())
+		// A Stop-request timeout can still have taken effect on the agent
+		// side, so we can't assert the service is still running here —
+		// treat it as possibly down.
+		e.reclaimFailed(w, true, "stop failed: "+err.Error())
 		return
 	}
-	if err := e.compose.FsClearDir(w.path, 1000, 1000, "0755"); err != nil {
+	if err := e.compose.FsClearDir(target.Path, 1000, 1000, "0755"); err != nil {
 		// Bring the service back before reporting — a stopped service is
 		// worse than a full cache.
 		if upErr := e.compose.Up(w.serviceID); upErr != nil {
-			slog.Error("auto-reclaim: restart after failed clear also failed",
-				"service", w.serviceID, "err", upErr)
+			e.reclaimFailed(w, true, fmt.Sprintf(
+				"clear-dir failed: %s; restart after failed clear also failed: %s", err.Error(), upErr.Error()))
+			return
 		}
-		e.reclaimFailed(w, "clear-dir failed: "+err.Error())
+		e.reclaimFailed(w, false, "clear-dir failed: "+err.Error())
 		return
 	}
 	if err := e.compose.Up(w.serviceID); err != nil {
 		// One retry: this is the dangerous state, the service is down.
 		if err2 := e.compose.Up(w.serviceID); err2 != nil {
-			e.reclaimFailed(w, "service did not restart after clear: "+err2.Error())
+			e.reclaimFailed(w, true, "service did not restart after clear: "+err2.Error())
 			return
 		}
 	}
 
-	_ = e.store.LogAudit("auto_reclaim", w.serviceID,
-		fmt.Sprintf("cleared %s (%d MB) and restarted the service", w.path, mb), "")
 	e.resolve("auto_reclaim_failed", w.serviceID)
 	slog.Info("auto-reclaim complete", "service", w.serviceID, "reclaimed_mb", mb)
 }
 
 // reclaimFailed raises a critical alert and writes the failure to the audit
-// log. Deliberately no automatic retry: a repeated stop/start loop is worse
-// than an oversized cache.
-func (e *Engine) reclaimFailed(w watchedDir, detail string) {
-	slog.Error("auto-reclaim failed", "service", w.serviceID, "detail", detail)
+// log. There is no in-process retry here — the "auto_reclaim" audit row
+// tryReclaim writes before it ever touches the service is what stops a
+// repeated stop/start loop, by consuming the cooldown decideReclaim checks
+// on the next tick regardless of whether this attempt succeeded.
+//
+// serviceMayBeDown selects the remediation text: several failure paths
+// leave the service stopped (or in an unknown state after a Stop timeout),
+// and telling the operator to "clear manually" without mentioning that is
+// misleading — they need to start the service first.
+func (e *Engine) reclaimFailed(w watchedDir, serviceMayBeDown bool, detail string) {
+	slog.Error("auto-reclaim failed", "service", w.serviceID, "detail", detail, "service_may_be_down", serviceMayBeDown)
 	_ = e.store.LogAudit("auto_reclaim_failed", w.serviceID, detail, "")
+
+	remediation := "clear it manually via Settings → Data Dirs"
+	if serviceMayBeDown {
+		remediation = "the service may be stopped — check its status in Services and start it, then clear the cache manually via Settings → Data Dirs if it's still oversized"
+	}
 	e.upsert("auto_reclaim_failed", w.serviceID, model.SeverityCritical,
-		"automatic %s reclaim failed: %s — clear it manually via Settings → Data Dirs",
-		w.humanLabel, detail)
+		"automatic %s reclaim failed: %s — %s",
+		w.humanLabel, detail, remediation)
 }
 
 func (e *Engine) checkDisk(disk model.DiskUsage) {
