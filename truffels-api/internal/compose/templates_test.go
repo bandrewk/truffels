@@ -67,6 +67,18 @@ func TestRender_Mempool(t *testing.T) {
 		t.Error("boot guard must exec /backend/start.sh, not node directly")
 	}
 	assertContains(t, got, "rm -f /backend/cache/.starting")
+	// The healthcheck's exit status must reflect wget alone, not wget-&& rm.
+	// Capture the real status before cleanup so a failed rm (e.g. read-only or
+	// mis-owned cache dir) can never flip a passing check to failing.
+	// $$ (not $) because this is a docker-compose file: compose interpolates
+	// bare $VAR/$? itself, so a literal $ must be written as $$ in the
+	// template or compose silently blanks "rc" and mangles "$?" before the
+	// shell ever sees it — asserting the doubled form pins that behavior.
+	assertContains(t, got, "rc=$$?")
+	assertContains(t, got, "exit $$rc")
+	if strings.Contains(got, "&& rm -f /backend/cache/.starting || exit 1") {
+		t.Error("healthcheck must not couple rm's exit status to service health")
+	}
 }
 
 func TestRender_Ckstats(t *testing.T) {
