@@ -445,7 +445,9 @@ function AlertsTab({ settings, saving, onSave }: {
           about 60 seconds, during which the statistics charts have a gap. Without
           it the cache keeps growing until the backend runs out of heap.
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-lg">
+        {/* items-end keeps the inputs on one line even if a label wraps on a
+            narrow viewport — otherwise the taller cell drags the row apart. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-lg items-end">
           <div>
             <label className="block text-sm text-gray-300 mb-1">Warning threshold</label>
             <div className="flex items-center gap-2">
@@ -471,7 +473,7 @@ function AlertsTab({ settings, saving, onSave }: {
             </div>
           </div>
           <div>
-            <label className="block text-sm text-gray-300 mb-1">Min interval between reclaims</label>
+            <label className="block text-sm text-gray-300 mb-1">Min. interval</label>
             <div className="flex items-center gap-2">
               <input
                 type="number" min={1} step={1}
