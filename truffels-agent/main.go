@@ -1597,12 +1597,22 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
-// allowedRepoDir is the mounted project repo path inside the container.
-const allowedRepoDir = "/repo"
+// allowedRepoDirs are the only directories git operations may touch. Exact
+// string match only — no prefix matching, no path cleaning. A cleaned path
+// would let "/repo/../etc" normalise into something that passes.
+var allowedRepoDirs = map[string]bool{
+	"/repo":                          true,
+	"/srv/truffels/data/ckpoolstats": true,
+}
+
+func isAllowedRepoDir(dir string) bool {
+	return allowedRepoDirs[dir]
+}
 
 type gitCheckoutRequest struct {
-	RepoDir string `json:"repo_dir"`
-	Tag     string `json:"tag"`
+	RepoDir   string `json:"repo_dir"`
+	Tag       string `json:"tag"`
+	RefScheme string `json:"ref_scheme,omitempty"`
 }
 
 func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
@@ -1612,8 +1622,8 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate repo_dir is the allowed path
-	if req.RepoDir != allowedRepoDir {
+	// Validate repo_dir is one of the allowed paths
+	if !isAllowedRepoDir(req.RepoDir) {
 		writeJSON(w, 403, map[string]string{"error": "repo_dir not allowed"})
 		return
 	}
@@ -1621,9 +1631,14 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "tag required"})
 		return
 	}
-	// Validate tag format (must start with v and contain only semver chars)
-	if !isValidTag(req.Tag) {
-		writeJSON(w, 400, map[string]string{"error": "invalid tag format"})
+	// ref_scheme selects the validator. Absent means tag — the self-update
+	// path predates this field and must keep its stricter check.
+	valid := isValidTag(req.Tag)
+	if req.RefScheme == "commit" {
+		valid = isValidCommitHash(req.Tag)
+	}
+	if !valid {
+		writeJSON(w, 400, map[string]string{"error": "invalid ref format"})
 		return
 	}
 
@@ -1661,6 +1676,21 @@ func isValidTag(tag string) bool {
 	}
 	for _, c := range tag[1:] {
 		if c != '.' && c != '-' && (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// isValidCommitHash accepts abbreviated and full git object names: lowercase
+// hex, 7 to 40 characters. Deliberately separate from isValidTag so loosening
+// one cannot weaken the other.
+func isValidCommitHash(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

@@ -734,7 +734,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 
 	// Step 1: Git checkout the new tag
 	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
-	if err := e.compose.GitCheckout("/repo", check.LatestVersion); err != nil {
+	if err := e.compose.GitCheckout("/repo", check.LatestVersion, model.RefSchemeTag); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
 		return &UpdateError{Msg: "git checkout failed: " + err.Error()}

@@ -317,10 +317,13 @@ func (c *ComposeClient) SystemTuningSet(action, value string) error {
 	return nil
 }
 
-// GitCheckout tells the agent to fetch tags and checkout a specific git tag.
-func (c *ComposeClient) GitCheckout(repoDir, tag string) error {
-	body, _ := json.Marshal(map[string]string{"repo_dir": repoDir, "tag": tag})
-	slog.Info("agent git checkout", "repo", repoDir, "tag", tag)
+// GitCheckout tells the agent to fetch and checkout a specific ref.
+// refScheme is "tag" or "commit"; empty means tag.
+func (c *ComposeClient) GitCheckout(repoDir, ref, refScheme string) error {
+	body, _ := json.Marshal(map[string]string{
+		"repo_dir": repoDir, "tag": ref, "ref_scheme": refScheme,
+	})
+	slog.Info("agent git checkout", "repo", repoDir, "ref", ref, "scheme", refScheme)
 
 	resp, err := c.httpClient.Post(c.agentURL+"/v1/git/checkout", "application/json", bytes.NewReader(body))
 	if err != nil {

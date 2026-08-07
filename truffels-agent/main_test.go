@@ -996,6 +996,70 @@ func TestIsValidTag(t *testing.T) {
 	}
 }
 
+func TestIsValidCommitHash(t *testing.T) {
+	valid := []string{
+		"4bccedb",
+		"dbd39954",
+		"4bccedb1234567890abcdef1234567890abcdef1",
+	}
+	for _, s := range valid {
+		if !isValidCommitHash(s) {
+			t.Errorf("isValidCommitHash(%q) = false, want true", s)
+		}
+	}
+
+	invalid := []string{
+		"",                                          // leer
+		"4bcced",                                    // 6 Zeichen, zu kurz
+		"4bccedb1234567890abcdef1234567890abcdef12", // 41 Zeichen, zu lang
+		"4BCCEDB",                                   // Großbuchstaben
+		"v1.2.0",                                    // Tag, kein Hash
+		"4bccedb; rm -rf /",                         // Shell-Metazeichen
+		"../../../etc/passwd",                       // Pfad-Traversal
+		"4bccedb\n--upload-pack=evil",               // Newline-Injection
+		"-4bccedb",                                  // führender Bindestrich, sieht wie ein Flag aus
+	}
+	for _, s := range invalid {
+		if isValidCommitHash(s) {
+			t.Errorf("isValidCommitHash(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestAllowedRepoDirsRejectsTraversal(t *testing.T) {
+	allowed := []string{"/repo", "/srv/truffels/data/ckpoolstats"}
+	for _, d := range allowed {
+		if !isAllowedRepoDir(d) {
+			t.Errorf("isAllowedRepoDir(%q) = false, want true", d)
+		}
+	}
+
+	rejected := []string{
+		"/repo/../etc",
+		"/srv/truffels/data/ckpoolstats/../../secrets",
+		"/srv/truffels/secrets",
+		"/repo/",
+		"",
+		"/",
+	}
+	for _, d := range rejected {
+		if isAllowedRepoDir(d) {
+			t.Errorf("isAllowedRepoDir(%q) = true, want false", d)
+		}
+	}
+}
+
+func TestIsValidTagStillRejectsCommitHashes(t *testing.T) {
+	// isValidTag darf durch diese Änderung nicht aufgeweicht werden —
+	// der Self-Update-Pfad hängt daran.
+	if isValidTag("4bccedb") {
+		t.Error("isValidTag must keep rejecting bare commit hashes")
+	}
+	if !isValidTag("v0.3.1-dev.23") {
+		t.Error("isValidTag must keep accepting dev tags")
+	}
+}
+
 // --- handleComposeUpDetached ---
 
 func TestHandleComposeUpDetached_InvalidService(t *testing.T) {
