@@ -1,7 +1,9 @@
 # ckpool v1.0.0 — multi-stage build for arm64
+ARG SOURCE_REF=v1.0.0
+
 FROM debian:bookworm-slim AS builder
 
-ARG SOURCE_REF=v1.0.0
+ARG SOURCE_REF
 
 # retry() wraps a command in 4 attempts with 10/30/60s backoff so a transient
 # flake on deb.debian.org or bitbucket.org doesn't kill the whole build.
