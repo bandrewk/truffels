@@ -43,9 +43,10 @@ type agentResponse struct {
 }
 
 type ImageInfo struct {
-	Image  string   `json:"image"`
-	Digest string   `json:"digest"`
-	Tags   []string `json:"tags"`
+	Image  string            `json:"image"`
+	Digest string            `json:"digest"`
+	Tags   []string          `json:"tags"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func (c *ComposeClient) Up(serviceID string) error {

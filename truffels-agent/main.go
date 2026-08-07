@@ -574,10 +574,11 @@ type imageInspectRequest struct {
 	Container string `json:"container"`
 }
 
-type imageInspectResult struct {
-	Image   string   `json:"image"`
-	Digest  string   `json:"digest"`
-	Tags    []string `json:"tags"`
+type imageInspectResponse struct {
+	Image  string            `json:"image"`
+	Digest string            `json:"digest"`
+	Tags   []string          `json:"tags"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func handleImageInspect(w http.ResponseWriter, r *http.Request) {
@@ -631,10 +632,21 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
 	}
 
-	writeJSON(w, 200, imageInspectResult{
+	// Get labels — carries org.truffels.source-ref, the ref the image was built from.
+	cmd4 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+		"{{json .Config.Labels}}", imageName)
+	var labelsOut bytes.Buffer
+	cmd4.Stdout = &labelsOut
+	labels := map[string]string{}
+	if cmd4.Run() == nil {
+		_ = json.Unmarshal(bytes.TrimSpace(labelsOut.Bytes()), &labels)
+	}
+
+	writeJSON(w, 200, imageInspectResponse{
 		Image:  imageName,
 		Digest: digest,
 		Tags:   tags,
+		Labels: labels,
 	})
 }
 

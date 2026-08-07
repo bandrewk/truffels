@@ -2160,3 +2160,22 @@ func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
 		t.Errorf("walked was %v ago, expected >1h", time.Since(walked))
 	}
 }
+
+func TestImageInspectResponseCarriesLabels(t *testing.T) {
+	// Die Response-Struktur muss ein labels-Feld serialisieren, sonst kann
+	// die API die gebaute Ref nicht zurücklesen.
+	resp := imageInspectResponse{
+		Image:  "truffels/ckpool:latest",
+		Labels: map[string]string{"org.truffels.source-ref": "v1.2.0"},
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"labels"`) {
+		t.Errorf("response JSON lacks labels field: %s", b)
+	}
+	if !strings.Contains(string(b), "org.truffels.source-ref") {
+		t.Errorf("response JSON lacks the source-ref label: %s", b)
+	}
+}
