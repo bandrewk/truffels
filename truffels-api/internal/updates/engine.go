@@ -1133,9 +1133,56 @@ func selfUpdateImage(images []string, svc string) (string, bool) {
 	return "", false
 }
 
+// restoreSelfComposeTags puts the pre-update image tags back after the stack
+// refused to go through with an update, and returns a suffix for the failure
+// message when it could not.
+//
+// Step 2 moves the compose file onto the new version before anything is built,
+// so every refusal after it leaves the file naming images that were just
+// rejected. Nothing restarts on its own, but the next `docker compose up` from
+// any source — the services API, the compose reconciler, a human — takes the
+// file at its word. All three services carry a build: block, so compose would
+// then build the missing image itself, without the VERSION arg, and stamp the
+// Dockerfile default "dev" into the label: the update refused, and the stack
+// silently ends up on an unidentifiable build anyway. Putting the tag back is
+// what keeps a refusal a refusal. The agent's rewrite also resets the
+// build.args.VERSION line, which step 2 moved for the same reason.
+//
+// This is deliberately not applyNeedsBuild's restoreComposeTag. That one
+// re-reads the single ref a custom-built service runs out of the compose file,
+// because there the pre-build rewrite is best-effort and only warns, so what
+// the file says afterwards is genuinely unknown. Here the rewrite is fatal on
+// failure — getting this far means the file really did move — the version to go
+// back to is the one the check row already holds, and three images move as a
+// set. The shared residue is a single RewriteTags call; parameterising one
+// helper for both would cost more than it saves and would mean reopening a path
+// that has shipped since dev.24.
+func (e *Engine) restoreSelfComposeTags(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck) string {
+	if check.CurrentVersion == "" {
+		// checkService leaves this empty when it cannot identify what runs. We
+		// have no tag to write back and must not invent one — say so instead of
+		// leaving the file quietly naming the rejected version.
+		slog.Error("cannot restore the compose image tags: the previous version is unknown",
+			"service", serviceID, "rejected", check.LatestVersion)
+		return fmt.Sprintf("; the compose file still names %s and the previous version is unknown — set the image tags by hand before restarting the stack", check.LatestVersion)
+	}
+	if check.CurrentVersion == check.LatestVersion {
+		return ""
+	}
+	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, check.LatestVersion, check.CurrentVersion); err != nil {
+		slog.Error("could not put the compose image tags back after a refused self-update",
+			"service", serviceID, "rejected", check.LatestVersion, "want", check.CurrentVersion, "err", err)
+		return fmt.Sprintf("; the compose file still names %s — restore the image tags to %q before restarting the stack", check.LatestVersion, check.CurrentVersion)
+	}
+	slog.Info("self-update refused; compose image tags restored",
+		"service", serviceID, "version", check.CurrentVersion)
+	return ""
+}
+
 // verifySelfBuild proves that the image just built for one component of the
-// truffels stack really carries the version that was requested, and fails the
-// update if it does not.
+// truffels stack really carries the version that was requested, and reports an
+// error describing the mismatch if it does not. The caller turns that into the
+// failure — it owns the update log, the alert and putting the compose tag back.
 //
 // The build.args.VERSION block in the compose template is what carries the
 // version into the binary's ldflag and into the image's OCI version label — but
@@ -1153,16 +1200,10 @@ func selfUpdateImage(images []string, svc string) (string, bool) {
 // is staged under a :rollback tag for the truffels stack either, so afterwards
 // there is nothing to undo it with. Refusing here leaves the old containers
 // running and untouched.
-func (e *Engine) verifySelfBuild(serviceID string, tmpl model.ServiceTemplate, svc, wantVersion string, logID int64) error {
-	fail := func(msg string) error {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-		e.alertUpdateFailed(serviceID, msg)
-		return &UpdateError{Msg: msg}
-	}
-
+func (e *Engine) verifySelfBuild(tmpl model.ServiceTemplate, svc, wantVersion string) error {
 	img, ok := selfUpdateImage(tmpl.UpdateSource.Images, svc)
 	if !ok {
-		return fail(fmt.Sprintf("cannot verify the %s build: the update source declares no image for it", svc))
+		return fmt.Errorf("cannot verify the %s build: the update source declares no image for it", svc)
 	}
 	// Step 2 rewrote the compose tags to the new version before the build, so
 	// the image that was just built already answers to the new tag.
@@ -1170,7 +1211,7 @@ func (e *Engine) verifySelfBuild(serviceID string, tmpl model.ServiceTemplate, s
 
 	info, err := e.compose.ImageInspectByName(ref)
 	if err != nil {
-		return fail(fmt.Sprintf("cannot verify the %s build: %v", svc, err))
+		return fmt.Errorf("cannot verify the %s build: %w", svc, err)
 	}
 	// Trimmed for the comparison, so a padded label cannot fail a build that is
 	// in fact correct — and so whitespace alone still counts as absent below.
@@ -1183,11 +1224,11 @@ func (e *Engine) verifySelfBuild(serviceID string, tmpl model.ServiceTemplate, s
 		// cannot resolve. An absent label is not a matching label; treating
 		// empty as "close enough" is precisely the hole this check exists to
 		// close.
-		return fail(fmt.Sprintf("%s carries no %s label, so the %s build cannot be shown to be %s", ref, VersionLabel, svc, wantVersion))
+		return fmt.Errorf("%s carries no %s label, so the %s build cannot be shown to be %s", ref, VersionLabel, svc, wantVersion)
 	case built != wantVersion:
 		// Includes the "dev" the Dockerfiles default VERSION to, which is what
 		// a dropped build arg looks like from the outside.
-		return fail(fmt.Sprintf("%s was built as %q, not %q — refusing to restart into it", ref, built, wantVersion))
+		return fmt.Errorf("%s was built as %q, not %q — refusing to restart into it", ref, built, wantVersion)
 	}
 	return nil
 }
@@ -1225,16 +1266,25 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 
 	// Step 3: Build with VERSION arg — build each service sequentially to avoid
 	// I/O contention on slower storage (SD cards) causing TLS timeouts during go mod download.
+	//
+	// Every way out of this step puts the compose file back on the old version
+	// first: step 2 already moved it, and a file naming a version that was just
+	// rejected is a loaded gun for the next `up` from any source.
+	fail := func(msg string) error {
+		msg += e.restoreSelfComposeTags(serviceID, tmpl, check)
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+		e.alertUpdateFailed(serviceID, msg)
+		return &UpdateError{Msg: msg}
+	}
+
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
 	buildArgs := map[string]string{"VERSION": check.LatestVersion}
 	for _, svc := range []string{"agent", "api", "web"} {
 		if err := e.compose.BuildWithArgs("truffels-agent", buildArgs, svc); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed ("+svc+"): "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "build failed ("+svc+"): "+err.Error())
-			return &UpdateError{Msg: "build failed (" + svc + "): " + err.Error()}
+			return fail("build failed (" + svc + "): " + err.Error())
 		}
-		if err := e.verifySelfBuild(serviceID, tmpl, svc, check.LatestVersion, logID); err != nil {
-			return err
+		if err := e.verifySelfBuild(tmpl, svc, check.LatestVersion); err != nil {
+			return fail(err.Error())
 		}
 	}
 

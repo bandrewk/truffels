@@ -41,6 +41,10 @@ type mockAgentOpts struct {
 	// labelling stage looks from here.
 	labelsByRef map[string]map[string]string
 	detached    *callCounter // counts /v1/compose/up-detached calls when set
+	// rewriteFailFrom makes /v1/compose/rewrite-tags fail from the Nth call on
+	// (1-based, 0 = never). Step 2 of the self-update is call 1 and the restore
+	// after a refusal is call 2, so this can break the restore alone.
+	rewriteFailFrom int
 }
 
 // callCounter counts handler hits from the httptest server goroutine.
@@ -861,6 +865,7 @@ func TestApplyUpdate_CreatesConfigSnapshot(t *testing.T) {
 // --- Self-update (github_release) ---
 
 func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
+	rewrites := &callCounter{}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/git/checkout":
@@ -889,12 +894,22 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 				NewTag    string   `json:"new_tag"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			rewrites.inc()
+			if opts.rewriteFailFrom > 0 && rewrites.count() >= opts.rewriteFailFrom {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "write compose file: read-only file system"})
+				return
+			}
 			if dir, ok := opts.composeDirs[req.ServiceID]; ok {
 				composePath := filepath.Join(dir, "docker-compose.yml")
 				data, _ := os.ReadFile(composePath)
 				content := string(data)
 				for _, img := range req.Images {
-					pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+					// handleComposeRewriteTags ignores old_tag and replaces
+					// whatever tag is on the line. Mirror that: step 2 of the
+					// self-update sends an empty old_tag, and a mock keyed on it
+					// would mangle the file instead of moving the tag.
+					pattern := fmt.Sprintf(`(image:\s*)%s:[^\s@]+(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img))
 					re, _ := regexp.Compile(pattern)
 					content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
 				}
@@ -990,6 +1005,27 @@ func writeSelfUpdateCompose(t *testing.T, dir, version string) string {
 	return composePath
 }
 
+// assertComposeTags fails unless all three services name exactly version, and
+// no other version is left anywhere in the file.
+func assertComposeTags(t *testing.T, composePath, version string) {
+	t.Helper()
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read compose: %v", err)
+	}
+	content := string(data)
+	for _, img := range []string{"truffels/agent", "truffels/api", "truffels/web"} {
+		want := img + ":" + version
+		if !strings.Contains(content, want) {
+			t.Errorf("expected %s in the compose file, got:\n%s", want, content)
+		}
+	}
+	// Catch a tag that was appended rather than replaced.
+	if n := strings.Count(content, ":"+version); n != 3 {
+		t.Errorf("expected exactly 3 image tags at %s, found %d:\n%s", version, n, content)
+	}
+}
+
 func TestApplySelfUpdate_Success(t *testing.T) {
 	cd := t.TempDir()
 	restarts := &callCounter{}
@@ -1017,18 +1053,9 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify compose file was rewritten for all three
-	data, _ := os.ReadFile(composePath)
-	content := string(data)
-	if !strings.Contains(content, "truffels/agent:v0.2.0") {
-		t.Error("expected agent image tag updated to v0.2.0")
-	}
-	if !strings.Contains(content, "truffels/api:v0.2.0") {
-		t.Error("expected api image tag updated to v0.2.0")
-	}
-	if !strings.Contains(content, "truffels/web:v0.2.0") {
-		t.Error("expected web image tag updated to v0.2.0")
-	}
+	// Verify compose file was rewritten for all three — and only rewritten,
+	// with no remnant of the old tag left behind.
+	assertComposeTags(t, composePath, "v0.2.0")
 
 	// Verify single update log is "restarting" (will be reconciled on startup)
 	logs, _ := st.GetUpdateLogs("truffels", 5)
@@ -1092,7 +1119,7 @@ func TestApplySelfUpdate_RefusesMisbuiltImages(t *testing.T) {
 			})
 			defer agent.Close()
 
-			writeSelfUpdateCompose(t, cd, "v0.1.0")
+			composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
 			eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
 
 			_ = st.UpsertUpdateCheck(&model.UpdateCheck{
@@ -1114,6 +1141,12 @@ func TestApplySelfUpdate_RefusesMisbuiltImages(t *testing.T) {
 			if restarts.count() != 0 {
 				t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
 			}
+
+			// Step 2 moved the compose file onto v0.2.0 before building. A
+			// refusal that leaves it there hands the rejected version to the
+			// next `up` from anywhere — and compose would build the missing
+			// image itself, without the VERSION arg.
+			assertComposeTags(t, composePath, "v0.1.0")
 
 			logs, _ := st.GetUpdateLogs("truffels", 5)
 			if len(logs) == 0 {
@@ -1137,6 +1170,110 @@ func TestApplySelfUpdate_RefusesMisbuiltImages(t *testing.T) {
 	}
 }
 
+// The build-failure path predates verifySelfBuild and left the same debris:
+// step 2 had already moved the compose file onto the version that then failed
+// to build.
+func TestApplySelfUpdate_BuildFailureRestoresComposeTag(t *testing.T) {
+	cd := t.TempDir()
+	restarts := &callCounter{}
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+		detached:    restarts,
+	})
+	defer agent.Close()
+
+	composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "build failed") {
+		t.Errorf("expected 'build failed' in error, got: %s", err)
+	}
+	assertComposeTags(t, composePath, "v0.1.0")
+	if restarts.count() != 0 {
+		t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
+	}
+}
+
+// When the compose file cannot be put back, the failure has to say so — a file
+// left naming a rejected version needs a human, and silence is how it stays
+// unnoticed until the next restart builds an unlabelled image over it.
+func TestApplySelfUpdate_RestoreFailureIsNamed(t *testing.T) {
+	cd := t.TempDir()
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+		// Call 1 is step 2's rewrite onto v0.2.0; call 2 is the restore.
+		rewriteFailFrom: 2,
+	})
+	defer agent.Close()
+
+	writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "still names v0.2.0") {
+		t.Errorf("expected the stranded compose file to be named in the error, got: %s", err)
+	}
+	if !strings.Contains(err.Error(), `restore the image tags to "v0.1.0"`) {
+		t.Errorf("expected the error to say what to restore, got: %s", err)
+	}
+	logs, _ := st.GetUpdateLogs("truffels", 5)
+	if len(logs) == 0 || !strings.Contains(logs[0].Error, "still names v0.2.0") {
+		t.Errorf("expected the update log to carry the same warning, got: %+v", logs)
+	}
+}
+
+// With no known previous version there is no tag to write back. Say that
+// instead of inventing one or leaving the file quietly on the rejected version.
+func TestApplySelfUpdate_UnknownPreviousVersionIsReported(t *testing.T) {
+	cd := t.TempDir()
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+	})
+	defer agent.Close()
+
+	writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "the previous version is unknown") {
+		t.Errorf("expected the unknown previous version to be reported, got: %s", err)
+	}
+}
+
 // A build that cannot be inspected at all is not a build that passed.
 func TestApplySelfUpdate_InspectFailureBlocksRestart(t *testing.T) {
 	cd := t.TempDir()
@@ -1148,7 +1285,7 @@ func TestApplySelfUpdate_InspectFailureBlocksRestart(t *testing.T) {
 	})
 	defer agent.Close()
 
-	writeSelfUpdateCompose(t, cd, "v0.1.0")
+	composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
 	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
 
 	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
@@ -1168,6 +1305,7 @@ func TestApplySelfUpdate_InspectFailureBlocksRestart(t *testing.T) {
 	if restarts.count() != 0 {
 		t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
 	}
+	assertComposeTags(t, composePath, "v0.1.0")
 	logs, _ := st.GetUpdateLogs("truffels", 5)
 	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
 		t.Error("expected a failed update log")
