@@ -13,8 +13,14 @@ var Ckpool = model.ServiceTemplate{
 	ConfigPath:     "ckpool/ckpool.conf",
 	Port:           "3333 (stratum)",
 	UpdateSource: &model.UpdateSource{
-		Type:       model.SourceBitbucket,
-		Repo:       "ckolivas/ckpool",
+		Type: model.SourceBitbucket,
+		Repo: "ckolivas/ckpool",
+		// Nothing is pulled from a registry for a custom build, but the image
+		// list is also what names the compose lines to retag after a build —
+		// leaving it empty is why the compose file kept saying v1.0.0 while the
+		// image it named carried v1.2.0. Same field, same purpose as the
+		// truffels stack's own list.
+		Images:     []string{"truffels/ckpool"},
 		Branch:     "master",
 		NeedsBuild: true,
 		RefScheme:  model.RefSchemeTag,

@@ -532,3 +532,71 @@ func TestReconciler_EnsureDirFailsButComposeStillWritten(t *testing.T) {
 		t.Error("expected ensure-dir failure to emit an alert")
 	}
 }
+
+// A rewritten image tag has to survive reconciliation. The reconciler renders
+// the compose file from a template every cycle, so if it did not read the tag
+// back off the file on disk it would quietly undo every retag the update path
+// makes — and ckpool would be pinned at v1.0.0 forever by a second mechanism.
+func TestReconciler_KeepsRewrittenBuildTag(t *testing.T) {
+	cases := []struct {
+		serviceID string
+		before    string
+		after     string
+	}{
+		{"ckpool", "truffels/ckpool:v1.0.0", "truffels/ckpool:v1.3.0"},
+		{"ckstats", "truffels/ckstats:latest", "truffels/ckstats:8f2e7c2f8403"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.serviceID, func(t *testing.T) {
+			// What the file looks like after the update path retagged it.
+			params, err := ExtractParams(tc.serviceID, renderFor(t, tc.serviceID, tc.after))
+			if err != nil {
+				t.Fatalf("extract params: %v", err)
+			}
+			rendered, err := Render(tc.serviceID, params)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if !strings.Contains(rendered, "image: "+tc.after) {
+				t.Errorf("reconciliation dropped the rewritten tag; wanted %q in:\n%s", tc.after, rendered)
+			}
+			if strings.Contains(rendered, "image: "+tc.before) {
+				t.Errorf("reconciliation put the old tag %q back:\n%s", tc.before, rendered)
+			}
+
+			// And it is a fixed point: reconciling the result changes nothing.
+			params2, err := ExtractParams(tc.serviceID, rendered)
+			if err != nil {
+				t.Fatalf("extract params (2nd pass): %v", err)
+			}
+			again, err := Render(tc.serviceID, params2)
+			if err != nil {
+				t.Fatalf("render (2nd pass): %v", err)
+			}
+			if again != rendered {
+				t.Errorf("reconciliation is not stable across cycles for %s", tc.serviceID)
+			}
+		})
+	}
+}
+
+// renderFor produces the on-disk compose file for a custom-built service at the
+// given image ref, going through the same template the reconciler writes.
+func renderFor(t *testing.T, serviceID, imageRef string) string {
+	t.Helper()
+	var params any
+	switch serviceID {
+	case "ckpool":
+		params = CkpoolParams{ImageTag: imageRef}
+	case "ckstats":
+		params = CkstatsParams{CkstatsImageTag: imageRef, DBImageTag: "postgres:16.14-alpine"}
+	default:
+		t.Fatalf("unknown service %q", serviceID)
+	}
+	out, err := Render(serviceID, params)
+	if err != nil {
+		t.Fatalf("render %s: %v", serviceID, err)
+	}
+	return out
+}

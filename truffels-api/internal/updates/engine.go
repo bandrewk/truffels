@@ -161,17 +161,18 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			// For digest-based checks, use the local image digest directly
 			currentVersion = info.Digest
 		} else {
-			// Labels first: for the services we build ourselves the image tag is
-			// pinned (truffels/ckpool:v1.0.0 stays put across builds), so the only
-			// statement about what is actually running is the ref stamped into the
-			// image at build time. Everything else still reads the tag.
+			// Labels first: for the services we build ourselves the tag is only a
+			// claim the update path tries to keep true (it retags the compose
+			// file on every build, best-effort), while the ref stamped into the
+			// image at build time is the proof. Everything else still reads the
+			// tag.
 			currentVersion = ExtractCurrentVersionFromLabels(src, info.Image, info.Labels)
 		}
 	}
 
 	// For a service we build ourselves from a git source, the source-ref label is
-	// the only authority on what is running: the compose tag is pinned and never
-	// moves across builds. No label means the running version is unknown, and an
+	// the only authority on what is running: the compose tag is written by us and
+	// can lag the image behind it. No label means the running version is unknown, and an
 	// unknown version must not be papered over — not with the stored row (which
 	// the initialisation below used to poison), and not with latestVersion.
 	labelIsAuthority := src.NeedsBuild && (src.Type == model.SourceGitHub || src.Type == model.SourceBitbucket)
@@ -555,7 +556,13 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		}
 	}
 
-	// Step 1b: Update compose file image tags (skip for floating-tag and custom builds)
+	// Step 1b: Update compose file image tags.
+	//
+	// Floating tags stay put by definition — the tag is the target. Custom
+	// builds are rewritten too, but inside applyNeedsBuild and *before* the
+	// build: the build tags its output with what the file says, so a rewrite
+	// here would name a tag no image carries. Their rewrite is not repeated
+	// here.
 	if !src.NeedsBuild && !tmpl.FloatingTag {
 		if err := e.compose.RewriteTags(serviceID, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
@@ -759,11 +766,33 @@ func (e *Engine) RollbackService(serviceID string) error {
 			return &UpdateError{Msg: msg}
 		}
 
-		live := liveImageRef(tmpl, serviceID)
-		if err := e.compose.ImageTag(rollbackRef, live); err != nil {
+		// The update that got us here moved the compose tag to the version we
+		// are leaving, so the file names the wrong version for the image we are
+		// about to restore. Put the image on the tag prevVersion *will* be named
+		// by, then move the file — in that order, because a retag that fails
+		// leaves the compose file untouched, while a compose file pointed at a
+		// tag no image carries would break the next restart.
+		live, refFromFile := composeImageRef(tmpl, serviceID)
+		repo, liveTag := splitImageRef(live)
+		target := live
+		if refFromFile && len(src.Images) > 0 && repo != "" && liveTag != prevVersion {
+			target = repo + ":" + prevVersion
+		}
+		if err := e.compose.ImageTag(rollbackRef, target); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "no rollback image available: "+err.Error(), "")
 			e.alertUpdateFailed(serviceID, "rollback image restore failed: "+err.Error())
 			return &UpdateError{Msg: "no rollback image available: " + err.Error()}
+		}
+		if target != live {
+			// Fatal: without the rewrite the file still names the version we are
+			// rolling away from, and Down/Up below would restart exactly that
+			// image while this reported a rollback.
+			if err := e.compose.RewriteTags(serviceID, src.Images, liveTag, prevVersion); err != nil {
+				msg := "compose rewrite failed: " + err.Error()
+				_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+				e.alertUpdateFailed(serviceID, "rollback compose rewrite failed: "+err.Error())
+				return &UpdateError{Msg: msg}
+			}
 		}
 	} else {
 		for _, img := range src.Images {
@@ -826,10 +855,29 @@ func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *mod
 		// previous image was staged under :rollback before the build overwrote
 		// the live tag; move it back, otherwise Down/Up would simply restart the
 		// very image that just failed while we reported a successful rollback.
-		live := liveImageRef(tmpl, serviceID)
-		if err := e.compose.ImageTag(rollbackImageRef(serviceID), live); err != nil {
-			slog.Error("rollback: retag failed", "service", serviceID, "image", live, "err", err)
+		//
+		// applyNeedsBuild also moved the compose tag to newVersion, so the ref
+		// the file names has to go back to currentVersion as well — restore the
+		// image onto that ref first, then move the file, so a failed retag never
+		// leaves the compose pointing at a tag no image carries. An unknown
+		// currentVersion has no tag to go back to; then the ref stays as it is
+		// and only the image is restored, exactly as before.
+		live, refFromFile := composeImageRef(tmpl, serviceID)
+		repo, liveTag := splitImageRef(live)
+		target := live
+		if refFromFile && len(src.Images) > 0 && repo != "" && currentVersion != "" && liveTag != currentVersion {
+			target = repo + ":" + currentVersion
+		}
+		if err := e.compose.ImageTag(rollbackImageRef(serviceID), target); err != nil {
+			slog.Error("rollback: retag failed", "service", serviceID, "image", target, "err", err)
 			rollbackErr = fmt.Errorf("restoring previous image failed: %w", err)
+		} else if target != live {
+			if err := e.compose.RewriteTags(serviceID, src.Images, liveTag, currentVersion); err != nil {
+				// Down/Up below would restart the failed build under its own
+				// name. The caller must not report this as a rollback.
+				slog.Error("rollback: compose rewrite failed", "service", serviceID, "err", err)
+				rollbackErr = fmt.Errorf("restoring the previous compose tag failed: %w", err)
+			}
 		}
 	} else {
 		// Revert compose file to old version
@@ -873,37 +921,57 @@ func composeImageRe(serviceID string) *regexp.Regexp {
 	return regexp.MustCompile(`(?m)^\s*image:\s*(truffels/` + regexp.QuoteMeta(serviceID) + `:[A-Za-z0-9._-]+)\s*$`)
 }
 
-// liveImageRef is the image reference a custom-built service actually runs.
-// The convention is truffels/<id>:latest — but ckpool's compose file pins
-// truffels/ckpool:v1.0.0, and staging or restoring :latest there would move a
-// tag nothing runs: the same silent no-op this rollback path exists to end. So
-// read the compose file and fall back to the convention only when it says
-// nothing.
+// splitImageRef splits an image reference into repository and tag:
+// "truffels/ckpool:v1.0.0" -> ("truffels/ckpool", "v1.0.0"). A ref carrying no
+// tag returns an empty tag, and a colon belonging to a registry host:port (one
+// that appears before the last "/") is not read as a tag separator.
+func splitImageRef(ref string) (repo, tag string) {
+	idx := strings.LastIndex(ref, ":")
+	if idx < 0 || idx < strings.LastIndex(ref, "/") {
+		return ref, ""
+	}
+	return ref[:idx], ref[idx+1:]
+}
+
+// liveImageRef is the image reference a custom-built service actually runs —
+// the single source of truth for it is the compose file, because that is what
+// `docker compose build` tags its output with and what `up` starts. The
+// convention truffels/<id>:latest is only a fallback for a file that names
+// nothing usable; staging or restoring a tag nothing runs is the silent no-op
+// this path exists to end.
 // Every path to the fallback warns: each one is a misconfiguration that turns
 // staging and rollback into tag moves nothing runs, and it has to be visible
 // before a rollback needs the ref, not afterwards.
 func liveImageRef(tmpl model.ServiceTemplate, serviceID string) string {
+	ref, _ := composeImageRef(tmpl, serviceID)
+	return ref
+}
+
+// composeImageRef additionally reports whether the ref was really read off the
+// compose file. Only then may the tag be moved: under the fallback we do not
+// know what the file says, and rewriting it would be a guess written to disk.
+func composeImageRef(tmpl model.ServiceTemplate, serviceID string) (ref string, fromFile bool) {
 	fallback := "truffels/" + serviceID + ":latest"
 	if tmpl.ComposeDir == "" {
 		slog.Warn("no compose dir for service, assuming conventional image ref",
 			"service", serviceID, "image", fallback)
-		return fallback
+		return fallback, false
 	}
 	path := tmpl.ComposeDir + "/docker-compose.yml"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("cannot read compose file, assuming conventional image ref",
 			"service", serviceID, "path", path, "image", fallback, "err", err)
-		return fallback
+		return fallback, false
 	}
 	if m := composeImageRe(serviceID).FindSubmatch(data); m != nil {
-		return string(m[1])
+		return string(m[1]), true
 	}
 	// A trailing comment ("image: truffels/ckpool:v1.0.0 # pinned") or an
 	// interpolated tag ("image: truffels/ckpool:${TAG}") both miss the pattern.
 	slog.Warn("no plain truffels image line in compose file, assuming conventional image ref",
 		"service", serviceID, "path", path, "image", fallback)
-	return fallback
+	return fallback, false
 }
 
 // rollbackImageRef names the single retained rollback generation. Exactly one:
@@ -932,61 +1000,115 @@ func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, s
 		}
 	}
 
-	// Stage the running image for rollback before the build overwrites its tag.
+	// Stage the running image for rollback FIRST — before the tag rewrite below
+	// moves the name it is staged from. liveImageRef reads the compose file, so
+	// staging after the rewrite would ask docker to tag an image that does not
+	// exist yet and leave :rollback pointing into nothing, i.e. a rollback that
+	// silently restores the wrong generation or fails outright.
+	//
 	// Staging itself is best-effort: a first-time build has nothing to stage,
 	// and refusing to update over that would be worse than losing the rollback
 	// option.
-	live := liveImageRef(tmpl, serviceID)
+	oldRef, refFromFile := composeImageRef(tmpl, serviceID)
+	_, oldTag := splitImageRef(oldRef)
 	rollbackRef := rollbackImageRef(serviceID)
-	if err := e.compose.ImageTag(live, rollbackRef); err != nil {
+	if err := e.compose.ImageTag(oldRef, rollbackRef); err != nil {
 		// Whatever :rollback still points at is now one generation too old —
 		// it was staged by the *previous* update. Restoring it later would
 		// install the wrong build and report a successful rollback, which is
 		// the class of lie this whole path exists to end. Drop the tag so a
 		// later rollback fails honestly instead. Removing a tag does not delete
 		// the image it shares with other tags.
-		slog.Warn("could not stage rollback image", "service", serviceID, "image", live, "err", err)
+		slog.Warn("could not stage rollback image", "service", serviceID, "image", oldRef, "err", err)
 		if rmErr := e.compose.RemoveImage(rollbackRef); rmErr != nil {
 			slog.Warn("could not drop the stale rollback tag", "service", serviceID, "image", rollbackRef, "err", rmErr)
 		}
 	}
 
-	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
-	buildArgs := map[string]string{"SOURCE_REF": check.LatestVersion}
-	if err := e.compose.BuildWithArgs(serviceID, buildArgs); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
-		return &UpdateError{Msg: "build failed: " + err.Error()}
+	// Move the compose tag onto the version about to be built. It has to happen
+	// here — after staging, before the build — because `docker compose build`
+	// tags its output with whatever the file says: rewriting afterwards would
+	// name a tag no image carries, and the next `up` would rebuild it without a
+	// SOURCE_REF arg. This is the same order applySelfUpdate has always used.
+	//
+	// Best-effort on purpose. The tag is a claim about the image, the source-ref
+	// label is the proof, and every check in this file keys off the label. A
+	// compose file the agent will not rewrite must not block an update that
+	// otherwise works — it only leaves the tag as stale as it already was.
+	if refFromFile && len(src.Images) > 0 && oldTag != check.LatestVersion {
+		if err := e.compose.RewriteTags(serviceID, src.Images, oldTag, check.LatestVersion); err != nil {
+			slog.Warn("could not move the compose image tag onto the new version; the build keeps the old tag",
+				"service", serviceID, "old", oldTag, "new", check.LatestVersion, "err", err)
+		}
 	}
 
-	// Verify before restarting: a mismatched image must never get to run. The
-	// agent resolves the image by the name the container references, so this
-	// reads the freshly built image even though the old one is still running.
-	var info *docker.ImageInfo
-	err := fmt.Errorf("service %s has no container to inspect", serviceID)
-	if len(tmpl.ContainerNames) > 0 {
-		info, err = e.compose.ImageInspect(tmpl.ContainerNames[0])
-	}
-	if err != nil {
-		// No container to resolve through — the case checkService deliberately
-		// does not skip for git sources, i.e. ckpool and ckstats after a failed
-		// or never-completed start. Ask for the image by name instead; only a
-		// second failure means we cannot verify at all.
-		byName, nameErr := e.compose.ImageInspectByName(live)
-		if nameErr != nil {
-			msg := "image inspect failed: " + err.Error() + "; by name: " + nameErr.Error()
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+	// Re-read rather than assume the rewrite took: a failure can mean "file
+	// untouched" or "written, but the answer was lost on the way back", and what
+	// the build produces is whatever the file says now. Everything below —
+	// verification and putting the tag back on failure — keys off this ref.
+	buildRef := liveImageRef(tmpl, serviceID)
+
+	// restoreComposeTag puts the old tag back when the file really did move.
+	// Without it a failed build leaves the compose naming a version whose image
+	// is that failed build: the running container is left alone, but any later
+	// restart from any cause would pull the broken name up. Returns a suffix for
+	// the failure message when even that does not work, because then the file
+	// needs a human.
+	restoreComposeTag := func() string {
+		if buildRef == oldRef {
+			return ""
 		}
-		info = byName
+		_, newTag := splitImageRef(buildRef)
+		if err := e.compose.RewriteTags(serviceID, src.Images, newTag, oldTag); err != nil {
+			slog.Error("could not put the compose image tag back after a failed build",
+				"service", serviceID, "image", buildRef, "want", oldTag, "err", err)
+			return fmt.Sprintf("; the compose file still names %s — restore the tag to %q before restarting the service", buildRef, oldTag)
+		}
+		return ""
 	}
-	built := info.Labels[SourceRefLabel]
-	if built != check.LatestVersion {
-		msg := fmt.Sprintf("built ref %q does not match requested %q", built, check.LatestVersion)
+	fail := func(msg string) error {
+		msg += restoreComposeTag()
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
 		e.alertUpdateFailed(serviceID, msg)
 		return &UpdateError{Msg: msg}
+	}
+
+	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
+	buildArgs := map[string]string{"SOURCE_REF": check.LatestVersion}
+	if err := e.compose.BuildWithArgs(serviceID, buildArgs); err != nil {
+		return fail("build failed: " + err.Error())
+	}
+
+	// Verify before restarting: a mismatched image must never get to run.
+	//
+	// Ask for the ref the compose file names first. The container route resolves
+	// {{.Config.Image}} of the container that is *still running the old tag*, so
+	// after a rewrite it would inspect the image we just replaced and fail a
+	// build that is in fact correct. It stays as a second attempt for the case
+	// the by-name lookup produces no ref at all — the agent reports an image it
+	// cannot resolve as a 200 with empty fields, which is also what the :latest
+	// fallback above looks like when the compose file names something else. That
+	// cannot become a hole: after a rewrite the container's image is the old one
+	// and its label fails the comparison just the same.
+	var built string
+	var inspectErrs []string
+	if info, err := e.compose.ImageInspectByName(buildRef); err != nil {
+		inspectErrs = append(inspectErrs, "by name "+buildRef+": "+err.Error())
+	} else {
+		built = info.Labels[SourceRefLabel]
+	}
+	if built == "" && len(tmpl.ContainerNames) > 0 {
+		if info, err := e.compose.ImageInspect(tmpl.ContainerNames[0]); err != nil {
+			inspectErrs = append(inspectErrs, "via container "+tmpl.ContainerNames[0]+": "+err.Error())
+		} else {
+			built = info.Labels[SourceRefLabel]
+		}
+	}
+	if built == "" && len(inspectErrs) > 0 {
+		return fail("image inspect failed: " + strings.Join(inspectErrs, "; "))
+	}
+	if built != check.LatestVersion {
+		return fail(fmt.Sprintf("built ref %q does not match requested %q", built, check.LatestVersion))
 	}
 
 	return nil

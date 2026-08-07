@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
+	"truffels-api/internal/store"
 )
 
 // --- getCheckInterval / isCheckEnabled tests ---
@@ -1720,18 +1722,41 @@ type needsBuildRecorder struct {
 	imageLabels    map[string]string
 	inspectFail    bool              // /v1/image/inspect 500s — container gone
 	byNameLabels   map[string]string // labels served by /v1/image/inspect-by-name
-	byNameImage    string            // ref the engine asked for by name
+	byNameByRef    map[string]map[string]string
+	byNameImage    string // ref the engine asked for by name
+	byNameRefs     []string
 	byNameCalls    int
 	tagFail        bool // /v1/image/tag 500s — nothing staged to restore
 	tags           []tagCall
 	removed        []string // images dropped via /v1/image/remove
 	unhealthy      bool     // /v1/inspect reports the containers unhealthy
+	buildFail      bool     // /v1/compose/build 500s
 	buildArgs      map[string]string
 	checkoutDir    string
 	checkoutRef    string
 	checkoutScheme string
 	checkoutCalls  int
 	upCalls        int
+	// composeDirs maps service_id -> compose dir, mirroring the agent's own
+	// service_id -> /srv/truffels/compose/<id> mapping. A service registered
+	// here gets its docker-compose.yml really rewritten by the mock; one that is
+	// not registered gets the answer the agent gives for a file it cannot read.
+	composeDirs  map[string]string
+	rewriteFail  bool
+	rewrites     []rewriteCall
+	rewriteCalls int
+	// events is the ordered trace of everything the engine asked for, so a test
+	// can assert that staging happened *before* the tag was rewritten rather
+	// than merely that both happened.
+	events []string
+}
+
+// rewriteCall is one /v1/compose/rewrite-tags request.
+type rewriteCall struct {
+	ServiceID string   `json:"service_id"`
+	Images    []string `json:"images"`
+	OldTag    string   `json:"old_tag"`
+	NewTag    string   `json:"new_tag"`
 }
 
 func (r *needsBuildRecorder) snapshot() needsBuildRecorder {
@@ -1739,6 +1764,7 @@ func (r *needsBuildRecorder) snapshot() needsBuildRecorder {
 	defer r.mu.Unlock()
 	return needsBuildRecorder{
 		byNameImage:    r.byNameImage,
+		byNameRefs:     append([]string(nil), r.byNameRefs...),
 		byNameCalls:    r.byNameCalls,
 		tags:           append([]tagCall(nil), r.tags...),
 		removed:        append([]string(nil), r.removed...),
@@ -1748,7 +1774,27 @@ func (r *needsBuildRecorder) snapshot() needsBuildRecorder {
 		checkoutScheme: r.checkoutScheme,
 		checkoutCalls:  r.checkoutCalls,
 		upCalls:        r.upCalls,
+		rewrites:       append([]rewriteCall(nil), r.rewrites...),
+		rewriteCalls:   r.rewriteCalls,
+		events:         append([]string(nil), r.events...),
 	}
+}
+
+// event appends to the ordered trace. Caller must hold the lock.
+func (r *needsBuildRecorder) event(format string, args ...any) {
+	r.events = append(r.events, fmt.Sprintf(format, args...))
+}
+
+// indexOf returns the position of the first event with the given prefix, or -1.
+// Called on a snapshot, which nothing else holds — the pointer receiver is only
+// there to avoid copying the recorder's mutex.
+func (r *needsBuildRecorder) indexOf(prefix string) int {
+	for i, e := range r.events {
+		if strings.HasPrefix(e, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
@@ -1775,7 +1821,60 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			rec.mu.Lock()
 			rec.buildArgs = req.BuildArgs
+			rec.event("build %s", req.BuildArgs["SOURCE_REF"])
+			fail := rec.buildFail
 			rec.mu.Unlock()
+			if fail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "build failed"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		// Mirrors handleComposeRewriteTags: the agent ignores old_tag and
+		// matches whatever tag the file currently carries, refuses when nothing
+		// matched, and 500s when it cannot read the file at all.
+		case "/v1/compose/rewrite-tags":
+			var req rewriteCall
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			rec.rewrites = append(rec.rewrites, req)
+			rec.rewriteCalls++
+			rec.event("rewrite %s->%s", req.OldTag, req.NewTag)
+			dir, known := rec.composeDirs[req.ServiceID]
+			fail := rec.rewriteFail
+			rec.mu.Unlock()
+			if fail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "write compose file: read-only file system"})
+				return
+			}
+			if !known {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "read compose file: no such file or directory"})
+				return
+			}
+			composePath := filepath.Join(dir, "docker-compose.yml")
+			data, readErr := os.ReadFile(composePath)
+			if readErr != nil {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "read compose file: " + readErr.Error()})
+				return
+			}
+			content, matched := string(data), 0
+			for _, img := range req.Images {
+				re := regexp.MustCompile(fmt.Sprintf(`(image:\s*)%s:[^\s@]+(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img)))
+				if re.MatchString(content) {
+					matched++
+				}
+				content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
+			}
+			if matched == 0 {
+				w.WriteHeader(400)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no image tags matched in compose file"})
+				return
+			}
+			_ = os.WriteFile(composePath, []byte(content), 0644)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/image/inspect":
@@ -1796,8 +1895,17 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			rec.mu.Lock()
 			rec.byNameImage = req.Image
+			rec.byNameRefs = append(rec.byNameRefs, req.Image)
 			rec.byNameCalls++
+			rec.event("inspect-by-name %s", req.Image)
 			labels := rec.byNameLabels
+			// byNameByRef answers per ref, so a test can hand the newly built
+			// tag one label and the ref the old container still names another.
+			if byRef, ok := rec.byNameByRef[req.Image]; ok {
+				labels = byRef
+			} else if rec.byNameByRef != nil {
+				labels = nil
+			}
 			rec.mu.Unlock()
 			if labels == nil {
 				w.WriteHeader(500)
@@ -1811,6 +1919,7 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			rec.mu.Lock()
 			rec.tags = append(rec.tags, req)
+			rec.event("tag %s->%s", req.Source, req.Target)
 			fail := rec.tagFail
 			rec.mu.Unlock()
 			if fail {
@@ -1823,6 +1932,20 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 		case "/v1/compose/up":
 			rec.mu.Lock()
 			rec.upCalls++
+			rec.event("up")
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		// A custom build has no registry behind it. Recording pulls proves the
+		// populated Images list did not divert the apply path into the
+		// registry branch that pulls each image by tag.
+		case "/v1/image/pull":
+			var req struct {
+				Image string `json:"image"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			rec.event("pull %s", req.Image)
 			rec.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
@@ -1861,6 +1984,9 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 	}))
 }
 
+// The Images list mirrors templates.Ckpool: it is what names the compose lines
+// the update path retags, and a fixture without it would never catch the field
+// going missing again.
 func ckpoolBuildTemplate(composeDir string) model.ServiceTemplate {
 	return model.ServiceTemplate{
 		ID:             "ckpool",
@@ -1870,6 +1996,7 @@ func ckpoolBuildTemplate(composeDir string) model.ServiceTemplate {
 		UpdateSource: &model.UpdateSource{
 			Type:       model.SourceBitbucket,
 			Repo:       "ckolivas/ckpool",
+			Images:     []string{"truffels/ckpool"},
 			Branch:     "master",
 			NeedsBuild: true,
 			RefScheme:  model.RefSchemeTag,
@@ -1887,12 +2014,47 @@ func ckstatsBuildTemplate(composeDir, refScheme string) model.ServiceTemplate {
 		UpdateSource: &model.UpdateSource{
 			Type:       model.SourceGitHub,
 			Repo:       "mrv777/ckstats",
+			Images:     []string{"truffels/ckstats"},
 			Branch:     "main",
 			NeedsBuild: true,
 			RefScheme:  refScheme,
 			RepoDir:    "/srv/truffels/data/ckpoolstats",
 		},
 	}
+}
+
+// buildComposeDir lays down the compose file a custom-built service really has
+// on disk — a build block plus the pinned image line the build tags its output
+// with — and returns the directory holding it.
+func buildComposeDir(t *testing.T, serviceID, tag string) string {
+	t.Helper()
+	dir := t.TempDir()
+	body := fmt.Sprintf(`services:
+  %[1]s:
+    build:
+      context: /srv/truffels/compose/%[1]s
+    image: truffels/%[1]s:%[2]s
+    container_name: truffels-%[1]s
+`, serviceID, tag)
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(body), 0644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+	return dir
+}
+
+// composeImageTag reads back the tag the compose file in dir names for the
+// service's own image — the statement `docker ps` and the file itself make.
+func composeImageTag(t *testing.T, dir, serviceID string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read compose: %v", err)
+	}
+	m := regexp.MustCompile(`image:\s*truffels/` + regexp.QuoteMeta(serviceID) + `:(\S+)`).FindStringSubmatch(string(data))
+	if m == nil {
+		t.Fatalf("no truffels/%s image line in:\n%s", serviceID, string(data))
+	}
+	return m[1]
 }
 
 // A build whose image carries a different ref than the one requested must not
@@ -2376,4 +2538,480 @@ func TestPruneOldImages_NoLogs(t *testing.T) {
 
 	// Should not panic with no logs
 	eng.pruneOldImages("electrs", tmpl.UpdateSource)
+}
+
+// --- Compose tag follows the build (ckpool / ckstats) ---
+//
+// The tag a custom-built service runs under is a statement about its contents:
+// it is what `docker ps` shows and what the compose file says. ckpool shipped
+// for six releases as truffels/ckpool:v1.0.0 while the image behind that name
+// carried source-ref v1.2.0, because the update path never retagged it. These
+// tests hold the tag to the build.
+
+// needsBuildEngine wires a ckpool template whose compose file the mock really
+// rewrites, the way the agent does on the device.
+func needsBuildEngine(t *testing.T, rec *needsBuildRecorder, serviceID, tag string) (*Engine, *store.Store, model.ServiceTemplate, string) {
+	t.Helper()
+	dir := buildComposeDir(t, serviceID, tag)
+	if rec.composeDirs == nil {
+		rec.composeDirs = map[string]string{}
+	}
+	rec.composeDirs[serviceID] = dir
+	agent := newNeedsBuildAgent(rec)
+	t.Cleanup(agent.Close)
+
+	tmpl := ckpoolBuildTemplate(dir)
+	if serviceID != "ckpool" {
+		tmpl = ckstatsBuildTemplate(dir, model.RefSchemeCommit)
+	}
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+	return eng, st, tmpl, dir
+}
+
+func TestApplyUpdate_NeedsBuild_ComposeTagFollowsTheBuild(t *testing.T) {
+	rec := &needsBuildRecorder{
+		// The old container still references truffels/ckpool:v1.0.0, and that
+		// image carries the old ref. Verifying through the container would read
+		// exactly this and fail a build that is in fact correct.
+		imageLabels: map[string]string{SourceRefLabel: "v1.0.0"},
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {SourceRefLabel: "v1.2.0"},
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.2.0" {
+		t.Errorf("compose file names truffels/ckpool:%s, want the version that was just built", got)
+	}
+
+	got := rec.snapshot()
+	if got.byNameImage != "truffels/ckpool:v1.2.0" {
+		t.Errorf("verification asked for %q, want the ref the compose file now names", got.byNameImage)
+	}
+	if got.upCalls != 1 {
+		t.Errorf("expected the service to be restarted once, up calls = %d", got.upCalls)
+	}
+	// Filling in Images must not divert a custom build into the registry
+	// branch: there is no truffels/ckpool on any registry to pull.
+	if i := got.indexOf("pull "); i >= 0 {
+		t.Errorf("a custom build must never pull from a registry: %v", got.events)
+	}
+
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateDone {
+		t.Fatalf("expected a done update log, got %+v", logs)
+	}
+}
+
+// The rollback image is staged from the ref the compose file names, so staging
+// has to happen before the rewrite moves that name. Afterwards it would tag an
+// image that does not exist yet and the rollback would be silently useless.
+func TestApplyUpdate_NeedsBuild_StagesRollbackBeforeTheRewrite(t *testing.T) {
+	rec := &needsBuildRecorder{
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {SourceRefLabel: "v1.2.0"},
+		},
+	}
+	eng, st, _, _ := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := rec.snapshot()
+	staged := got.indexOf("tag truffels/ckpool:v1.0.0->truffels/ckpool:rollback")
+	rewritten := got.indexOf("rewrite ")
+	built := got.indexOf("build ")
+	if staged < 0 {
+		t.Fatalf("the running image was never staged from its own ref: %v", got.events)
+	}
+	if rewritten < 0 || built < 0 {
+		t.Fatalf("expected a rewrite and a build, got: %v", got.events)
+	}
+	if staged > rewritten {
+		t.Errorf("staged after the tag was rewritten — :rollback would point at nothing: %v", got.events)
+	}
+	if rewritten > built {
+		t.Errorf("rewrote after the build — the build would carry the old tag: %v", got.events)
+	}
+}
+
+// A build that cannot be shown to hold the requested ref must leave nothing
+// behind that says it does. The container is not restarted, but the compose
+// file would still name a version whose image is the failed build, and the next
+// restart from any other cause would pull it up.
+func TestApplyUpdate_NeedsBuild_FailedVerificationPutsTheComposeTagBack(t *testing.T) {
+	rec := &needsBuildRecorder{
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {SourceRefLabel: "v1.0.0"}, // build produced the old code
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected the mismatched build to fail the update")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose file left at truffels/ckpool:%s — it names a version whose image is a failed build", got)
+	}
+	if got := rec.snapshot(); got.upCalls != 0 {
+		t.Errorf("service must not be restarted on a failed verification (up calls=%d)", got.upCalls)
+	}
+}
+
+func TestApplyUpdate_NeedsBuild_FailedBuildPutsTheComposeTagBack(t *testing.T) {
+	rec := &needsBuildRecorder{buildFail: true}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected the failed build to fail the update")
+	}
+	if !strings.Contains(err.Error(), "build failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose file left at truffels/ckpool:%s after a failed build", got)
+	}
+}
+
+// The tag is a claim, the source-ref label is the proof — so a compose file the
+// agent will not rewrite must not block an update that otherwise works. It only
+// leaves the tag as stale as it already was, and the engine has to notice that
+// and keep verifying the ref the file still names.
+func TestApplyUpdate_NeedsBuild_RewriteFailureKeepsTheOldTagAndStillUpdates(t *testing.T) {
+	rec := &needsBuildRecorder{
+		rewriteFail: true,
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.0.0": {SourceRefLabel: "v1.2.0"}, // built under the old tag
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("a failed retag must not block the update: %v", err)
+	}
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose tag = %s, want the untouched old tag", got)
+	}
+	if got := rec.snapshot(); got.byNameImage != "truffels/ckpool:v1.0.0" {
+		t.Errorf("verification asked for %q, want the ref the file still names", got.byNameImage)
+	}
+}
+
+// The device state this fix was written for: the compose file says v1.0.0 while
+// the image it names carries v1.2.0, so the update check reports v1.2.0 as the
+// current version. The old tag has to come off the file, not off the check —
+// otherwise the rewrite reasons about a tag that is not there.
+func TestApplyUpdate_NeedsBuild_OldTagComesFromTheComposeFile(t *testing.T) {
+	rec := &needsBuildRecorder{
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.3.0": {SourceRefLabel: "v1.3.0"},
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.2.0", // the source-ref label, not the tag
+		LatestVersion:  "v1.3.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := rec.snapshot()
+	if len(got.rewrites) == 0 {
+		t.Fatal("expected a rewrite call")
+	}
+	if got.rewrites[0].OldTag != "v1.0.0" {
+		t.Errorf("old tag = %q, want the tag the compose file actually carries", got.rewrites[0].OldTag)
+	}
+	if got.rewrites[0].NewTag != "v1.3.0" {
+		t.Errorf("new tag = %q, want the version being built", got.rewrites[0].NewTag)
+	}
+	if got.tags[0].Source != "truffels/ckpool:v1.0.0" {
+		t.Errorf("staged from %q, want the ref the compose file names", got.tags[0].Source)
+	}
+	if tag := composeImageTag(t, dir, "ckpool"); tag != "v1.3.0" {
+		t.Errorf("compose tag = %s, want v1.3.0", tag)
+	}
+}
+
+// A rollback has to undo the rewrite as well. Leaving the new tag in the file
+// while restoring the old image would put the lie back, one generation on.
+func TestApplyUpdate_NeedsBuild_UnhealthyRollbackPutsTheComposeTagBack(t *testing.T) {
+	rec := &needsBuildRecorder{
+		unhealthy: true,
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {SourceRefLabel: "v1.2.0"},
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected an error when the service comes up unhealthy")
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose tag = %s after the rollback, want the version that is running again", got)
+	}
+
+	got := rec.snapshot()
+	last := got.tags[len(got.tags)-1]
+	if last.Source != "truffels/ckpool:rollback" || last.Target != "truffels/ckpool:v1.0.0" {
+		t.Errorf("restored %q -> %q, want the staged image onto the restored tag", last.Source, last.Target)
+	}
+
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateRolledBack {
+		t.Fatalf("expected a rolled_back log, got %+v", logs)
+	}
+}
+
+// Same for the manual rollback: the file has to name the version that runs
+// after it, not the one it left.
+func TestRollbackService_CustomBuildMovesTheComposeTagBack(t *testing.T) {
+	rec := &needsBuildRecorder{
+		byNameLabels: map[string]string{SourceRefLabel: "v1.0.0"}, // what :rollback holds
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.2.0")
+
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckpool", FromVersion: "v1.0.0", ToVersion: "v1.2.0", Status: model.UpdateDone,
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID: "ckpool", CurrentVersion: "v1.2.0", LatestVersion: "v1.2.0",
+	})
+
+	if err := eng.RollbackService("ckpool"); err != nil {
+		t.Fatalf("unexpected rollback error: %v", err)
+	}
+
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose tag = %s after the rollback, want v1.0.0", got)
+	}
+
+	got := rec.snapshot()
+	if len(got.tags) != 1 {
+		t.Fatalf("expected exactly one retag, got %+v", got.tags)
+	}
+	if got.tags[0].Target != "truffels/ckpool:v1.0.0" {
+		t.Errorf("restored onto %q, want the ref the compose file now names", got.tags[0].Target)
+	}
+	// Order matters here too: a retag that fails must leave the file alone.
+	if got.indexOf("tag ") > got.indexOf("rewrite ") {
+		t.Errorf("rewrote the compose file before the image was restored: %v", got.events)
+	}
+}
+
+// ckstats runs the same image in two compose services (the app and its cron).
+// One entry in Images has to move both lines — a half-rewritten file would
+// start one container on an image that no longer exists.
+func TestApplyUpdate_NeedsBuild_RewritesEveryImageLine(t *testing.T) {
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	_ = os.WriteFile(composePath, []byte(`services:
+  ckstats:
+    build:
+      context: /srv/truffels/data
+    image: truffels/ckstats:latest
+    container_name: truffels-ckstats
+  ckstats-cron:
+    image: truffels/ckstats:latest
+    container_name: truffels-ckstats-cron
+  ckstats-db:
+    image: postgres:16.14-alpine
+`), 0644)
+
+	rec := &needsBuildRecorder{
+		composeDirs: map[string]string{"ckstats": dir},
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckstats:8f2e7c2f8403": {SourceRefLabel: "8f2e7c2f8403"},
+		},
+	}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckstatsBuildTemplate(dir, model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "c9bf72e4cb6e",
+		LatestVersion:  "8f2e7c2f8403",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckstats"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, _ := os.ReadFile(composePath)
+	if n := strings.Count(string(data), "image: truffels/ckstats:8f2e7c2f8403"); n != 2 {
+		t.Errorf("expected both ckstats image lines rewritten, got %d:\n%s", n, string(data))
+	}
+	if strings.Contains(string(data), "truffels/ckstats:latest") {
+		t.Errorf("a stale :latest line survived:\n%s", string(data))
+	}
+	// The database is not ours to retag.
+	if !strings.Contains(string(data), "image: postgres:16.14-alpine") {
+		t.Errorf("the postgres image line was touched:\n%s", string(data))
+	}
+}
+
+// Filling in Images also switches pruning on for the custom builds — it never
+// removed anything for them before, because there was no image name to remove.
+// The rule it now applies has to spare both the image that is running and the
+// one generation staged for rollback.
+func TestPruneOldImages_NeedsBuildSparesRunningAndRollback(t *testing.T) {
+	rec := &needsBuildRecorder{}
+	eng, st, tmpl, _ := needsBuildEngine(t, rec, "ckpool", "v1.3.0")
+
+	// ckpool's real history on the device: commit-scheme updates, then the
+	// switch to tags, then the update that just landed.
+	for _, l := range []model.UpdateLog{
+		{ServiceID: "ckpool", FromVersion: "7f1a7d573699", ToVersion: "481f4cfe348e", Status: model.UpdateDone},
+		{ServiceID: "ckpool", FromVersion: "481f4cfe348e", ToVersion: "2e44101e2da2", Status: model.UpdateDone},
+		{ServiceID: "ckpool", FromVersion: "v1.2.0", ToVersion: "v1.3.0", Status: model.UpdateDone},
+	} {
+		_, _ = st.CreateUpdateLog(&l)
+	}
+
+	eng.pruneOldImages("ckpool", tmpl.UpdateSource)
+
+	got := rec.snapshot()
+	for _, img := range got.removed {
+		switch img {
+		case "truffels/ckpool:v1.3.0":
+			t.Errorf("prune removed the tag the compose file runs: %v", got.removed)
+		case "truffels/ckpool:v1.2.0":
+			t.Errorf("prune removed the rollback generation: %v", got.removed)
+		case "truffels/ckpool:rollback":
+			t.Errorf("prune removed the staged rollback tag: %v", got.removed)
+		}
+	}
+	// It does clean up the generations before those two.
+	if len(got.removed) == 0 {
+		t.Error("expected the older generations to be pruned now that Images is set")
+	}
+}
+
+// The agent answers a ref it cannot resolve with a 200 and empty fields, and
+// the :latest fallback looks exactly the same from here. Verification must then
+// still try the container route rather than fail a correct build — and the
+// container's label still has to match, so this cannot pass anything through.
+func TestApplyUpdate_NeedsBuild_EmptyByNameFallsBackToTheContainer(t *testing.T) {
+	rec := &needsBuildRecorder{
+		imageLabels: map[string]string{SourceRefLabel: "v1.2.0"}, // the container route
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {}, // resolved, but carries no label
+		},
+	}
+	eng, st, _, _ := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("verification should fall back to the container: %v", err)
+	}
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateDone {
+		t.Fatalf("expected a done update log, got %+v", logs)
+	}
+}
+
+// ...and when neither route produces a ref, the update fails with the honest
+// "nothing proves what this image holds" message instead of starting it.
+func TestApplyUpdate_NeedsBuild_NoLabelAnywhereFails(t *testing.T) {
+	rec := &needsBuildRecorder{
+		imageLabels: map[string]string{},
+		byNameByRef: map[string]map[string]string{
+			"truffels/ckpool:v1.2.0": {},
+		},
+	}
+	eng, st, _, dir := needsBuildEngine(t, rec, "ckpool", "v1.0.0")
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected an unverifiable build to fail the update")
+	}
+	if !strings.Contains(err.Error(), `does not match`) {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if got := rec.snapshot(); got.upCalls != 0 {
+		t.Errorf("service must not start unverified (up calls=%d)", got.upCalls)
+	}
+	if got := composeImageTag(t, dir, "ckpool"); got != "v1.0.0" {
+		t.Errorf("compose tag = %s, want the old tag restored", got)
+	}
 }
