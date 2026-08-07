@@ -42,6 +42,26 @@ type agentResponse struct {
 	Output string `json:"output"`
 }
 
+// agentError builds an error from a failed agent response. ar.Error alone is
+// often just an exit status ("git checkout failed: exit status 1" / "build
+// failed: exit status 1"); the actual diagnosis — which untracked files were
+// in the way, which ref failed to resolve, the failing build step — is in
+// ar.Output. Dropping it made failures indistinguishable in the UI and the
+// cause had to be fetched off the device by hand. Output is tail-truncated to
+// the last 500 chars: the interesting lines are printed last, by git and by
+// docker build alike.
+func agentError(op string, ar agentResponse) error {
+	msg := ar.Error
+	if ar.Output != "" {
+		out := ar.Output
+		if len(out) > 500 {
+			out = "..." + out[len(out)-500:]
+		}
+		msg += "\n" + out
+	}
+	return fmt.Errorf("%s: %s", op, msg)
+}
+
 type ImageInfo struct {
 	Image  string            `json:"image"`
 	Digest string            `json:"digest"`
@@ -76,7 +96,7 @@ func (c *ComposeClient) Logs(serviceID string, tail int, since, container string
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return ar.Logs, fmt.Errorf("agent logs: %s", ar.Error)
+		return ar.Logs, agentError("agent logs", ar)
 	}
 	return ar.Logs, nil
 }
@@ -114,7 +134,7 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 	if resp.StatusCode != 200 {
 		var ar agentResponse
 		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, fmt.Errorf("agent image inspect: %s", ar.Error)
+		return nil, agentError("agent image inspect", ar)
 	}
 
 	var info ImageInfo
@@ -140,7 +160,7 @@ func (c *ComposeClient) ImageInspectByName(image string) (*ImageInfo, error) {
 	if resp.StatusCode != 200 {
 		var ar agentResponse
 		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, fmt.Errorf("agent image inspect by name: %s", ar.Error)
+		return nil, agentError("agent image inspect by name", ar)
 	}
 
 	var info ImageInfo
@@ -165,7 +185,7 @@ func (c *ComposeClient) ImageTag(source, target string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent image tag: %s", ar.Error)
+		return agentError("agent image tag", ar)
 	}
 	return nil
 }
@@ -185,7 +205,7 @@ func (c *ComposeClient) Build(serviceID string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent build: %s", ar.Error)
+		return agentError("agent build", ar)
 	}
 	return nil
 }
@@ -202,7 +222,7 @@ func (c *ComposeClient) SystemAction(action string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent system %s: %s", action, ar.Error)
+		return agentError(fmt.Sprintf("agent system %s", action), ar)
 	}
 	return nil
 }
@@ -320,7 +340,7 @@ func (c *ComposeClient) SystemJournal(lines int, priority, unit, since string, b
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return ar.Logs, fmt.Errorf("agent journal: %s", ar.Error)
+		return ar.Logs, agentError("agent journal", ar)
 	}
 	return ar.Logs, nil
 }
@@ -336,7 +356,7 @@ func (c *ComposeClient) SystemTuningGet() (*SystemTuningInfo, error) {
 	if resp.StatusCode != 200 {
 		var ar agentResponse
 		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, fmt.Errorf("agent tuning get: %s", ar.Error)
+		return nil, agentError("agent tuning get", ar)
 	}
 
 	var info SystemTuningInfo
@@ -358,7 +378,7 @@ func (c *ComposeClient) SystemTuningSet(action, value string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent tuning set: %s", ar.Error)
+		return agentError("agent tuning set", ar)
 	}
 	return nil
 }
@@ -380,21 +400,7 @@ func (c *ComposeClient) GitCheckout(repoDir, ref, refScheme string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		msg := ar.Error
-		// ar.Error is only the exit status ("git checkout failed: exit status
-		// 1"); git's own message — which untracked files are in the way, which
-		// ref could not be resolved — is in ar.Output. Dropping it made two
-		// consecutive failed updates indistinguishable in the UI and the cause
-		// had to be fetched off the device by hand. Same tail-truncation as
-		// BuildWithArgs: git prints the interesting lines last.
-		if ar.Output != "" {
-			out := ar.Output
-			if len(out) > 500 {
-				out = "..." + out[len(out)-500:]
-			}
-			msg += "\n" + out
-		}
-		return fmt.Errorf("agent git checkout: %s", msg)
+		return agentError("agent git checkout", ar)
 	}
 	return nil
 }
@@ -420,16 +426,7 @@ func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]str
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		msg := ar.Error
-		// Include last ~500 chars of build output for debugging
-		if ar.Output != "" {
-			out := ar.Output
-			if len(out) > 500 {
-				out = "..." + out[len(out)-500:]
-			}
-			msg += "\n" + out
-		}
-		return fmt.Errorf("agent build: %s", msg)
+		return agentError("agent build", ar)
 	}
 	return nil
 }
@@ -450,7 +447,7 @@ func (c *ComposeClient) ComposeUpDetached(serviceID string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		return fmt.Errorf("agent compose up detached: %s", ar.Error)
+		return agentError("agent compose up detached", ar)
 	}
 	return nil
 }
@@ -478,7 +475,7 @@ func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, n
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent rewrite tags: %s", ar.Error)
+		return agentError("agent rewrite tags", ar)
 	}
 	return nil
 }
@@ -497,7 +494,7 @@ func (c *ComposeClient) RemoveImage(image string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent remove image: %s", ar.Error)
+		return agentError("agent remove image", ar)
 	}
 	return nil
 }
@@ -517,7 +514,7 @@ func (c *ComposeClient) FsEnsureDir(path string, uid, gid int, mode string) erro
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent ensure-dir: %s", ar.Error)
+		return agentError("agent ensure-dir", ar)
 	}
 	return nil
 }
@@ -537,7 +534,7 @@ func (c *ComposeClient) FsClearDir(path string, uid, gid int, mode string) error
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent clear-dir: %s", ar.Error)
+		return agentError("agent clear-dir", ar)
 	}
 	return nil
 }
@@ -697,7 +694,7 @@ func (c *ComposeClient) composeAction(path, serviceID string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent %s: %s", path, ar.Error)
+		return agentError(fmt.Sprintf("agent %s", path), ar)
 	}
 	return nil
 }
