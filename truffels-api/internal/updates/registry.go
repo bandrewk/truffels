@@ -669,7 +669,7 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 		if idx := strings.LastIndex(name, ":"); idx >= 0 {
 			return name[idx+1:]
 		}
-		return "unknown"
+		return ""
 	case model.SourceDockerDigest:
 		// Digest is extracted directly in checkService via ImageInspect
 		return ""
@@ -685,9 +685,9 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 		if idx := strings.LastIndex(name, ":"); idx >= 0 {
 			return name[idx+1:]
 		}
-		return "unknown"
+		return ""
 	default:
-		return "unknown"
+		return ""
 	}
 }
 
