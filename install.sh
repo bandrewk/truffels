@@ -853,7 +853,13 @@ fi
 # ckpoolstats source (needed for ckstats Docker build)
 if [[ ! -d "$DATA_DIR/ckpoolstats/.git" ]]; then
     log "Cloning ckpoolstats (ckstats dashboard)..."
-    git clone --depth 1 https://github.com/mrv777/ckstats.git "$DATA_DIR/ckpoolstats"
+    # NOT --depth 1. The update engine checks this tree out at an arbitrary
+    # upstream commit later on; a shallow clone has no history to check out, so
+    # every ckstats update on a freshly installed device would fail. This device
+    # only survived because its clone happened to be full.
+    # --filter=blob:none keeps the transfer small the correct way: full history
+    # (refs and trees), blobs fetched on demand, so any commit stays reachable.
+    git clone --filter=blob:none https://github.com/mrv777/ckstats.git "$DATA_DIR/ckpoolstats"
     chown -R 1000:1000 "$DATA_DIR/ckpoolstats"
 else
     log "ckpoolstats source already present, skipping clone."
@@ -868,7 +874,17 @@ log "Building ckstats image..."
 # image carries no ref and the update engine correctly refuses to claim it knows
 # what is running. Short to 12 chars: the engine compares against GitHub's
 # commit SHA truncated to the same length, and a 40-char hash would never match.
-CKSTATS_REF="$(git -C "$DATA_DIR/ckpoolstats" rev-parse --short=12 HEAD 2>/dev/null || true)"
+#
+# -c safe.directory=... is required, not cosmetic: this script runs as root and
+# the tree is chowned to 1000:1000 just above, so git refuses it as "dubious
+# ownership". Under `sudo` git reads SUDO_UID and lets it pass, which is why the
+# omission went unnoticed — from a root shell or a systemd unit the rev-parse
+# returned empty and the install stamped no ref at all.
+# Passed with -c rather than persisted into root's global git config: the
+# exemption is scoped to this one command instead of being appended to
+# /root/.gitconfig forever, where it would keep granting access long after the
+# install finished and would accumulate a duplicate entry on every re-run.
+CKSTATS_REF="$(git -c safe.directory="$DATA_DIR/ckpoolstats" -C "$DATA_DIR/ckpoolstats" rev-parse --short=12 HEAD 2>/dev/null || true)"
 if [[ -n "$CKSTATS_REF" ]]; then
     cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet --build-arg SOURCE_REF="$CKSTATS_REF"
 else

@@ -273,6 +273,54 @@ func TestInstaller_BuildsCkstatsWithItsRealRef(t *testing.T) {
 	assertContains(t, sh, "rev-parse --short=12 HEAD")
 }
 
+// A shallow clone has no history to check out, so `git checkout <upstream
+// commit>` — which is exactly what a ckstats update does — cannot work on a
+// device installed with --depth 1. This device only ever updated because its
+// clone happened to be full. --filter=blob:none is the correct way to keep the
+// transfer small: full refs and trees, blobs on demand.
+func TestInstaller_ClonesCkstatsSourceDeepEnoughToUpdate(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	clone := grepLines(string(installer), "github.com/mrv777/ckstats.git")
+	if clone == "" {
+		t.Fatal("no ckstats clone found in install.sh")
+	}
+	if strings.Contains(clone, "--depth") {
+		t.Errorf("ckstats is cloned shallow; no update could ever check out a\n"+
+			"different commit on a fresh install:\n%s", clone)
+	}
+	if !strings.Contains(clone, "--filter=blob:none") {
+		t.Errorf("expected a blobless partial clone, got:\n%s", clone)
+	}
+}
+
+// install.sh runs as root and chowns the ckstats tree to 1000:1000, so git
+// rejects it with "dubious ownership" unless told otherwise. Under sudo git
+// reads SUDO_UID and lets it through, which hid the bug — from a root shell or
+// a systemd unit the rev-parse returned empty and the install stamped no source
+// ref at all. Scoped with -c rather than `git config --global`, so the
+// exemption does not outlive the command in /root/.gitconfig.
+func TestInstaller_ReadsCkstatsRefAsRealRoot(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	revParse := grepLines(string(installer), "rev-parse --short=12 HEAD")
+	if revParse == "" {
+		t.Fatal("no ckstats rev-parse found in install.sh")
+	}
+	if !strings.Contains(revParse, "safe.directory") {
+		t.Errorf("ckstats rev-parse runs as root against a 1000:1000 tree without a\n"+
+			"safe.directory exemption; it returns empty outside sudo:\n%s", revParse)
+	}
+	if strings.Contains(string(installer), "config --global --add safe.directory") {
+		t.Errorf("safe.directory must not be written to /root/.gitconfig; it would\n" +
+			"outlive the install and accumulate on every re-run")
+	}
+}
+
 // grepLines returns the lines of s containing substr, for readable failures.
 func grepLines(s, substr string) string {
 	var out []string
