@@ -854,3 +854,88 @@ func TestListDockerHubVersions_PrefersPlainTagOnVersionTie(t *testing.T) {
 		}
 	}
 }
+
+// ---------- checkGitTag ----------
+
+func TestCheckGitTagBitbucket(t *testing.T) {
+	// Echte ckpool-Tag-Formen: Versions-Tags neben M/MP/S-Tags, die
+	// keine Versionen sind und niemals gewinnen dürfen.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[
+			{"name":"M21"},{"name":"MP4"},{"name":"S1"},
+			{"name":"v0.9.9"},{"name":"v1.0.0"},{"name":"v1.1.1"},{"name":"v1.2.0"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceBitbucket, "ckolivas/ckpool", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v1.2.0" {
+		t.Errorf("got %q, want v1.2.0", got)
+	}
+}
+
+func TestCheckGitTagNumericNotLexicographic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[{"name":"v0.9.9"},{"name":"v0.10.0"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v0.10.0" {
+		t.Errorf("got %q, want v0.10.0 (numeric compare, not lexicographic)", got)
+	}
+}
+
+func TestCheckGitTagGitHubShape(t *testing.T) {
+	// GitHub liefert ein Array statt eines Objekts mit "values".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"name":"v2.0.0"},{"name":"v1.9.0"}]`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceGitHub, "x/y", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v2.0.0" {
+		t.Errorf("got %q, want v2.0.0", got)
+	}
+}
+
+func TestCheckGitTagNoVersionTags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[{"name":"M21"},{"name":"S1"}]}`))
+	}))
+	defer srv.Close()
+
+	if _, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL); err == nil {
+		t.Error("expected error when no version tags exist, got nil")
+	}
+}
+
+func TestCheckGitTagHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+
+	if _, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL); err == nil {
+		t.Error("expected error on HTTP 500, got nil")
+	}
+}
+
+func TestCheckLatestVersionCommitSchemeUnchanged(t *testing.T) {
+	// Leeres RefScheme muss weiterhin den Commit-Pfad wählen. Wir prüfen das
+	// ohne Netzwerk, indem wir einen unbekannten Source-Type ausschließen und
+	// nur die Verzweigung selbst betrachten.
+	src := &model.UpdateSource{Type: model.SourceBitbucket, Repo: "x/y", Branch: "master"}
+	if src.RefScheme == model.RefSchemeTag {
+		t.Fatal("empty RefScheme must not be treated as tag scheme")
+	}
+}

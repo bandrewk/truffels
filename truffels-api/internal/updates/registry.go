@@ -3,6 +3,7 @@ package updates
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -35,8 +36,14 @@ func CheckLatestVersion(src *model.UpdateSource, channel string) (string, error)
 		}
 		return checkDockerDigest(src.Images[0], tag)
 	case model.SourceGitHub:
+		if src.RefScheme == model.RefSchemeTag {
+			return checkGitTag(model.SourceGitHub, src.Repo, src.TagFilter, "")
+		}
 		return checkGitHub(src.Repo, src.Branch)
 	case model.SourceBitbucket:
+		if src.RefScheme == model.RefSchemeTag {
+			return checkGitTag(model.SourceBitbucket, src.Repo, src.TagFilter, "")
+		}
 		return checkBitbucket(src.Repo, src.Branch)
 	case model.SourceGitHubRelease:
 		return checkGitHubRelease(src.Repo, channel)
@@ -437,6 +444,84 @@ func checkBitbucket(repo, branch string) (string, error) {
 		hash = hash[:12]
 	}
 	return hash, nil
+}
+
+// checkGitTag returns the highest version tag in a git repo's tag list.
+// Non-version tags are discarded by extractVersion — ckpool for instance
+// carries M21/MP4/S1 tags alongside its vX.Y.Z releases.
+// apiBase overrides the API host; empty means the real upstream host.
+func checkGitTag(srcType model.SourceType, repo, filter, apiBase string) (string, error) {
+	var url string
+	switch srcType {
+	case model.SourceBitbucket:
+		base := apiBase
+		if base == "" {
+			base = "https://api.bitbucket.org"
+		}
+		url = fmt.Sprintf("%s/2.0/repositories/%s/refs/tags?pagelen=100", base, repo)
+	case model.SourceGitHub:
+		base := apiBase
+		if base == "" {
+			base = "https://api.github.com"
+		}
+		url = fmt.Sprintf("%s/repos/%s/tags?per_page=100", base, repo)
+	default:
+		return "", fmt.Errorf("checkGitTag: unsupported source type %s", srcType)
+	}
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("git tags request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("git tags: HTTP %d for %s", resp.StatusCode, repo)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("git tags read: %w", err)
+	}
+
+	// Bitbucket wraps the list in {"values":[...]}, GitHub returns a bare array.
+	type tagEntry struct {
+		Name string `json:"name"`
+	}
+	var names []tagEntry
+	if srcType == model.SourceBitbucket {
+		var wrapped struct {
+			Values []tagEntry `json:"values"`
+		}
+		if err := json.Unmarshal(body, &wrapped); err != nil {
+			return "", fmt.Errorf("git tags decode: %w", err)
+		}
+		names = wrapped.Values
+	} else {
+		if err := json.Unmarshal(body, &names); err != nil {
+			return "", fmt.Errorf("git tags decode: %w", err)
+		}
+	}
+
+	best := ""
+	var bestVer []int
+	for _, t := range names {
+		if filter != "" && !strings.HasPrefix(t.Name, filter) {
+			continue
+		}
+		ver, ok := extractVersion(t.Name, "")
+		if !ok {
+			continue
+		}
+		if best == "" || compareVersions(ver, bestVer) > 0 {
+			best, bestVer = t.Name, ver
+		}
+	}
+
+	if best == "" {
+		return "", fmt.Errorf("git tags: no version tags found for %s", repo)
+	}
+	return best, nil
 }
 
 // checkGitHubRelease returns the latest release tag name from GitHub.
