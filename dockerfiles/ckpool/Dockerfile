@@ -1,6 +1,8 @@
 # ckpool v1.0.0 — multi-stage build for arm64
 FROM debian:bookworm-slim AS builder
 
+ARG SOURCE_REF=v1.0.0
+
 # retry() wraps a command in 4 attempts with 10/30/60s backoff so a transient
 # flake on deb.debian.org or bitbucket.org doesn't kill the whole build.
 RUN set -e; \
@@ -19,7 +21,7 @@ RUN set -e; \
     for delay in 0 10 30 60; do \
         [ $delay -gt 0 ] && sleep $delay; \
         rm -rf .git ./* 2>/dev/null || true; \
-        if git clone --depth 1 --branch v1.0.0 https://bitbucket.org/ckolivas/ckpool.git .; then \
+        if git clone --depth 1 --branch "${SOURCE_REF}" https://bitbucket.org/ckolivas/ckpool.git .; then \
             break; \
         fi; \
         attempt=$((attempt+1)); \
@@ -39,6 +41,9 @@ RUN set -e; \
 COPY --from=builder /build/src/ckpool /usr/local/bin/ckpool
 COPY --from=builder /build/src/ckpmsg /usr/local/bin/ckpmsg
 COPY --from=builder /build/src/notifier /usr/local/bin/notifier
+
+ARG SOURCE_REF
+LABEL org.truffels.source-ref=$SOURCE_REF
 
 USER ckpool
 ENTRYPOINT ["ckpool"]

@@ -939,3 +939,31 @@ func TestCheckLatestVersionCommitSchemeUnchanged(t *testing.T) {
 		t.Fatal("empty RefScheme must not be treated as tag scheme")
 	}
 }
+
+func TestExtractCurrentVersionFromLabels(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceBitbucket, NeedsBuild: true}
+	labels := map[string]string{"org.truffels.source-ref": "v1.2.0"}
+
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckpool:latest", labels); got != "v1.2.0" {
+		t.Errorf("got %q, want v1.2.0", got)
+	}
+}
+
+func TestExtractCurrentVersionFromLabelsMissing(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceBitbucket, NeedsBuild: true}
+
+	// Ein Image ohne Label stammt aus einem Build vor dieser Änderung.
+	// Es darf nicht als "aktuell" durchgehen.
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckpool:latest", nil); got != "" {
+		t.Errorf("got %q, want empty for unlabelled image", got)
+	}
+}
+
+func TestExtractCurrentVersionFromLabelsPullSourceUnaffected(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceDockerHub}
+	labels := map[string]string{"org.truffels.source-ref": "ignored"}
+
+	if got := ExtractCurrentVersionFromLabels(src, "btcpayserver/bitcoin:29.0", labels); got != "29.0" {
+		t.Errorf("got %q, want 29.0 (tag wins for pull sources)", got)
+	}
+}

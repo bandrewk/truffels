@@ -690,3 +690,19 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 		return "unknown"
 	}
 }
+
+// SourceRefLabel carries the git ref an image was built from. It is the only
+// trustworthy statement about what a NeedsBuild service is actually running —
+// the update_checks row merely records what the engine intended to build.
+const SourceRefLabel = "org.truffels.source-ref"
+
+// ExtractCurrentVersionFromLabels resolves the running version, preferring the
+// build label for custom-built services. Returns "" when a NeedsBuild image
+// carries no label; that means it predates label support and its version is
+// genuinely unknown, which must not be reported as up to date.
+func ExtractCurrentVersionFromLabels(src *model.UpdateSource, imageName string, labels map[string]string) string {
+	if src.NeedsBuild {
+		return labels[SourceRefLabel]
+	}
+	return ExtractCurrentVersion(src, imageName)
+}
