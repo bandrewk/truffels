@@ -233,6 +233,47 @@ func TestInstaller_TruffelsAPIMountsRepoReadOnly(t *testing.T) {
 	assertContains(t, serviceBlock(t, string(installer), "agent"), "- $TRUFFELS_REPO_SRC:/repo:rw")
 }
 
+// handleFileReconcile writes service configuration under the agent's
+// configRoot, so that mount must be writable. install.sh had it as :ro while
+// templates.go had :rw — meaning a fresh install could not write any service
+// config until the API's first reconcile rewrote the compose file from the
+// template, which is also what kept the drift out of sight. Same shape as the
+// /repo parity test above: both sides of every agent mount must agree.
+func TestInstaller_AgentConfigMountMatchesTemplate(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	got, err := Render("truffels", TruffelsParams{
+		AgentTag: "truffels/agent:v0.3.1-dev.26",
+		APITag:   "truffels/api:v0.3.1-dev.26",
+		WebTag:   "truffels/web:v0.3.1-dev.26",
+		RepoSrc:  "/home/truffel/Project-Truffels",
+		Version:  "v0.3.1-dev.26",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installerAgent := serviceBlock(t, string(installer), "agent")
+	templateAgent := serviceBlock(t, got, "agent")
+
+	assertContains(t, templateAgent, "- /srv/truffels/config:/srv/truffels/config:rw")
+	assertContains(t, installerAgent, "- /srv/truffels/config:/srv/truffels/config:rw")
+	if strings.Contains(installerAgent, "/srv/truffels/config:/srv/truffels/config:ro") {
+		t.Error("installer mounts the agent's config root read-only; handleFileReconcile\n" +
+			"cannot write service configuration until the first reconcile")
+	}
+	// configRoot has to be stated too, not left to the binary's default, or the
+	// two sides drift again the moment that default changes.
+	assertContains(t, installerAgent, `TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"`)
+	assertContains(t, templateAgent, "TRUFFELS_CONFIG_ROOT")
+
+	// The API stays read-only on the same path — it only reads config.
+	assertContains(t, serviceBlock(t, string(installer), "api"), "- /srv/truffels/config:/srv/truffels/config:ro")
+	assertContains(t, serviceBlock(t, got, "api"), "- /srv/truffels/config:/srv/truffels/config:ro")
+}
+
 // ckstats' SOURCE_REF is a pure stamp — unlike ckpool's, it drives no
 // git clone --branch. A default of "unknown" therefore produced an image
 // labelled with the literal string "unknown", and the installer built it

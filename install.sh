@@ -955,12 +955,19 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/truffels/compose:/srv/truffels/compose:rw
-      - /srv/truffels/config:/srv/truffels/config:ro
+      # rw, not ro: handleFileReconcile writes service configuration under
+      # configRoot (the proxy Caddyfile among them). Mounted read-only, a fresh
+      # install could not write any service config until the API's first
+      # reconcile rewrote this file from the template — which is also what made
+      # the drift invisible. templates.go has always said rw; the installer was
+      # the side that was wrong.
+      - /srv/truffels/config:/srv/truffels/config:rw
       - /srv/truffels/secrets:/srv/truffels/secrets:ro
       - /srv/truffels/data:/srv/truffels/data:rw
       - $TRUFFELS_REPO_SRC:/repo:rw
     environment:
       TRUFFELS_COMPOSE_ROOT: "/srv/truffels/compose"
+      TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"
       TRUFFELS_DATA_ROOT: "/srv/truffels/data"
       TRUFFELS_AGENT_LISTEN: ":9090"
     deploy:
