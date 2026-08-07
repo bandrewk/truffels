@@ -49,7 +49,24 @@ environment:
 
 ## ckstats blank page
 
-ckstats requires `basePath: '/ckstats'` in `next.config.js`. Without this, assets load from the wrong path. The Caddy proxy must **not** use `uri strip_prefix /ckstats` — Next.js handles the prefix internally.
+ckstats requires `basePath: '/ckstats'` in `next.config.js` — without it, assets load
+from `/_next/...` instead of `/ckstats/_next/...` and get swallowed by the Caddy
+catch-all that fronts mempool.
+
+Since v0.3.1-dev.26 this is applied automatically at build time by
+`dockerfiles/ckstats/Dockerfile`, alongside the existing `fetch()` prefix
+rewrites. **Do not edit `next.config.js` in
+`/srv/truffels/data/ckpoolstats` by hand.** That tree must stay a pristine
+upstream checkout; a local edit makes it dirty and blocks every later
+`git checkout <commit>`, which is how ckstats updates used to fail with
+`git checkout failed: exit status 1`.
+
+If a page is still blank, rebuild the image (an update, or
+`docker compose build` in `/srv/truffels/compose/ckstats`) rather than patching
+the source tree.
+
+The Caddy proxy must **not** use `uri strip_prefix /ckstats` — Next.js handles
+the prefix internally.
 
 ## electrs index incompatibility
 

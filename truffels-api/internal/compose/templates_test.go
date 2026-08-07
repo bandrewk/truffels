@@ -233,6 +233,47 @@ func TestInstaller_TruffelsAPIMountsRepoReadOnly(t *testing.T) {
 	assertContains(t, serviceBlock(t, string(installer), "agent"), "- $TRUFFELS_REPO_SRC:/repo:rw")
 }
 
+// handleFileReconcile writes service configuration under the agent's
+// configRoot, so that mount must be writable. install.sh had it as :ro while
+// templates.go had :rw — meaning a fresh install could not write any service
+// config until the API's first reconcile rewrote the compose file from the
+// template, which is also what kept the drift out of sight. Same shape as the
+// /repo parity test above: both sides of every agent mount must agree.
+func TestInstaller_AgentConfigMountMatchesTemplate(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	got, err := Render("truffels", TruffelsParams{
+		AgentTag: "truffels/agent:v0.3.1-dev.26",
+		APITag:   "truffels/api:v0.3.1-dev.26",
+		WebTag:   "truffels/web:v0.3.1-dev.26",
+		RepoSrc:  "/home/truffel/Project-Truffels",
+		Version:  "v0.3.1-dev.26",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installerAgent := serviceBlock(t, string(installer), "agent")
+	templateAgent := serviceBlock(t, got, "agent")
+
+	assertContains(t, templateAgent, "- /srv/truffels/config:/srv/truffels/config:rw")
+	assertContains(t, installerAgent, "- /srv/truffels/config:/srv/truffels/config:rw")
+	if strings.Contains(installerAgent, "/srv/truffels/config:/srv/truffels/config:ro") {
+		t.Error("installer mounts the agent's config root read-only; handleFileReconcile\n" +
+			"cannot write service configuration until the first reconcile")
+	}
+	// configRoot has to be stated too, not left to the binary's default, or the
+	// two sides drift again the moment that default changes.
+	assertContains(t, installerAgent, `TRUFFELS_CONFIG_ROOT: "/srv/truffels/config"`)
+	assertContains(t, templateAgent, "TRUFFELS_CONFIG_ROOT")
+
+	// The API stays read-only on the same path — it only reads config.
+	assertContains(t, serviceBlock(t, string(installer), "api"), "- /srv/truffels/config:/srv/truffels/config:ro")
+	assertContains(t, serviceBlock(t, got, "api"), "- /srv/truffels/config:/srv/truffels/config:ro")
+}
+
 // ckstats' SOURCE_REF is a pure stamp — unlike ckpool's, it drives no
 // git clone --branch. A default of "unknown" therefore produced an image
 // labelled with the literal string "unknown", and the installer built it
@@ -271,6 +312,54 @@ func TestInstaller_BuildsCkstatsWithItsRealRef(t *testing.T) {
 	// The engine compares against a 12-char short SHA (checkGitHub truncates to
 	// SHA[:12]). Stamping a full 40-char hash would mismatch forever.
 	assertContains(t, sh, "rev-parse --short=12 HEAD")
+}
+
+// A shallow clone has no history to check out, so `git checkout <upstream
+// commit>` — which is exactly what a ckstats update does — cannot work on a
+// device installed with --depth 1. This device only ever updated because its
+// clone happened to be full. --filter=blob:none is the correct way to keep the
+// transfer small: full refs and trees, blobs on demand.
+func TestInstaller_ClonesCkstatsSourceDeepEnoughToUpdate(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	clone := grepLines(string(installer), "github.com/mrv777/ckstats.git")
+	if clone == "" {
+		t.Fatal("no ckstats clone found in install.sh")
+	}
+	if strings.Contains(clone, "--depth") {
+		t.Errorf("ckstats is cloned shallow; no update could ever check out a\n"+
+			"different commit on a fresh install:\n%s", clone)
+	}
+	if !strings.Contains(clone, "--filter=blob:none") {
+		t.Errorf("expected a blobless partial clone, got:\n%s", clone)
+	}
+}
+
+// install.sh runs as root and chowns the ckstats tree to 1000:1000, so git
+// rejects it with "dubious ownership" unless told otherwise. Under sudo git
+// reads SUDO_UID and lets it through, which hid the bug — from a root shell or
+// a systemd unit the rev-parse returned empty and the install stamped no source
+// ref at all. Scoped with -c rather than `git config --global`, so the
+// exemption does not outlive the command in /root/.gitconfig.
+func TestInstaller_ReadsCkstatsRefAsRealRoot(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	revParse := grepLines(string(installer), "rev-parse --short=12 HEAD")
+	if revParse == "" {
+		t.Fatal("no ckstats rev-parse found in install.sh")
+	}
+	if !strings.Contains(revParse, "safe.directory") {
+		t.Errorf("ckstats rev-parse runs as root against a 1000:1000 tree without a\n"+
+			"safe.directory exemption; it returns empty outside sudo:\n%s", revParse)
+	}
+	if strings.Contains(string(installer), "config --global --add safe.directory") {
+		t.Errorf("safe.directory must not be written to /root/.gitconfig; it would\n" +
+			"outlive the install and accumulate on every re-run")
+	}
 }
 
 // grepLines returns the lines of s containing substr, for readable failures.
