@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"truffels-api/internal/docker"
@@ -29,7 +30,36 @@ type mockAgentOpts struct {
 	buildFail   bool
 	unhealthy   bool // if true, inspect returns unhealthy containers
 	imageInspectFail bool   // if true, /v1/image/inspect returns 500
+	tagFail          bool   // if true, /v1/image/tag returns 500 (no staged rollback image)
 	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
+	imageLabels      map[string]string // labels returned by /v1/image/inspect (NeedsBuild verification)
+	tags             *tagRecorder      // records /v1/image/tag calls when set
+}
+
+// tagCall is one /v1/image/tag request. JSON tags match the agent's wire format
+// so the recorder decodes exactly what the client sent.
+type tagCall struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// tagRecorder collects retag calls. The engine prunes in a background goroutine
+// after a successful update, so access is behind a mutex.
+type tagRecorder struct {
+	mu    sync.Mutex
+	calls []tagCall
+}
+
+func (r *tagRecorder) record(c tagCall) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, c)
+}
+
+func (r *tagRecorder) snapshot() []tagCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]tagCall(nil), r.calls...)
 }
 
 func newMockAgent(opts mockAgentOpts) *httptest.Server {
@@ -97,8 +127,34 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 			info := docker.ImageInfo{
 				Image:  "mariadb:lts",
 				Digest: "sha256:olddigest123",
+				Labels: opts.imageLabels,
 			}
 			_ = json.NewEncoder(w).Encode(info)
+
+		case "/v1/image/inspect-by-name":
+			var req struct {
+				Image string `json:"image"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if opts.imageInspectFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no such image"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(docker.ImageInfo{Image: req.Image, Labels: opts.imageLabels})
+
+		case "/v1/image/tag":
+			var req tagCall
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if opts.tags != nil {
+				opts.tags.record(req)
+			}
+			if opts.tagFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no such image"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/inspect":
 			// AgentInspector.Inspect decodes as []model.ContainerState
@@ -671,7 +727,11 @@ func TestApplyUpdate_AlreadyUpdating(t *testing.T) {
 }
 
 func TestApplyUpdate_BuildService(t *testing.T) {
-	agent := newMockAgent(mockAgentOpts{})
+	// The rebuilt image must report the requested ref, otherwise the engine
+	// refuses to call the update a success (see the NeedsBuild tests).
+	agent := newMockAgent(mockAgentOpts{
+		imageLabels: map[string]string{SourceRefLabel: "def789abc012"},
+	})
 	defer agent.Close()
 
 	composeDir := t.TempDir()

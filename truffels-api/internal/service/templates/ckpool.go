@@ -17,6 +17,8 @@ var Ckpool = model.ServiceTemplate{
 		Repo:       "ckolivas/ckpool",
 		Branch:     "master",
 		NeedsBuild: true,
+		RefScheme:  model.RefSchemeTag,
+		TagFilter:  "v",
 	},
 	DataDirs: []model.DataDir{
 		{

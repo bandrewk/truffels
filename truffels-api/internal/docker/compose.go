@@ -43,9 +43,10 @@ type agentResponse struct {
 }
 
 type ImageInfo struct {
-	Image  string   `json:"image"`
-	Digest string   `json:"digest"`
-	Tags   []string `json:"tags"`
+	Image  string            `json:"image"`
+	Digest string            `json:"digest"`
+	Tags   []string          `json:"tags"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func (c *ComposeClient) Up(serviceID string) error {
@@ -121,6 +122,52 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 		return nil, fmt.Errorf("agent image inspect decode: %w", err)
 	}
 	return &info, nil
+}
+
+// ImageInspectByName returns image info for an image reference, without going
+// through a container. Needed for custom-built services: their container may be
+// absent (never started, or removed by a failed update), and the container-based
+// lookup then reports nothing at all.
+func (c *ComposeClient) ImageInspectByName(image string) (*ImageInfo, error) {
+	body, _ := json.Marshal(map[string]string{"image": image})
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/inspect-by-name", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("agent image inspect by name: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		var ar agentResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
+		return nil, fmt.Errorf("agent image inspect by name: %s", ar.Error)
+	}
+
+	var info ImageInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("agent image inspect by name decode: %w", err)
+	}
+	return &info, nil
+}
+
+// ImageTag points target at the image currently behind source. Used to stage
+// and to restore the rollback generation of a custom-built service.
+func (c *ComposeClient) ImageTag(source, target string) error {
+	body, _ := json.Marshal(map[string]string{"source": source, "target": target})
+	slog.Info("agent image tag", "source", source, "target", target)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/tag", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent image tag: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent image tag: %s", ar.Error)
+	}
+	return nil
 }
 
 // Build runs docker compose build for a service via the agent.
@@ -316,10 +363,13 @@ func (c *ComposeClient) SystemTuningSet(action, value string) error {
 	return nil
 }
 
-// GitCheckout tells the agent to fetch tags and checkout a specific git tag.
-func (c *ComposeClient) GitCheckout(repoDir, tag string) error {
-	body, _ := json.Marshal(map[string]string{"repo_dir": repoDir, "tag": tag})
-	slog.Info("agent git checkout", "repo", repoDir, "tag", tag)
+// GitCheckout tells the agent to fetch and checkout a specific ref.
+// refScheme is "tag" or "commit"; empty means tag.
+func (c *ComposeClient) GitCheckout(repoDir, ref, refScheme string) error {
+	body, _ := json.Marshal(map[string]string{
+		"repo_dir": repoDir, "tag": ref, "ref_scheme": refScheme,
+	})
+	slog.Info("agent git checkout", "repo", repoDir, "ref", ref, "scheme", refScheme)
 
 	resp, err := c.httpClient.Post(c.agentURL+"/v1/git/checkout", "application/json", bytes.NewReader(body))
 	if err != nil {

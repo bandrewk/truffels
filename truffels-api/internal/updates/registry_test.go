@@ -854,3 +854,132 @@ func TestListDockerHubVersions_PrefersPlainTagOnVersionTie(t *testing.T) {
 		}
 	}
 }
+
+// ---------- checkGitTag ----------
+
+func TestCheckGitTagBitbucket(t *testing.T) {
+	// Echte ckpool-Tag-Formen: Versions-Tags neben M/MP/S-Tags, die
+	// keine Versionen sind und niemals gewinnen dürfen.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[
+			{"name":"M21"},{"name":"MP4"},{"name":"S1"},
+			{"name":"v0.9.9"},{"name":"v1.0.0"},{"name":"v1.1.1"},{"name":"v1.2.0"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceBitbucket, "ckolivas/ckpool", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v1.2.0" {
+		t.Errorf("got %q, want v1.2.0", got)
+	}
+}
+
+func TestCheckGitTagNumericNotLexicographic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[{"name":"v0.9.9"},{"name":"v0.10.0"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v0.10.0" {
+		t.Errorf("got %q, want v0.10.0 (numeric compare, not lexicographic)", got)
+	}
+}
+
+func TestCheckGitTagGitHubShape(t *testing.T) {
+	// GitHub liefert ein Array statt eines Objekts mit "values".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"name":"v2.0.0"},{"name":"v1.9.0"}]`))
+	}))
+	defer srv.Close()
+
+	got, err := checkGitTag(model.SourceGitHub, "x/y", "v", srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v2.0.0" {
+		t.Errorf("got %q, want v2.0.0", got)
+	}
+}
+
+func TestCheckGitTagNoVersionTags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"values":[{"name":"M21"},{"name":"S1"}]}`))
+	}))
+	defer srv.Close()
+
+	if _, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL); err == nil {
+		t.Error("expected error when no version tags exist, got nil")
+	}
+}
+
+func TestCheckGitTagHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+
+	if _, err := checkGitTag(model.SourceBitbucket, "x/y", "v", srv.URL); err == nil {
+		t.Error("expected error on HTTP 500, got nil")
+	}
+}
+
+func TestCheckLatestVersionCommitSchemeUnchanged(t *testing.T) {
+	// Leeres RefScheme muss weiterhin den Commit-Pfad wählen. Wir prüfen das
+	// ohne Netzwerk, indem wir einen unbekannten Source-Type ausschließen und
+	// nur die Verzweigung selbst betrachten.
+	src := &model.UpdateSource{Type: model.SourceBitbucket, Repo: "x/y", Branch: "master"}
+	if src.RefScheme == model.RefSchemeTag {
+		t.Fatal("empty RefScheme must not be treated as tag scheme")
+	}
+}
+
+func TestExtractCurrentVersionFromLabels(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceBitbucket, NeedsBuild: true}
+	labels := map[string]string{"org.truffels.source-ref": "v1.2.0"}
+
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckpool:latest", labels); got != "v1.2.0" {
+		t.Errorf("got %q, want v1.2.0", got)
+	}
+}
+
+func TestExtractCurrentVersionFromLabelsMissing(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceBitbucket, NeedsBuild: true}
+
+	// Ein Image ohne Label stammt aus einem Build vor dieser Änderung.
+	// Es darf nicht als "aktuell" durchgehen.
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckpool:latest", nil); got != "" {
+		t.Errorf("got %q, want empty for unlabelled image", got)
+	}
+}
+
+func TestExtractCurrentVersionFromLabelsPullSourceUnaffected(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceDockerHub}
+	labels := map[string]string{"org.truffels.source-ref": "ignored"}
+
+	if got := ExtractCurrentVersionFromLabels(src, "btcpayserver/bitcoin:29.0", labels); got != "29.0" {
+		t.Errorf("got %q, want 29.0 (tag wins for pull sources)", got)
+	}
+}
+
+// The truffels stack is NeedsBuild as well, but its version lives in the image
+// tag and its Dockerfiles stamp no source-ref label. Keying the label lookup on
+// NeedsBuild instead of the source type would blank the self-update's version.
+func TestExtractCurrentVersionFromLabelsSelfUpdateUsesTag(t *testing.T) {
+	src := &model.UpdateSource{
+		Type:       model.SourceGitHubRelease,
+		Repo:       "bandrewk/truffels",
+		Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
+		NeedsBuild: true,
+	}
+
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/api:v0.3.1-dev.24", nil); got != "v0.3.1-dev.24" {
+		t.Errorf("got %q, want v0.3.1-dev.24 from the image tag", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strconv"
 	"sync"
 	"syscall"
@@ -159,7 +160,11 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			// For digest-based checks, use the local image digest directly
 			currentVersion = info.Digest
 		} else {
-			currentVersion = ExtractCurrentVersion(src, info.Image)
+			// Labels first: for the services we build ourselves the image tag is
+			// pinned (truffels/ckpool:v1.0.0 stays put across builds), so the only
+			// statement about what is actually running is the ref stamped into the
+			// image at build time. Everything else still reads the tag.
+			currentVersion = ExtractCurrentVersionFromLabels(src, info.Image, info.Labels)
 		}
 	}
 
@@ -490,11 +495,8 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		}
 		// No compose file rewrite needed — tag stays the same
 	} else if src.NeedsBuild {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
-		if err := e.compose.Build(serviceID); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
-			return &UpdateError{Msg: "build failed: " + err.Error()}
+		if err := e.applyNeedsBuild(serviceID, tmpl, src, check, logID); err != nil {
+			return err
 		}
 	} else {
 		_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
@@ -533,7 +535,12 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 			return &UpdateError{Msg: "start failed: " + err.Error()}
 		}
 		slog.Error("update: start failed, rolling back", "service", serviceID, "err", err)
-		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
+		if rbErr := e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion); rbErr != nil {
+			msg := "start failed: " + err.Error() + "; rollback incomplete: " + rbErr.Error()
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, check.CurrentVersion)
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "start failed: "+err.Error(), check.CurrentVersion)
 		e.alertUpdateFailed(serviceID, "start failed, rolled back to "+check.CurrentVersion)
 		return &UpdateError{Msg: "start failed, rolled back: " + err.Error()}
@@ -550,7 +557,12 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 			return &UpdateError{Msg: "service unhealthy after update, no rollback available for floating tag"}
 		}
 		slog.Error("update: service unhealthy after update, rolling back", "service", serviceID)
-		e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion)
+		if rbErr := e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion); rbErr != nil {
+			msg := "unhealthy after update; rollback incomplete: " + rbErr.Error()
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, check.CurrentVersion)
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "unhealthy after update", check.CurrentVersion)
 		e.alertUpdateFailed(serviceID, "unhealthy after update, rolled back to "+check.CurrentVersion)
 		return &UpdateError{Msg: "service unhealthy after update, rolled back"}
@@ -636,24 +648,78 @@ func (e *Engine) RollbackService(serviceID string) error {
 		return &UpdateError{Msg: "cannot create rollback log: " + err.Error()}
 	}
 
-	// Pull old version
+	// Restore the old image
 	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
 	if src.NeedsBuild {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "rollback not supported for custom-built services", "")
-		return &UpdateError{Msg: "rollback not supported for custom-built services"}
-	}
-	for _, img := range src.Images {
-		if _, err := e.compose.Pull(img + ":" + prevVersion); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "rollback pull failed: "+err.Error())
-			return &UpdateError{Msg: "pull failed: " + err.Error()}
+		// The truffels stack is NeedsBuild as well, but it is a github_release:
+		// ApplyUpdateToVersion routes it to applySelfUpdate before it ever gets
+		// here, and nothing is staged under a truffels/truffels:rollback tag.
+		// Without this guard the retag path below chases an image that does not
+		// exist and ends in a misleading "no rollback image available" plus an
+		// alert. Keep the honest message this path had before retag rollbacks.
+		if src.Type == model.SourceGitHubRelease {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "rollback not supported for custom-built services", "")
+			return &UpdateError{Msg: "rollback not supported for custom-built services"}
 		}
-	}
-	// Rewrite compose tags
-	if err := e.compose.RewriteTags(serviceID, src.Images, currentVersion, prevVersion); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "rollback compose rewrite failed: "+err.Error())
-		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+
+		// Nothing to pull — a custom build exists only on this box. The image
+		// running before the last update was staged under :rollback; move that
+		// tag back onto the ref the compose file runs. Fail loudly if it is
+		// gone: restarting the current image and calling it a rollback is the
+		// bug this replaces.
+		//
+		// Check the staged image *before* moving any tag: :rollback holds
+		// exactly one generation and is only ever staged by an update, never by
+		// a rollback. After one successful rollback it points at the image that
+		// is already running, so a second rollback would retag a no-op, come up
+		// healthy and then record prevVersion as the running version — the
+		// running code would be one generation older than the UI claims.
+		// Verifying first means a refusal leaves nothing half-done.
+		rollbackRef := rollbackImageRef(serviceID)
+		info, inspectErr := e.compose.ImageInspectByName(rollbackRef)
+		if inspectErr != nil {
+			msg := "cannot verify the staged rollback image: " + inspectErr.Error()
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+		staged := info.Labels[SourceRefLabel]
+		switch {
+		case staged == "":
+			// Either nothing is staged (the agent answers 200 with empty fields
+			// for an unknown image) or the staged image predates source-ref
+			// labels. Both mean we cannot prove what it would restore.
+			msg := fmt.Sprintf("no rollback image available: %s carries no source ref, so it cannot be shown to hold %s", rollbackRef, prevVersion)
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		case staged != prevVersion:
+			msg := fmt.Sprintf("staged rollback image holds ref %q, not %q — only one generation is kept, so this version is gone", staged, prevVersion)
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+
+		live := liveImageRef(tmpl, serviceID)
+		if err := e.compose.ImageTag(rollbackRef, live); err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "no rollback image available: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "rollback image restore failed: "+err.Error())
+			return &UpdateError{Msg: "no rollback image available: " + err.Error()}
+		}
+	} else {
+		for _, img := range src.Images {
+			if _, err := e.compose.Pull(img + ":" + prevVersion); err != nil {
+				_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
+				e.alertUpdateFailed(serviceID, "rollback pull failed: "+err.Error())
+				return &UpdateError{Msg: "pull failed: " + err.Error()}
+			}
+		}
+		// Rewrite compose tags
+		if err := e.compose.RewriteTags(serviceID, src.Images, currentVersion, prevVersion); err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "rollback compose rewrite failed: "+err.Error())
+			return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+		}
 	}
 
 	// Restart
@@ -686,8 +752,22 @@ func (e *Engine) RollbackService(serviceID string) error {
 	return nil
 }
 
-func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, currentVersion, newVersion string) {
-	if !src.NeedsBuild {
+// rollback returns the service to the state it was in before the update.
+// It reports an error when it could not do so — the caller must not claim a
+// rollback that did not happen.
+func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, currentVersion, newVersion string) error {
+	var rollbackErr error
+	if src.NeedsBuild {
+		// A custom build has no registry to pull the old version back from. The
+		// previous image was staged under :rollback before the build overwrote
+		// the live tag; move it back, otherwise Down/Up would simply restart the
+		// very image that just failed while we reported a successful rollback.
+		live := liveImageRef(tmpl, serviceID)
+		if err := e.compose.ImageTag(rollbackImageRef(serviceID), live); err != nil {
+			slog.Error("rollback: retag failed", "service", serviceID, "image", live, "err", err)
+			rollbackErr = fmt.Errorf("restoring previous image failed: %w", err)
+		}
+	} else {
 		// Revert compose file to old version
 		if err := e.compose.RewriteTags(serviceID, src.Images, newVersion, currentVersion); err != nil {
 			slog.Error("rollback: compose rewrite failed", "service", serviceID, "err", err)
@@ -698,6 +778,7 @@ func (e *Engine) rollback(serviceID string, tmpl model.ServiceTemplate, src *mod
 	}
 	_ = e.compose.Down(serviceID)
 	_ = e.compose.Up(serviceID)
+	return rollbackErr
 }
 
 func (e *Engine) checkHealth(tmpl model.ServiceTemplate) bool {
@@ -717,6 +798,136 @@ func (e *Engine) checkHealth(tmpl model.ServiceTemplate) bool {
 	return true
 }
 
+// applyNeedsBuild rebuilds a custom-built service at a specific upstream ref
+// and verifies the result before starting it. The ref travels into the build as
+// the SOURCE_REF build arg and comes back out of the image's source-ref label,
+// so a build that silently produced the old code can no longer be reported as a
+// successful update — which is exactly what ckpool and ckstats used to do.
+// composeImageRe matches the image line a compose file uses for a service's own
+// truffels image, e.g. "  image: truffels/ckpool:v1.0.0".
+func composeImageRe(serviceID string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\s*image:\s*(truffels/` + regexp.QuoteMeta(serviceID) + `:[A-Za-z0-9._-]+)\s*$`)
+}
+
+// liveImageRef is the image reference a custom-built service actually runs.
+// The convention is truffels/<id>:latest — but ckpool's compose file pins
+// truffels/ckpool:v1.0.0, and staging or restoring :latest there would move a
+// tag nothing runs: the same silent no-op this rollback path exists to end. So
+// read the compose file and fall back to the convention only when it says
+// nothing.
+// Every path to the fallback warns: each one is a misconfiguration that turns
+// staging and rollback into tag moves nothing runs, and it has to be visible
+// before a rollback needs the ref, not afterwards.
+func liveImageRef(tmpl model.ServiceTemplate, serviceID string) string {
+	fallback := "truffels/" + serviceID + ":latest"
+	if tmpl.ComposeDir == "" {
+		slog.Warn("no compose dir for service, assuming conventional image ref",
+			"service", serviceID, "image", fallback)
+		return fallback
+	}
+	path := tmpl.ComposeDir + "/docker-compose.yml"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		slog.Warn("cannot read compose file, assuming conventional image ref",
+			"service", serviceID, "path", path, "image", fallback, "err", err)
+		return fallback
+	}
+	if m := composeImageRe(serviceID).FindSubmatch(data); m != nil {
+		return string(m[1])
+	}
+	// A trailing comment ("image: truffels/ckpool:v1.0.0 # pinned") or an
+	// interpolated tag ("image: truffels/ckpool:${TAG}") both miss the pattern.
+	slog.Warn("no plain truffels image line in compose file, assuming conventional image ref",
+		"service", serviceID, "path", path, "image", fallback)
+	return fallback
+}
+
+// rollbackImageRef names the single retained rollback generation. Exactly one:
+// a second update overwrites it, because more generations cost disk on a device
+// that has none to spare.
+func rollbackImageRef(serviceID string) string {
+	return "truffels/" + serviceID + ":rollback"
+}
+
+func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, check *model.UpdateCheck, logID int64) error {
+	// Services whose source lives as a working copy on disk need it moved to the
+	// target ref first; ckpool clones inside its Dockerfile and has no RepoDir.
+	if src.RepoDir != "" {
+		// model.UpdateSource documents an empty RefScheme as "commit", but the
+		// agent's /v1/git/checkout treats an empty ref_scheme as "tag" and would
+		// reject a commit hash with HTTP 400. Resolve the default here so the
+		// wire value always carries the meaning the model defines.
+		refScheme := src.RefScheme
+		if refScheme == "" {
+			refScheme = model.RefSchemeCommit
+		}
+		if err := e.compose.GitCheckout(src.RepoDir, check.LatestVersion, refScheme); err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
+			return &UpdateError{Msg: "git checkout failed: " + err.Error()}
+		}
+	}
+
+	// Stage the running image for rollback before the build overwrites its tag.
+	// Staging itself is best-effort: a first-time build has nothing to stage,
+	// and refusing to update over that would be worse than losing the rollback
+	// option.
+	live := liveImageRef(tmpl, serviceID)
+	rollbackRef := rollbackImageRef(serviceID)
+	if err := e.compose.ImageTag(live, rollbackRef); err != nil {
+		// Whatever :rollback still points at is now one generation too old —
+		// it was staged by the *previous* update. Restoring it later would
+		// install the wrong build and report a successful rollback, which is
+		// the class of lie this whole path exists to end. Drop the tag so a
+		// later rollback fails honestly instead. Removing a tag does not delete
+		// the image it shares with other tags.
+		slog.Warn("could not stage rollback image", "service", serviceID, "image", live, "err", err)
+		if rmErr := e.compose.RemoveImage(rollbackRef); rmErr != nil {
+			slog.Warn("could not drop the stale rollback tag", "service", serviceID, "image", rollbackRef, "err", rmErr)
+		}
+	}
+
+	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
+	buildArgs := map[string]string{"SOURCE_REF": check.LatestVersion}
+	if err := e.compose.BuildWithArgs(serviceID, buildArgs); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
+		return &UpdateError{Msg: "build failed: " + err.Error()}
+	}
+
+	// Verify before restarting: a mismatched image must never get to run. The
+	// agent resolves the image by the name the container references, so this
+	// reads the freshly built image even though the old one is still running.
+	var info *docker.ImageInfo
+	err := fmt.Errorf("service %s has no container to inspect", serviceID)
+	if len(tmpl.ContainerNames) > 0 {
+		info, err = e.compose.ImageInspect(tmpl.ContainerNames[0])
+	}
+	if err != nil {
+		// No container to resolve through — the case checkService deliberately
+		// does not skip for git sources, i.e. ckpool and ckstats after a failed
+		// or never-completed start. Ask for the image by name instead; only a
+		// second failure means we cannot verify at all.
+		byName, nameErr := e.compose.ImageInspectByName(live)
+		if nameErr != nil {
+			msg := "image inspect failed: " + err.Error() + "; by name: " + nameErr.Error()
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+		info = byName
+	}
+	built := info.Labels[SourceRefLabel]
+	if built != check.LatestVersion {
+		msg := fmt.Sprintf("built ref %q does not match requested %q", built, check.LatestVersion)
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+		e.alertUpdateFailed(serviceID, msg)
+		return &UpdateError{Msg: msg}
+	}
+
+	return nil
+}
+
 // applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
 // Flow: git checkout tag → build with VERSION arg → rewrite compose tags → detached restart.
 func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck, logID int64) error {
@@ -734,7 +945,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 
 	// Step 1: Git checkout the new tag
 	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
-	if err := e.compose.GitCheckout("/repo", check.LatestVersion); err != nil {
+	if err := e.compose.GitCheckout("/repo", check.LatestVersion, model.RefSchemeTag); err != nil {
 		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
 		e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
 		return &UpdateError{Msg: "git checkout failed: " + err.Error()}

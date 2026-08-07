@@ -316,7 +316,7 @@ func TestComposeClient_GitCheckout_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := NewComposeClient(srv.URL)
-	if err := client.GitCheckout("/repo", "v0.2.0"); err != nil {
+	if err := client.GitCheckout("/repo", "v0.2.0", "tag"); err != nil {
 		t.Fatalf("git checkout: %v", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestComposeClient_GitCheckout_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := NewComposeClient(srv.URL)
-	err := client.GitCheckout("/repo", "v0.2.0")
+	err := client.GitCheckout("/repo", "v0.2.0", "tag")
 	if err == nil {
 		t.Fatal("expected error")
 	}

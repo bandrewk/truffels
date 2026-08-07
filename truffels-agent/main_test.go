@@ -970,6 +970,45 @@ func TestHandleGitCheckout_InvalidTagFormat(t *testing.T) {
 	}
 }
 
+func TestHandleGitCheckout_CommitHashRejectedWithoutRefScheme(t *testing.T) {
+	// A bare commit hash must NOT pass under the default (tag) validator.
+	// If it did, the scheme selection defaulted to the loose check instead
+	// of the strict one the self-update path relies on.
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: "4bccedb"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid ref format" {
+		t.Fatalf("expected 'invalid ref format', got %q", resp["error"])
+	}
+}
+
+func TestHandleGitCheckout_TagRejectedUnderCommitScheme(t *testing.T) {
+	// A tag must NOT pass when ref_scheme is explicitly "commit". If it
+	// did, the branch that picks the validator was inverted.
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: "v0.2.0", RefScheme: "commit"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid ref format" {
+		t.Fatalf("expected 'invalid ref format', got %q", resp["error"])
+	}
+}
+
 func TestHandleGitCheckout_MalformedJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader([]byte("bad")))
@@ -993,6 +1032,70 @@ func TestIsValidTag(t *testing.T) {
 		if isValidTag(tag) {
 			t.Errorf("expected %q to be invalid", tag)
 		}
+	}
+}
+
+func TestIsValidCommitHash(t *testing.T) {
+	valid := []string{
+		"4bccedb",
+		"dbd39954",
+		"4bccedb1234567890abcdef1234567890abcdef1",
+	}
+	for _, s := range valid {
+		if !isValidCommitHash(s) {
+			t.Errorf("isValidCommitHash(%q) = false, want true", s)
+		}
+	}
+
+	invalid := []string{
+		"",                                          // leer
+		"4bcced",                                    // 6 Zeichen, zu kurz
+		"4bccedb1234567890abcdef1234567890abcdef12", // 41 Zeichen, zu lang
+		"4BCCEDB",                                   // Großbuchstaben
+		"v1.2.0",                                    // Tag, kein Hash
+		"4bccedb; rm -rf /",                         // Shell-Metazeichen
+		"../../../etc/passwd",                       // Pfad-Traversal
+		"4bccedb\n--upload-pack=evil",               // Newline-Injection
+		"-4bccedb",                                  // führender Bindestrich, sieht wie ein Flag aus
+	}
+	for _, s := range invalid {
+		if isValidCommitHash(s) {
+			t.Errorf("isValidCommitHash(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestAllowedRepoDirsRejectsTraversal(t *testing.T) {
+	allowed := []string{"/repo", "/srv/truffels/data/ckpoolstats"}
+	for _, d := range allowed {
+		if !isAllowedRepoDir(d) {
+			t.Errorf("isAllowedRepoDir(%q) = false, want true", d)
+		}
+	}
+
+	rejected := []string{
+		"/repo/../etc",
+		"/srv/truffels/data/ckpoolstats/../../secrets",
+		"/srv/truffels/secrets",
+		"/repo/",
+		"",
+		"/",
+	}
+	for _, d := range rejected {
+		if isAllowedRepoDir(d) {
+			t.Errorf("isAllowedRepoDir(%q) = true, want false", d)
+		}
+	}
+}
+
+func TestIsValidTagStillRejectsCommitHashes(t *testing.T) {
+	// isValidTag darf durch diese Änderung nicht aufgeweicht werden —
+	// der Self-Update-Pfad hängt daran.
+	if isValidTag("4bccedb") {
+		t.Error("isValidTag must keep rejecting bare commit hashes")
+	}
+	if !isValidTag("v0.3.1-dev.23") {
+		t.Error("isValidTag must keep accepting dev tags")
 	}
 }
 
@@ -2158,5 +2261,156 @@ func TestDirSizeCache_StaleMarkerSurfacedViaTimestamp(t *testing.T) {
 	}
 	if time.Since(walked) < time.Hour {
 		t.Errorf("walked was %v ago, expected >1h", time.Since(walked))
+	}
+}
+
+func TestImageInspectResponseCarriesLabels(t *testing.T) {
+	// Die Response-Struktur muss ein labels-Feld serialisieren, sonst kann
+	// die API die gebaute Ref nicht zurücklesen.
+	resp := imageInspectResponse{
+		Image:  "truffels/ckpool:latest",
+		Labels: map[string]string{"org.truffels.source-ref": "v1.2.0"},
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"labels"`) {
+		t.Errorf("response JSON lacks labels field: %s", b)
+	}
+	if !strings.Contains(string(b), "org.truffels.source-ref") {
+		t.Errorf("response JSON lacks the source-ref label: %s", b)
+	}
+}
+
+// --- Image retag / inspect-by-name (security boundary: agent is root) ---
+
+func TestImageTagRejectsForeignImages(t *testing.T) {
+	// Der Endpunkt darf nur Truffels-eigene Images umtaggen.
+	if isAllowedImageRef("bitcoin/bitcoin:29.0") {
+		t.Error("must reject images outside the truffels namespace")
+	}
+	if !isAllowedImageRef("truffels/ckpool:rollback") {
+		t.Error("must accept truffels images")
+	}
+	if isAllowedImageRef("truffels/ckpool:latest; rm -rf /") {
+		t.Error("must reject shell metacharacters")
+	}
+}
+
+func TestIsAllowedImageRef_Charset(t *testing.T) {
+	allowed := []string{
+		"truffels/ckpool:v1.0.0", "truffels/ckstats:latest",
+		"truffels/ckstats-cron:rollback", "truffels/api:v0.3.1-dev.23",
+		"truffels/web:sha256_abc",
+	}
+	for _, ref := range allowed {
+		if !isAllowedImageRef(ref) {
+			t.Errorf("ref %q should be allowed", ref)
+		}
+	}
+	denied := []string{
+		"", "ckpool:latest", "docker.io/truffels/ckpool:latest",
+		"Truffels/ckpool:latest", "truffels/CKPOOL:latest",
+		"truffels/ckpool:latest $(id)", "truffels/ckpool:latest`id`",
+		"truffels/ckpool:latest&&id", "truffels/ckpool:latest|id",
+		"truffels/ckpool:latest\nid", "truffels/ck pool:latest",
+		"truffels/ckpool:latest'", `truffels/ckpool:latest"`,
+		"truffels/ckpool:*", "truffels/ckpool:latest;id",
+	}
+	for _, ref := range denied {
+		if isAllowedImageRef(ref) {
+			t.Errorf("ref %q must be rejected", ref)
+		}
+	}
+}
+
+func TestHandleImageTag_RejectsForeignSource(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{
+		"source": "bitcoin/bitcoin:29.0", "target": "truffels/ckpool:latest",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader(body))
+
+	handleImageTag(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImageTag_RejectsForeignTarget(t *testing.T) {
+	// Source allowed, target not — both sides must be checked.
+	body, _ := json.Marshal(map[string]string{
+		"source": "truffels/ckpool:rollback", "target": "nginx:latest",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader(body))
+
+	handleImageTag(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImageTag_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader([]byte("nope")))
+
+	handleImageTag(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageInspectByName_RejectsForeignImage(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{"image": "mariadb:lts"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader(body))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "image ref not allowed" {
+		t.Errorf("expected 'image ref not allowed', got %q", resp["error"])
+	}
+}
+
+func TestHandleImageInspectByName_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader([]byte("{")))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageInspectByName_AllowedImageAnswersWithoutContainer(t *testing.T) {
+	// docker is not available in the test container, so the lookups inside come
+	// back empty — the point here is that an allowed ref gets past the guard and
+	// is answered with the shared inspect response shape.
+	body, _ := json.Marshal(map[string]string{"image": "truffels/ckpool:rollback"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader(body))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp imageInspectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Image != "truffels/ckpool:rollback" {
+		t.Errorf("image = %q, want the requested ref", resp.Image)
 	}
 }

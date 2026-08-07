@@ -93,6 +93,8 @@ func main() {
 	mux.HandleFunc("POST /v1/inspect", handleInspect)
 	mux.HandleFunc("POST /v1/image/pull", handleImagePull)
 	mux.HandleFunc("POST /v1/image/inspect", handleImageInspect)
+	mux.HandleFunc("POST /v1/image/inspect-by-name", handleImageInspectByName)
+	mux.HandleFunc("POST /v1/image/tag", handleImageTag)
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
@@ -574,10 +576,11 @@ type imageInspectRequest struct {
 	Container string `json:"container"`
 }
 
-type imageInspectResult struct {
-	Image   string   `json:"image"`
-	Digest  string   `json:"digest"`
-	Tags    []string `json:"tags"`
+type imageInspectResponse struct {
+	Image  string            `json:"image"`
+	Digest string            `json:"digest"`
+	Tags   []string          `json:"tags"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func handleImageInspect(w http.ResponseWriter, r *http.Request) {
@@ -606,6 +609,13 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 	}
 	imageName := strings.TrimSpace(imageOut.String())
 
+	writeJSON(w, 200, inspectImageByName(ctx, imageName))
+}
+
+// inspectImageByName reads digest, tags and labels straight off an image. Every
+// docker call here is best-effort: a missing field is reported as empty rather
+// than as a failure, which is what the digest/tag lookups have always done.
+func inspectImageByName(ctx context.Context, imageName string) imageInspectResponse {
 	// Get image digest
 	cmd2 := exec.CommandContext(ctx, "docker", "inspect", "--format",
 		"{{index .RepoDigests 0}}", imageName)
@@ -631,11 +641,95 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
 	}
 
-	writeJSON(w, 200, imageInspectResult{
+	// Get labels — carries org.truffels.source-ref, the ref the image was built from.
+	cmd4 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+		"{{json .Config.Labels}}", imageName)
+	var labelsOut bytes.Buffer
+	cmd4.Stdout = &labelsOut
+	labels := map[string]string{}
+	if cmd4.Run() == nil {
+		_ = json.Unmarshal(bytes.TrimSpace(labelsOut.Bytes()), &labels)
+	}
+
+	return imageInspectResponse{
 		Image:  imageName,
 		Digest: digest,
 		Tags:   tags,
-	})
+		Labels: labels,
+	}
+}
+
+// isAllowedImageRef restricts image operations to images this appliance builds
+// itself. Anything else — upstream images, anything with shell metacharacters —
+// is refused; the agent runs as root against the docker socket. Exact charset
+// check, no normalising: a cleaned or lowercased ref would let something that
+// should fail slip through.
+func isAllowedImageRef(ref string) bool {
+	if !strings.HasPrefix(ref, "truffels/") {
+		return false
+	}
+	for _, c := range ref {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') &&
+			c != '/' && c != ':' && c != '.' && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type imageByNameRequest struct {
+	Image string `json:"image"`
+}
+
+// handleImageInspectByName inspects an image without going through a container.
+// The container-based route cannot answer for a service that is down — which is
+// exactly the state a failed or never-started custom build leaves behind.
+func handleImageInspectByName(w http.ResponseWriter, r *http.Request) {
+	var req imageByNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !isAllowedImageRef(req.Image) {
+		writeJSON(w, 403, map[string]string{"error": "image ref not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	writeJSON(w, 200, inspectImageByName(ctx, req.Image))
+}
+
+// handleImageTag retags an image, used to stage and restore the rollback
+// generation of a custom-built service.
+func handleImageTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !isAllowedImageRef(req.Source) || !isAllowedImageRef(req.Target) {
+		writeJSON(w, 403, map[string]string{"error": "image ref not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "tag", req.Source, req.Target)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "docker tag failed: " + err.Error(), "output": out.String()})
+		return
+	}
+	slog.Info("image tagged", "source", req.Source, "target", req.Target)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // --- Container Stats ---
@@ -1585,12 +1679,22 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
-// allowedRepoDir is the mounted project repo path inside the container.
-const allowedRepoDir = "/repo"
+// allowedRepoDirs are the only directories git operations may touch. Exact
+// string match only — no prefix matching, no path cleaning. A cleaned path
+// would let "/repo/../etc" normalise into something that passes.
+var allowedRepoDirs = map[string]bool{
+	"/repo":                          true,
+	"/srv/truffels/data/ckpoolstats": true,
+}
+
+func isAllowedRepoDir(dir string) bool {
+	return allowedRepoDirs[dir]
+}
 
 type gitCheckoutRequest struct {
-	RepoDir string `json:"repo_dir"`
-	Tag     string `json:"tag"`
+	RepoDir   string `json:"repo_dir"`
+	Tag       string `json:"tag"`
+	RefScheme string `json:"ref_scheme,omitempty"`
 }
 
 func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
@@ -1600,8 +1704,8 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate repo_dir is the allowed path
-	if req.RepoDir != allowedRepoDir {
+	// Validate repo_dir is one of the allowed paths
+	if !isAllowedRepoDir(req.RepoDir) {
 		writeJSON(w, 403, map[string]string{"error": "repo_dir not allowed"})
 		return
 	}
@@ -1609,13 +1713,30 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "tag required"})
 		return
 	}
-	// Validate tag format (must start with v and contain only semver chars)
-	if !isValidTag(req.Tag) {
-		writeJSON(w, 400, map[string]string{"error": "invalid tag format"})
+	// ref_scheme selects the validator. Absent means tag — the self-update
+	// path predates this field and must keep its stricter check.
+	//
+	// Note the asymmetry with model.UpdateSource.RefScheme in truffels-api,
+	// which documents an empty value as "commit": that is the *registry's*
+	// default for a service definition, and the API resolves it to an explicit
+	// "commit" before it ever reaches this endpoint (see applyNeedsBuild). Here,
+	// at the root boundary, an absent field is a request that predates the
+	// field, so it gets the STRICTER of the two validators — a commit hash sent
+	// without a ref_scheme is rejected with 400 rather than silently accepted.
+	// Both defaults therefore fail closed; they must not be "harmonised" by
+	// making this one accept commit hashes.
+	valid := isValidTag(req.Tag)
+	if req.RefScheme == "commit" {
+		valid = isValidCommitHash(req.Tag)
+	}
+	if !valid {
+		writeJSON(w, 400, map[string]string{"error": "invalid ref format"})
 		return
 	}
 
-	slog.Info("git checkout", "repo", req.RepoDir, "tag", req.Tag)
+	// Audit line for the only endpoint that runs git checkout as root: record
+	// which validator let the ref through, not just the ref itself.
+	slog.Info("git checkout", "repo", req.RepoDir, "tag", req.Tag, "scheme", req.RefScheme)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -1649,6 +1770,21 @@ func isValidTag(tag string) bool {
 	}
 	for _, c := range tag[1:] {
 		if c != '.' && c != '-' && (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// isValidCommitHash accepts abbreviated and full git object names: lowercase
+// hex, 7 to 40 characters. Deliberately separate from isValidTag so loosening
+// one cannot weaken the other.
+func isValidCommitHash(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

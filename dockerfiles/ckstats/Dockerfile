@@ -34,6 +34,9 @@ RUN set -e; \
     retry apt-get install -y --no-install-recommends cron postgresql-client && \
     rm -rf /var/lib/apt/lists/*
 
+ARG SOURCE_REF=unknown
+LABEL org.truffels.source-ref=$SOURCE_REF
+
 WORKDIR /app
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules

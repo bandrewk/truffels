@@ -125,6 +125,16 @@ const ckpoolTemplate = `# Project Truffels — ckpool (Solo Mining Pool)
 
 services:
   ckpool:
+    # ckpool has no upstream image — it is built here from the Dockerfile the
+    # reconciler writes next to this file. Without this block a
+    # "docker compose build --build-arg SOURCE_REF=..." finds nothing to build,
+    # exits 0, and the update engine then verifies the label of the unchanged
+    # old image. Absolute paths because the agent runs compose through nsenter
+    # in PID 1's mount namespace. The context only has to carry the Dockerfile:
+    # the build clones ckpool from bitbucket itself.
+    build:
+      context: /srv/truffels/compose/ckpool
+      dockerfile: /srv/truffels/compose/ckpool/Dockerfile
     image: {{.ImageTag}}
     container_name: truffels-ckpool
     restart: unless-stopped

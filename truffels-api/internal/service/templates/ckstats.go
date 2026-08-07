@@ -17,6 +17,8 @@ var Ckstats = model.ServiceTemplate{
 		Repo:       "mrv777/ckstats",
 		Branch:     "main",
 		NeedsBuild: true,
+		RefScheme:  model.RefSchemeCommit,
+		RepoDir:    "/srv/truffels/data/ckpoolstats",
 	},
 	DataDirs: []model.DataDir{
 		{
