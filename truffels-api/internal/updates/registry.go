@@ -710,10 +710,13 @@ const SourceRefLabel = "org.truffels.source-ref"
 func ExtractCurrentVersionFromLabels(src *model.UpdateSource, imageName string, labels map[string]string) string {
 	switch src.Type {
 	case model.SourceGitHub, model.SourceBitbucket:
-		ref := labels[SourceRefLabel]
+		ref := strings.TrimSpace(labels[SourceRefLabel])
 		if isPlaceholderRef(ref) {
 			return ""
 		}
+		// Trimmed, not raw: the placeholder check above compares the trimmed
+		// value, so returning the raw one would let a padded ref through and it
+		// could then never equal latestVersion — a permanent phantom update.
 		return ref
 	default:
 		return ExtractCurrentVersion(src, imageName)
@@ -728,8 +731,10 @@ func ExtractCurrentVersionFromLabels(src *model.UpdateSource, imageName string, 
 // would have approved restoring an unidentifiable image. Images built that way
 // still exist on installed devices, so recognising the placeholder is what
 // heals them, not just fixing the Dockerfile.
+// Matching is case-insensitive: our own Dockerfiles only ever emit lowercase,
+// but a label is just a string, and casing must not be a way past the check.
 func isPlaceholderRef(ref string) bool {
-	switch strings.TrimSpace(ref) {
+	switch strings.ToLower(strings.TrimSpace(ref)) {
 	case "", "unknown", "none", "null", "latest":
 		return true
 	default:

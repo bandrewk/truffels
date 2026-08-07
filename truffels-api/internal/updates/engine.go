@@ -738,10 +738,15 @@ func (e *Engine) RollbackService(serviceID string) error {
 		}
 		staged := info.Labels[SourceRefLabel]
 		switch {
-		case staged == "":
+		case isPlaceholderRef(staged):
 			// Either nothing is staged (the agent answers 200 with empty fields
-			// for an unknown image) or the staged image predates source-ref
-			// labels. Both mean we cannot prove what it would restore.
+			// for an unknown image), or the staged image predates source-ref
+			// labels, or it was built with the old ARG SOURCE_REF=unknown
+			// default. All three mean we cannot prove what it would restore —
+			// and the last one is the dangerous shape: a device installed under
+			// dev.24 also has "unknown" in update_log.from_version, so a raw
+			// comparison found staged == prevVersion and restored an
+			// unidentifiable image while reporting the version it went back to.
 			msg := fmt.Sprintf("no rollback image available: %s carries no source ref, so it cannot be shown to hold %s", rollbackRef, prevVersion)
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
 			e.alertUpdateFailed(serviceID, msg)

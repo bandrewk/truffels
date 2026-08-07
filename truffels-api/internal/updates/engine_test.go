@@ -1411,6 +1411,11 @@ func TestExtractCurrentVersionFromLabels_PlaceholderIsNotARef(t *testing.T) {
 		{},
 		{SourceRefLabel: ""},
 		{SourceRefLabel: "unknown"},
+		// Our own Dockerfiles only ever emit lowercase, but a label is just a
+		// string someone can set — casing must not be a way past the check.
+		{SourceRefLabel: "Unknown"},
+		{SourceRefLabel: "UNKNOWN"},
+		{SourceRefLabel: "  unknown  "},
 	} {
 		if got := ExtractCurrentVersionFromLabels(src, "truffels/ckstats:latest", labels); got != "" {
 			t.Errorf("labels %v: current version = %q, want empty", labels, got)
@@ -1420,6 +1425,70 @@ func TestExtractCurrentVersionFromLabels_PlaceholderIsNotARef(t *testing.T) {
 	real := map[string]string{SourceRefLabel: "8f2e7c2f1a2b"}
 	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckstats:latest", real); got != "8f2e7c2f1a2b" {
 		t.Errorf("current version = %q, want 8f2e7c2f1a2b", got)
+	}
+	// ...and a padded one comes back trimmed. The placeholder check already
+	// trims before comparing, so returning the raw value would let a ref
+	// survive with whitespace that can never equal latestVersion.
+	padded := map[string]string{SourceRefLabel: "  8f2e7c2f1a2b\n"}
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckstats:latest", padded); got != "8f2e7c2f1a2b" {
+		t.Errorf("current version = %q, want it trimmed to 8f2e7c2f1a2b", got)
+	}
+}
+
+// The staged :rollback image is the other place a source-ref label is read. A
+// device installed under dev.24 that then took a ckstats update has "unknown"
+// in update_log.from_version *and* on the staged image, so staged ==
+// prevVersion matched and the rollback ran — writing "unknown" back out as
+// to_version and current_version. The restore is physically correct and the
+// next check cycle corrects the row, but it is the same lie in the same class,
+// and the whole point of this branch is that an unidentifiable image is never
+// accepted as proof of a version.
+func TestRollbackService_RefusesPlaceholderStagedImage(t *testing.T) {
+	rec := &needsBuildRecorder{
+		byNameLabels: map[string]string{SourceRefLabel: "unknown"},
+	}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	composeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(composeDir, "docker-compose.yml"), []byte(`services:
+  ckstats:
+    image: truffels/ckstats:latest
+`), 0644)
+
+	tmpl := ckstatsBuildTemplate(composeDir, model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// The device history: an update ran from the placeholder-labelled build.
+	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckstats", FromVersion: "unknown", ToVersion: "8f2e7c2f1a2b",
+		Status: model.UpdatePending,
+	})
+	_ = st.UpdateLogStatus(logID, model.UpdateDone, "", "")
+	// Current version is known, so the empty-version guard is not what fires here.
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "8f2e7c2f1a2b",
+		LatestVersion:  "8f2e7c2f1a2b",
+		HasUpdate:      false,
+	})
+
+	err := eng.RollbackService("ckstats")
+	if err == nil {
+		t.Fatal("expected a refusal: a placeholder label proves nothing about the staged image")
+	}
+	if !strings.Contains(err.Error(), "no source ref") {
+		t.Errorf("error = %q, want it to say the staged image carries no source ref", err.Error())
+	}
+
+	// The retag must not have happened — that is the difference between
+	// refusing and restoring an image we cannot identify.
+	snap := rec.snapshot()
+	if len(snap.tags) != 0 {
+		t.Errorf("rollback retagged %v despite the placeholder label", snap.tags)
+	}
+	if snap.upCalls != 0 {
+		t.Errorf("rollback restarted the service %d times despite refusing", snap.upCalls)
 	}
 }
 
