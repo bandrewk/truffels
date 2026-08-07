@@ -30,6 +30,7 @@ type mockAgentOpts struct {
 	unhealthy   bool // if true, inspect returns unhealthy containers
 	imageInspectFail bool   // if true, /v1/image/inspect returns 500
 	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
+	imageLabels      map[string]string // labels returned by /v1/image/inspect (NeedsBuild verification)
 }
 
 func newMockAgent(opts mockAgentOpts) *httptest.Server {
@@ -97,6 +98,7 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 			info := docker.ImageInfo{
 				Image:  "mariadb:lts",
 				Digest: "sha256:olddigest123",
+				Labels: opts.imageLabels,
 			}
 			_ = json.NewEncoder(w).Encode(info)
 
@@ -671,7 +673,11 @@ func TestApplyUpdate_AlreadyUpdating(t *testing.T) {
 }
 
 func TestApplyUpdate_BuildService(t *testing.T) {
-	agent := newMockAgent(mockAgentOpts{})
+	// The rebuilt image must report the requested ref, otherwise the engine
+	// refuses to call the update a success (see the NeedsBuild tests).
+	agent := newMockAgent(mockAgentOpts{
+		imageLabels: map[string]string{SourceRefLabel: "def789abc012"},
+	})
 	defer agent.Close()
 
 	composeDir := t.TempDir()

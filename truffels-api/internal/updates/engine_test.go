@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
 
@@ -1023,6 +1025,254 @@ func TestPruneOldImages_RespectsSetting(t *testing.T) {
 	// Should NOT remove anything when setting is true
 	if len(removedImages) != 0 {
 		t.Fatalf("expected 0 images removed when keep_old_images=true, got %d: %v", len(removedImages), removedImages)
+	}
+}
+
+// --- NeedsBuild apply path (ckpool / ckstats) ---
+
+// needsBuildRecorder captures what the engine asked the agent to do on the
+// NeedsBuild path and serves the image label the engine verifies against.
+// The engine prunes in a background goroutine after a successful update, so
+// every field is behind a mutex.
+type needsBuildRecorder struct {
+	mu             sync.Mutex
+	imageLabels    map[string]string
+	buildArgs      map[string]string
+	checkoutDir    string
+	checkoutRef    string
+	checkoutScheme string
+	checkoutCalls  int
+	upCalls        int
+}
+
+func (r *needsBuildRecorder) snapshot() needsBuildRecorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return needsBuildRecorder{
+		buildArgs:      r.buildArgs,
+		checkoutDir:    r.checkoutDir,
+		checkoutRef:    r.checkoutRef,
+		checkoutScheme: r.checkoutScheme,
+		checkoutCalls:  r.checkoutCalls,
+		upCalls:        r.upCalls,
+	}
+}
+
+func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/git/checkout":
+			var req struct {
+				RepoDir   string `json:"repo_dir"`
+				Tag       string `json:"tag"`
+				RefScheme string `json:"ref_scheme"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			rec.checkoutDir, rec.checkoutRef, rec.checkoutScheme = req.RepoDir, req.Tag, req.RefScheme
+			rec.checkoutCalls++
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/compose/build":
+			var req struct {
+				ServiceID string            `json:"service_id"`
+				BuildArgs map[string]string `json:"build_args"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			rec.buildArgs = req.BuildArgs
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/image/inspect":
+			rec.mu.Lock()
+			labels := rec.imageLabels
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(docker.ImageInfo{Image: "truffels/built:local", Labels: labels})
+
+		case "/v1/compose/up":
+			rec.mu.Lock()
+			rec.upCalls++
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case "/v1/inspect":
+			var req struct {
+				Containers []string `json:"containers"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			var states []map[string]interface{}
+			for _, name := range req.Containers {
+				states = append(states, map[string]interface{}{
+					"name": name, "status": "running", "health": "healthy",
+				})
+			}
+			_ = json.NewEncoder(w).Encode(states)
+
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		}
+	}))
+}
+
+func ckpoolBuildTemplate(composeDir string) model.ServiceTemplate {
+	return model.ServiceTemplate{
+		ID:             "ckpool",
+		DisplayName:    "ckpool",
+		ComposeDir:     composeDir,
+		ContainerNames: []string{"truffels-ckpool"},
+		UpdateSource: &model.UpdateSource{
+			Type:       model.SourceBitbucket,
+			Repo:       "ckolivas/ckpool",
+			Branch:     "master",
+			NeedsBuild: true,
+			RefScheme:  model.RefSchemeTag,
+			TagFilter:  "v",
+		},
+	}
+}
+
+func ckstatsBuildTemplate(composeDir, refScheme string) model.ServiceTemplate {
+	return model.ServiceTemplate{
+		ID:             "ckstats",
+		DisplayName:    "ckstats",
+		ComposeDir:     composeDir,
+		ContainerNames: []string{"truffels-ckstats", "truffels-ckstats-cron"},
+		UpdateSource: &model.UpdateSource{
+			Type:       model.SourceGitHub,
+			Repo:       "mrv777/ckstats",
+			Branch:     "main",
+			NeedsBuild: true,
+			RefScheme:  refScheme,
+			RepoDir:    "/srv/truffels/data/ckpoolstats",
+		},
+	}
+}
+
+// A build whose image carries a different ref than the one requested must not
+// count as an update — this is exactly the failure that used to be invisible.
+func TestApplyUpdate_NeedsBuild_LabelMismatchFails(t *testing.T) {
+	rec := &needsBuildRecorder{imageLabels: map[string]string{SourceRefLabel: "v1.0.0"}}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected error on label mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Errorf("expected a ref mismatch error, got: %v", err)
+	}
+
+	got := rec.snapshot()
+	if got.upCalls != 0 {
+		t.Errorf("service must not be started when the built ref does not match (up calls=%d)", got.upCalls)
+	}
+
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 {
+		t.Fatal("expected an update log")
+	}
+	if logs[0].Status != model.UpdateFailed {
+		t.Errorf("log status = %v, want %v", logs[0].Status, model.UpdateFailed)
+	}
+}
+
+func TestApplyUpdate_NeedsBuild_PassesSourceRefBuildArg(t *testing.T) {
+	rec := &needsBuildRecorder{imageLabels: map[string]string{SourceRefLabel: "v1.2.0"}}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := rec.snapshot()
+	if got.buildArgs["SOURCE_REF"] != "v1.2.0" {
+		t.Errorf("SOURCE_REF = %q, want v1.2.0", got.buildArgs["SOURCE_REF"])
+	}
+	// ckpool clones inside its Dockerfile — there is no working copy to move.
+	if got.checkoutCalls != 0 {
+		t.Errorf("expected no git checkout without RepoDir, got %d calls", got.checkoutCalls)
+	}
+}
+
+func TestApplyUpdate_NeedsBuild_ChecksOutRepoDirForCommitScheme(t *testing.T) {
+	rec := &needsBuildRecorder{imageLabels: map[string]string{SourceRefLabel: "dbd39954"}}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckstatsBuildTemplate(t.TempDir(), model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "4bccedb",
+		LatestVersion:  "dbd39954",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckstats"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := rec.snapshot()
+	if got.checkoutDir != "/srv/truffels/data/ckpoolstats" {
+		t.Errorf("checkout dir = %q, want the ckstats repo dir", got.checkoutDir)
+	}
+	if got.checkoutRef != "dbd39954" {
+		t.Errorf("checkout ref = %q, want dbd39954", got.checkoutRef)
+	}
+	if got.checkoutScheme != model.RefSchemeCommit {
+		t.Errorf("checkout scheme = %q, want %q", got.checkoutScheme, model.RefSchemeCommit)
+	}
+}
+
+// An empty RefScheme means "commit" per model.UpdateSource, but the agent reads
+// an empty ref_scheme as "tag" and rejects commit hashes. The engine must send
+// the model's meaning explicitly rather than pass the blank through.
+func TestApplyUpdate_NeedsBuild_EmptyRefSchemeCheckedOutAsCommit(t *testing.T) {
+	rec := &needsBuildRecorder{imageLabels: map[string]string{SourceRefLabel: "dbd39954"}}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckstatsBuildTemplate(t.TempDir(), "")
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "4bccedb",
+		LatestVersion:  "dbd39954",
+		HasUpdate:      true,
+	})
+
+	if err := eng.ApplyUpdate("ckstats"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := rec.snapshot().checkoutScheme; got != model.RefSchemeCommit {
+		t.Errorf("checkout scheme = %q, want %q for an empty RefScheme", got, model.RefSchemeCommit)
 	}
 }
 

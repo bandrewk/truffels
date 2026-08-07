@@ -490,11 +490,8 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		}
 		// No compose file rewrite needed — tag stays the same
 	} else if src.NeedsBuild {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
-		if err := e.compose.Build(serviceID); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
-			return &UpdateError{Msg: "build failed: " + err.Error()}
+		if err := e.applyNeedsBuild(serviceID, tmpl, src, check, logID); err != nil {
+			return err
 		}
 	} else {
 		_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
@@ -715,6 +712,60 @@ func (e *Engine) checkHealth(tmpl model.ServiceTemplate) bool {
 		}
 	}
 	return true
+}
+
+// applyNeedsBuild rebuilds a custom-built service at a specific upstream ref
+// and verifies the result before starting it. The ref travels into the build as
+// the SOURCE_REF build arg and comes back out of the image's source-ref label,
+// so a build that silently produced the old code can no longer be reported as a
+// successful update — which is exactly what ckpool and ckstats used to do.
+func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, src *model.UpdateSource, check *model.UpdateCheck, logID int64) error {
+	// Services whose source lives as a working copy on disk need it moved to the
+	// target ref first; ckpool clones inside its Dockerfile and has no RepoDir.
+	if src.RepoDir != "" {
+		// model.UpdateSource documents an empty RefScheme as "commit", but the
+		// agent's /v1/git/checkout treats an empty ref_scheme as "tag" and would
+		// reject a commit hash with HTTP 400. Resolve the default here so the
+		// wire value always carries the meaning the model defines.
+		refScheme := src.RefScheme
+		if refScheme == "" {
+			refScheme = model.RefSchemeCommit
+		}
+		if err := e.compose.GitCheckout(src.RepoDir, check.LatestVersion, refScheme); err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
+			return &UpdateError{Msg: "git checkout failed: " + err.Error()}
+		}
+	}
+
+	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
+	buildArgs := map[string]string{"SOURCE_REF": check.LatestVersion}
+	if err := e.compose.BuildWithArgs(serviceID, buildArgs); err != nil {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "build failed: "+err.Error(), "")
+		e.alertUpdateFailed(serviceID, "build failed: "+err.Error())
+		return &UpdateError{Msg: "build failed: " + err.Error()}
+	}
+
+	// Verify before restarting: a mismatched image must never get to run. The
+	// agent resolves the image by the name the container references, so this
+	// reads the freshly built image even though the old one is still running.
+	if len(tmpl.ContainerNames) > 0 {
+		info, err := e.compose.ImageInspect(tmpl.ContainerNames[0])
+		if err != nil {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "image inspect failed: "+err.Error(), "")
+			e.alertUpdateFailed(serviceID, "image inspect failed: "+err.Error())
+			return &UpdateError{Msg: "image inspect failed: " + err.Error()}
+		}
+		built := info.Labels[SourceRefLabel]
+		if built != check.LatestVersion {
+			msg := fmt.Sprintf("built ref %q does not match requested %q", built, check.LatestVersion)
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+	}
+
+	return nil
 }
 
 // applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
