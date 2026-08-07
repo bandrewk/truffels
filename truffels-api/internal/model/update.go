@@ -32,7 +32,17 @@ type UpdateSource struct {
 	Branch     string     `json:"branch,omitempty"`     // github/bitbucket: "main" or "master"
 	NeedsBuild bool       `json:"needs_build"`          // true for custom-built images (ckpool, ckstats)
 	TagFilter  string     `json:"tag_filter,omitempty"` // dockerhub: only consider tags matching this prefix (e.g. "2.9-alpine", "16-alpine")
+	RefScheme  string     `json:"ref_scheme,omitempty"`  // "tag" | "commit"; leer = "commit"
+	RepoDir    string     `json:"repo_dir,omitempty"`    // Arbeitskopie auf Platte, wenn das Dockerfile nicht selbst klont
 }
+
+// RefScheme bestimmt, was die Discovery für einen NeedsBuild-Service anbietet.
+// Tag: sortierte Versions-Tags des Upstreams. Commit: HEAD des Branches, für
+// Upstreams ohne Tags.
+const (
+	RefSchemeTag    = "tag"
+	RefSchemeCommit = "commit"
+)
 
 // UpdateCheck represents the latest known version info for a service.
 type UpdateCheck struct {
