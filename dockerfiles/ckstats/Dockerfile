@@ -19,6 +19,39 @@ RUN sed -i "s|fetch('/api/|fetch('/ckstats/api/|g" components/Header.tsx && \
     sed -i "s|fetch(\`/api/|fetch(\`/ckstats/api/|g" components/UserResetButton.tsx components/PrivacyToggle.tsx && \
     npx prettier --write components/Header.tsx components/UserResetButton.tsx components/PrivacyToggle.tsx
 
+# Patch: serve the whole app under /ckstats.
+#
+# Caddy routes /ckstats to this container WITHOUT `uri strip_prefix`, so Next.js
+# has to own the prefix itself. Without basePath the assets are emitted at
+# /_next/... , fall through Caddy's mempool catch-all, and every page renders
+# blank.
+#
+# This lived as a hand edit in the working copy until v0.3.1-dev.26, which meant
+# (a) every fresh install shipped a broken ckstats, because install.sh clones a
+# pristine upstream tree and nothing ever added the line, and (b) the hand edit
+# made the working copy dirty, so `git checkout <commit>` refused and no ckstats
+# update could ever apply. The working copy must stay an untouched upstream
+# checkout; all Truffels changes belong here, at build time.
+#
+# The grep guard makes the patch idempotent — it re-runs on every build, and a
+# second injection would produce a duplicate key. The anchor `const nextConfig
+# = {` is stable across the upstream revisions we support (verified against the
+# pre-Next-15 config and against 8f2e7c2f8403, which renamed
+# experimental.serverComponentsExternalPackages to serverExternalPackages but
+# kept the declaration line). If upstream ever drops that line the build fails
+# loudly here rather than silently producing a blank dashboard.
+#
+# truffels-patch:basePath:begin
+RUN if ! grep -q "basePath:" next.config.js; then \
+      sed -i "s|const nextConfig = {|const nextConfig = {\n  basePath: '/ckstats',|" next.config.js; \
+    fi; \
+    grep -q "basePath: '/ckstats'" next.config.js || { \
+      echo "FATAL: could not inject basePath into next.config.js (upstream layout changed)" >&2; \
+      cat next.config.js >&2; \
+      exit 1; \
+    }
+# truffels-patch:basePath:end
+
 RUN pnpm build
 
 FROM node:22-slim
