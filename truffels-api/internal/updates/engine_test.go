@@ -1146,6 +1146,151 @@ func TestCheckService_SelfUpdateKeepsTagVersion(t *testing.T) {
 	}
 }
 
+// newCommitServer answers the GitHub commits API with a fixed SHA so a
+// checkService test can pin latestVersion without touching the network.
+func newCommitServer(sha string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+	}))
+}
+
+// A service we build ourselves from a git source states what it is running
+// only through org.truffels.source-ref. An image built before label support
+// carries none — and the old code then declared the newest upstream commit to
+// be the running one. On the device that made ckstats report "up to date"
+// while sitting 84 commits (and several security fixes) behind.
+func TestCheckService_UnprovableBuildIsNotReportedCurrent(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{}) // no source-ref label on the image
+	defer agent.Close()
+
+	srv := newCommitServer("8f2e7c2f1a2b3c4d5e6f")
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	tmpl := ckstatsBuildTemplate(t.TempDir(), model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("ckstats")
+	if check == nil {
+		t.Fatal("expected an update check row for ckstats")
+	}
+	if check.CurrentVersion != "" {
+		t.Errorf("current version = %q, want empty: without the label the running build is unknown", check.CurrentVersion)
+	}
+	if !check.HasUpdate {
+		t.Error("has_update = false; an unprovable build must be offered the rebuild that stamps the label")
+	}
+	if check.LatestVersion != "8f2e7c2f1a2b" {
+		t.Errorf("latest version = %q, want 8f2e7c2f1a2b", check.LatestVersion)
+	}
+}
+
+// The stored row is the other half of the trap: it was written by the very
+// initialisation this change removes, so falling back to it re-reads the lie.
+// Nothing else can correct it — the label only appears after an update, and no
+// update was ever offered. This is the test that proves the dead end is open.
+func TestCheckService_UnprovableBuildIgnoresPoisonedStoredRow(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{}) // still no source-ref label
+	defer agent.Close()
+
+	srv := newCommitServer("8f2e7c2f1a2b3c4d5e6f")
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	tmpl := ckstatsBuildTemplate(t.TempDir(), model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// Exactly the row measured on the device: current == latest, no update,
+	// while the working copy actually sat on an old commit.
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "8f2e7c2f1a2b",
+		LatestVersion:  "8f2e7c2f1a2b",
+		HasUpdate:      false,
+	})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("ckstats")
+	if check == nil {
+		t.Fatal("expected an update check row for ckstats")
+	}
+	if check.CurrentVersion != "" {
+		t.Errorf("current version = %q, want empty: the stored row is not evidence of what runs", check.CurrentVersion)
+	}
+	if !check.HasUpdate {
+		t.Error("has_update = false; the poisoned row must not keep the service pinned as up to date")
+	}
+}
+
+// CurrentVersion travels into RollbackService as prevVersion and into the
+// update log's FromVersion. A stand-in like "unknown" would be recorded as a
+// version that exists and could later be "rolled back to" — so the unknown
+// state must stay literally empty, all the way through an apply.
+func TestCheckService_UnprovableBuildRecordsNoPlaceholderVersion(t *testing.T) {
+	rec := &needsBuildRecorder{} // imageLabels nil: nothing proves what runs
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	srv := newCommitServer("8f2e7c2f1a2b3c4d5e6f")
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	composeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(composeDir, "docker-compose.yml"), []byte(`services:
+  ckstats:
+    image: truffels/ckstats:latest
+`), 0644)
+	tmpl := ckstatsBuildTemplate(composeDir, model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("ckstats")
+	if check == nil {
+		t.Fatal("expected an update check row for ckstats")
+	}
+	for _, banned := range []string{"unknown", "none", "n/a", "-", "8f2e7c2f1a2b"} {
+		if check.CurrentVersion == banned {
+			t.Fatalf("current version = %q; an unprovable running version must stay empty, not be stood in for", banned)
+		}
+	}
+
+	// The rebuild the check now offers stamps the label; from here the state heals.
+	rec.mu.Lock()
+	rec.imageLabels = map[string]string{SourceRefLabel: "8f2e7c2f1a2b"}
+	rec.mu.Unlock()
+
+	if err := eng.ApplyUpdate("ckstats"); err != nil {
+		t.Fatalf("apply update: %v", err)
+	}
+
+	logs, err := st.GetUpdateLogs("ckstats", 10)
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("expected an update log, got %v (err %v)", logs, err)
+	}
+	if logs[0].FromVersion != "" {
+		t.Errorf("update log from_version = %q, want empty: no invented version may be recorded", logs[0].FromVersion)
+	}
+	if logs[0].ToVersion != "8f2e7c2f1a2b" {
+		t.Errorf("update log to_version = %q, want 8f2e7c2f1a2b", logs[0].ToVersion)
+	}
+
+	healed, _ := st.GetLatestUpdateCheck("ckstats")
+	if healed.CurrentVersion != "8f2e7c2f1a2b" || healed.HasUpdate {
+		t.Errorf("after the update: current = %q has_update = %v, want 8f2e7c2f1a2b / false",
+			healed.CurrentVersion, healed.HasUpdate)
+	}
+}
+
 func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 	agent := newMockAgent(mockAgentOpts{})
 	defer agent.Close()

@@ -168,8 +168,16 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 		}
 	}
 
+	// For a service we build ourselves from a git source, the source-ref label is
+	// the only authority on what is running: the compose tag is pinned and never
+	// moves across builds. No label means the running version is unknown, and an
+	// unknown version must not be papered over — not with the stored row (which
+	// the initialisation below used to poison), and not with latestVersion.
+	labelIsAuthority := src.NeedsBuild && (src.Type == model.SourceGitHub || src.Type == model.SourceBitbucket)
+
 	// For commit-based sources, use stored version if we can't derive it
-	if currentVersion == "" && (src.Type == model.SourceGitHub || src.Type == model.SourceBitbucket) {
+	if currentVersion == "" && !labelIsAuthority &&
+		(src.Type == model.SourceGitHub || src.Type == model.SourceBitbucket) {
 		prev, _ := e.store.GetLatestUpdateCheck(tmpl.ID)
 		if prev != nil && prev.CurrentVersion != "" {
 			currentVersion = prev.CurrentVersion
@@ -202,6 +210,21 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	if err != nil {
 		check.Error = err.Error()
 		slog.Warn("update check failed", "service", tmpl.ID, "err", err)
+	} else if labelIsAuthority && currentVersion == "" {
+		// Unknown running version. Offering the rebuild is the only way out: it
+		// stamps the label and the next check reads a real version. Reporting
+		// "up to date" instead was a dead end — the label needs an update, and
+		// the update was never offered because everything looked current.
+		//
+		// CurrentVersion stays empty on purpose. It becomes prevVersion in
+		// RollbackService and FromVersion in the update log, so a stand-in like
+		// "unknown" would be recorded as a version that exists and could be
+		// rolled back to. Empty is the honest answer.
+		check.HasUpdate = latestVersion != ""
+		if check.HasUpdate {
+			slog.Info("update offered: running build carries no source ref",
+				"service", tmpl.ID, "latest", latestVersion)
+		}
 	} else {
 		// For commit-based sources: first check initializes current to latest (no update)
 		if currentVersion == "" && latestVersion != "" &&
