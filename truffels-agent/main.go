@@ -1691,6 +1691,81 @@ func isAllowedRepoDir(dir string) bool {
 	return allowedRepoDirs[dir]
 }
 
+// resettableRepoDirs is deliberately a SECOND, strictly narrower list rather
+// than a flag on allowedRepoDirs or a field on the request.
+//
+// "/repo" is the user's own project checkout, bind-mounted from
+// /home/truffel/Project-Truffels. It holds untracked files they intend to keep
+// — CLAUDE.md, FUTURE_WORK.md, docs/superpowers/, .superpowers/ — and, during
+// development, uncommitted work in tracked files. Discarding anything there
+// destroys work that no update can recreate. It must never appear in this map.
+//
+// Only build source trees belong here: throwaway upstream checkouts whose sole
+// purpose is to be fed to `docker build`, where the only correct content is
+// whatever the requested commit says. Nothing in them is authored locally, so
+// nothing in them is worth preserving.
+//
+// The decision is made here, server-side, on the path itself. A request field
+// would put it in the caller's hands, and a caller that sends the wrong value
+// once deletes the user's files permanently.
+var resettableRepoDirs = map[string]bool{
+	"/srv/truffels/data/ckpoolstats": true,
+}
+
+func isResettableRepoDir(dir string) bool {
+	return resettableRepoDirs[dir]
+}
+
+// prepareBuildSourceForCheckout makes a build source tree checkout-able again.
+//
+// `git checkout <commit>` aborts when local changes would be overwritten, which
+// left ckstats permanently unupdatable: 62 files reported as modified purely
+// because their mode flipped 100644 -> 100755 (the tree is written by a
+// container that does not preserve the mode), plus pnpm-lock.yaml left over
+// from a local `pnpm install`, plus the hand-added basePath in next.config.js
+// that v0.3.1-dev.26 moved into the Docker build.
+//
+// Two narrowly-scoped steps, in order:
+//
+//   - core.fileMode=false in that repo's own .git/config. This is the correct
+//     answer to permission-bit noise: it stops git from *reporting* the 62
+//     phantom modifications at all, structurally and permanently, instead of
+//     repeatedly papering over them with a destructive command.
+//   - reset --hard, which discards tracked content changes only.
+//
+// There is deliberately no `git clean` anywhere in this function. Untracked
+// files are never touched, in any directory. `git clean -fdx` is the command
+// that would delete a user's unversioned work, and the blast radius of getting
+// its directory wrong is unrecoverable; the mode noise it might have swept up
+// is handled by core.fileMode instead.
+//
+// Failures are returned, not swallowed: if the tree cannot be made clean the
+// checkout will fail anyway, and the operator deserves the cause rather than
+// the symptom.
+func prepareBuildSourceForCheckout(ctx context.Context, repoDir string) (string, error) {
+	steps := [][]string{
+		// Phantom mode changes: make them invisible rather than "fix" them.
+		{"config", "core.fileMode", "false"},
+		// Tracked content only. Untracked files survive.
+		{"reset", "--hard"},
+	}
+	var log bytes.Buffer
+	for _, args := range steps {
+		full := append([]string{"-c", "safe.directory=*", "-C", repoDir}, args...)
+		cmd := exec.CommandContext(ctx, "git", full...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		log.WriteString(out.String())
+		if err != nil {
+			return log.String(), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+	}
+	slog.Info("prepared build source for checkout", "repo", repoDir)
+	return log.String(), nil
+}
+
 type gitCheckoutRequest struct {
 	RepoDir   string `json:"repo_dir"`
 	Tag       string `json:"tag"`
@@ -1741,6 +1816,19 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	// Build source trees get made checkout-able first; /repo never does. See
+	// resettableRepoDirs for why that list is separate and why nothing here
+	// touches untracked files.
+	var prepOut string
+	if isResettableRepoDir(req.RepoDir) {
+		out, err := prepareBuildSourceForCheckout(ctx, req.RepoDir)
+		prepOut = out
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "git prepare failed: " + err.Error(), "output": out})
+			return
+		}
+	}
+
 	// Fetch tags (safe.directory needed: agent runs as root, repo owned by uid 1000)
 	fetchCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags", "--force")
 	var fetchOut bytes.Buffer
@@ -1761,7 +1849,7 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, 200, map[string]string{"status": "ok", "output": fetchOut.String() + checkoutOut.String()})
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": prepOut + fetchOut.String() + checkoutOut.String()})
 }
 
 func isValidTag(tag string) bool {
