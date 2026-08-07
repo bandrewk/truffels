@@ -4,7 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import { truncDigest, formatTime, logStatusMap, phaseLabel, formatElapsed, compareVersion } from '@/lib/updates'
+import { truncDigest, displayVersion, formatTime, logStatusMap, phaseLabel, formatElapsed, compareVersion } from '@/lib/updates'
 
 function DockerIcon() {
   return (
@@ -560,9 +560,9 @@ export default function UpdatesPage() {
         {preflightResult && (
           <div className="space-y-4">
             <div className="text-sm text-gray-400">
-              <span className="font-mono text-gray-200">{preflightResult.from_version}</span>
+              <span className="font-mono text-gray-200">{displayVersion(preflightResult.from_version)}</span>
               <span className="text-gray-600 mx-2">&rarr;</span>
-              <span className="font-mono text-gray-200">{preflightResult.to_version}</span>
+              <span className="font-mono text-gray-200">{displayVersion(preflightResult.to_version)}</span>
             </div>
 
             <div className="space-y-2">
@@ -604,9 +604,9 @@ export default function UpdatesPage() {
                       <StatusBadge status={logStatusMap(l.status)} />
                     </div>
                     <div className="flex items-center gap-2 mt-1 text-xs text-gray-400 flex-wrap">
-                      <span className="font-mono">{l.from_version}</span>
+                      <span className="font-mono">{displayVersion(l.from_version)}</span>
                       <span className="text-gray-600">&rarr;</span>
-                      <span className="font-mono">{l.to_version}</span>
+                      <span className="font-mono">{displayVersion(l.to_version)}</span>
                     </div>
                     {l.error && (
                       <p className="text-xs text-red-400 mt-1">{l.error}</p>

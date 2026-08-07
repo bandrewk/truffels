@@ -863,7 +863,20 @@ log "Building ckpool image..."
 cd "$COMPOSE_DIR/ckpool" && docker compose build --quiet
 
 log "Building ckstats image..."
-cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet
+# Stamp the commit we are actually building. ckstats' SOURCE_REF drives no
+# checkout — the source is the working copy cloned above — so without this the
+# image carries no ref and the update engine correctly refuses to claim it knows
+# what is running. Short to 12 chars: the engine compares against GitHub's
+# commit SHA truncated to the same length, and a 40-char hash would never match.
+CKSTATS_REF="$(git -C "$DATA_DIR/ckpoolstats" rev-parse --short=12 HEAD 2>/dev/null || true)"
+if [[ -n "$CKSTATS_REF" ]]; then
+    cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet --build-arg SOURCE_REF="$CKSTATS_REF"
+else
+    # An empty label is the acceptable fallback — the engine then offers a
+    # rebuild that stamps a real ref. A made-up one is not.
+    warn "Cannot determine the ckstats commit; building without a source ref (an update will be offered to stamp one)."
+    cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet
+fi
 
 # --- Step 9: Start services in order ------------------------------------------
 log "Starting bitcoind..."
@@ -900,7 +913,7 @@ cd "$COMPOSE_DIR/proxy" && docker compose up -d
 # --- Step 9b: Truffels control plane ------------------------------------------
 log "Writing truffels control plane compose..."
 
-TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.24}"
+TRUFFELS_VERSION="${TRUFFELS_VERSION:-v0.3.1-dev.25}"
 TRUFFELS_REPO_SRC="${TRUFFELS_REPO_SRC:-$SCRIPT_DIR}"
 TRUFFELS_API_SRC="${TRUFFELS_API_SRC:-$TRUFFELS_REPO_SRC/truffels-api}"
 TRUFFELS_WEB_SRC="${TRUFFELS_WEB_SRC:-$TRUFFELS_REPO_SRC/truffels-web}"
@@ -975,6 +988,10 @@ services:
       - /srv/truffels/backups:/srv/truffels/backups
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      # The Dockerfile reconciler runs here and reads the expected Dockerfiles
+      # from /repo before writing them into the deployed compose dirs. Read-only:
+      # only the agent's self-update checkout writes to the working copy.
+      - $TRUFFELS_REPO_SRC:/repo:ro
     environment:
       TRUFFELS_LISTEN: ":8080"
       TRUFFELS_DB_PATH: "/data/truffels.db"

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { truncDigest, formatTime, logStatusMap, parseVersion, compareVersion } from './updates'
+import { truncDigest, displayVersion, canRollback, formatTime, logStatusMap, parseVersion, compareVersion } from './updates'
 
 describe('truncDigest', () => {
   it('returns em-dash for empty string', () => {
@@ -136,5 +136,60 @@ describe('compareVersion', () => {
 
   it('treats v-prefix as equivalent', () => {
     expect(compareVersion('v31.0', '31.0')).toBe(0)
+  })
+})
+
+describe('displayVersion', () => {
+  it('returns em-dash for an unknown version', () => {
+    // dev.25: checkService leaves current_version empty for a build whose
+    // image carries no source ref. Rendering it raw left the arrow with
+    // nothing on its left side.
+    expect(displayVersion('')).toBe('—')
+    expect(displayVersion(undefined)).toBe('—')
+    expect(displayVersion(null)).toBe('—')
+  })
+
+  it('passes a known version through unchanged', () => {
+    expect(displayVersion('8f2e7c2f1a2b')).toBe('8f2e7c2f1a2b')
+    expect(displayVersion('v1.2.0')).toBe('v1.2.0')
+  })
+})
+
+describe('canRollback', () => {
+  it('offers a rollback when the running version is known and differs', () => {
+    expect(canRollback({ floatingTag: false, fromVersion: 'v1.0.0', currentVersion: 'v1.2.0' })).toBe(true)
+  })
+
+  it('refuses when the running version is unknown', () => {
+    // dev.25: the whole point of leaving current_version empty is that we
+    // cannot prove what runs. A rollback whose starting point is unknown is
+    // exactly the guess the source-ref label check exists to prevent — and
+    // the old `from_version !== current_version` compared truthy against '',
+    // so the button appeared for every unlabelled ckpool/ckstats build.
+    expect(canRollback({ floatingTag: false, fromVersion: 'v1.0.0', currentVersion: '' })).toBe(false)
+    expect(canRollback({ floatingTag: false, fromVersion: 'v1.0.0', currentVersion: undefined })).toBe(false)
+    expect(canRollback({ floatingTag: false, fromVersion: 'v1.0.0', currentVersion: null })).toBe(false)
+  })
+
+  it('refuses when there is nothing to roll back to', () => {
+    expect(canRollback({ floatingTag: false, fromVersion: '', currentVersion: 'v1.2.0' })).toBe(false)
+    expect(canRollback({ floatingTag: false, fromVersion: undefined, currentVersion: 'v1.2.0' })).toBe(false)
+  })
+
+  it('refuses when the service already runs that version', () => {
+    expect(canRollback({ floatingTag: false, fromVersion: 'v1.0.0', currentVersion: 'v1.0.0' })).toBe(false)
+  })
+
+  it('refuses for floating-tag services', () => {
+    // The old image is overwritten in place — there is nothing to restore.
+    expect(canRollback({ floatingTag: true, fromVersion: 'v1.0.0', currentVersion: 'v1.2.0' })).toBe(false)
+  })
+})
+
+describe('canRollback with an absent floating_tag', () => {
+  it('treats a missing flag as not floating', () => {
+    // ServiceTemplate.floating_tag is optional in the API type, so the guard
+    // must not turn `undefined` into a refusal.
+    expect(canRollback({ fromVersion: 'v1.0.0', currentVersion: 'v1.2.0' })).toBe(true)
   })
 })

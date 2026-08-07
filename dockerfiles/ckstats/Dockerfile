@@ -34,7 +34,13 @@ RUN set -e; \
     retry apt-get install -y --no-install-recommends cron postgresql-client && \
     rm -rf /var/lib/apt/lists/*
 
-ARG SOURCE_REF=unknown
+# Empty default on purpose. Unlike ckpool's, this arg drives no checkout — the
+# source is bind-mounted from the working copy, so SOURCE_REF is purely a stamp.
+# A default like "unknown" would therefore label the image with a version that
+# does not exist, and the engine treats any non-empty label as proof of what is
+# running. Empty means "not stated", which is the truth for a build that was not
+# told its ref.
+ARG SOURCE_REF=
 LABEL org.truffels.source-ref=$SOURCE_REF
 
 WORKDIR /app
