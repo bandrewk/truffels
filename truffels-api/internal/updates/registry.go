@@ -697,12 +697,21 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 const SourceRefLabel = "org.truffels.source-ref"
 
 // ExtractCurrentVersionFromLabels resolves the running version, preferring the
-// build label for custom-built services. Returns "" when a NeedsBuild image
-// carries no label; that means it predates label support and its version is
-// genuinely unknown, which must not be reported as up to date.
+// build label for the git sources we build ourselves (ckpool, ckstats).
+// Returns "" when such an image carries no label; that means it predates label
+// support and its version is genuinely unknown, which must not be reported as
+// up to date.
+//
+// The switch is on src.Type, not on src.NeedsBuild: the truffels stack is
+// NeedsBuild too, but it is a github_release whose version legitimately lives
+// in the image tag (truffels/api:v0.3.1-dev.24) — its Dockerfiles stamp no
+// org.truffels.source-ref, so keying on NeedsBuild would blank out the
+// self-update's own version detection.
 func ExtractCurrentVersionFromLabels(src *model.UpdateSource, imageName string, labels map[string]string) string {
-	if src.NeedsBuild {
+	switch src.Type {
+	case model.SourceGitHub, model.SourceBitbucket:
 		return labels[SourceRefLabel]
+	default:
+		return ExtractCurrentVersion(src, imageName)
 	}
-	return ExtractCurrentVersion(src, imageName)
 }

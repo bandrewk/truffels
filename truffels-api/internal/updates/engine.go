@@ -160,7 +160,11 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			// For digest-based checks, use the local image digest directly
 			currentVersion = info.Digest
 		} else {
-			currentVersion = ExtractCurrentVersion(src, info.Image)
+			// Labels first: for the services we build ourselves the image tag is
+			// pinned (truffels/ckpool:v1.0.0 stays put across builds), so the only
+			// statement about what is actually running is the ref stamped into the
+			// image at build time. Everything else still reads the tag.
+			currentVersion = ExtractCurrentVersionFromLabels(src, info.Image, info.Labels)
 		}
 	}
 

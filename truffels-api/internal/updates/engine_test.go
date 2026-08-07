@@ -944,6 +944,66 @@ func TestCheckService_DoesNotSkipGitHubSource(t *testing.T) {
 	}
 }
 
+// A freshly installed ckpool runs the image install.sh built at the Dockerfile's
+// default ref, and its compose tag never changes across builds. The image label
+// is the only truthful source for "what is running" — reading the tag instead
+// left currentVersion empty, and the empty-current branch below then declared
+// the newest upstream tag to be the running one ("v1.2.0, up to date" on a box
+// running v1.0.0).
+func TestCheckService_NeedsBuildUsesImageLabel(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{
+		imageLabels: map[string]string{SourceRefLabel: "v1.0.0"},
+	})
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// No update_checks row — the state of a device that was just installed.
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("ckpool")
+	if check == nil {
+		t.Fatal("expected an update check row for ckpool")
+	}
+	if check.CurrentVersion != "v1.0.0" {
+		t.Errorf("current version = %q, want v1.0.0 from the image label", check.CurrentVersion)
+	}
+}
+
+// The self-update stack is NeedsBuild too, but carries no source-ref label —
+// its version must keep coming from the image tag.
+func TestCheckService_SelfUpdateKeepsTagVersion(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "truffels",
+		DisplayName:    "Truffels",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-agent"},
+		UpdateSource: &model.UpdateSource{
+			Type:       model.SourceGitHubRelease,
+			Repo:       "bandrewk/truffels",
+			Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
+			NeedsBuild: true,
+		},
+	}
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("truffels")
+	if check == nil {
+		t.Fatal("expected an update check row for truffels (the mock image inspect answers with a tag)")
+	}
+	// The mock's /v1/image/inspect answers "mariadb:lts"; what matters is that
+	// the tag is used at all instead of an absent label blanking the row.
+	if check.CurrentVersion != "lts" {
+		t.Errorf("current version = %q, want the image tag", check.CurrentVersion)
+	}
+}
+
 func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 	agent := newMockAgent(mockAgentOpts{})
 	defer agent.Close()

@@ -967,3 +967,19 @@ func TestExtractCurrentVersionFromLabelsPullSourceUnaffected(t *testing.T) {
 		t.Errorf("got %q, want 29.0 (tag wins for pull sources)", got)
 	}
 }
+
+// The truffels stack is NeedsBuild as well, but its version lives in the image
+// tag and its Dockerfiles stamp no source-ref label. Keying the label lookup on
+// NeedsBuild instead of the source type would blank the self-update's version.
+func TestExtractCurrentVersionFromLabelsSelfUpdateUsesTag(t *testing.T) {
+	src := &model.UpdateSource{
+		Type:       model.SourceGitHubRelease,
+		Repo:       "bandrewk/truffels",
+		Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
+		NeedsBuild: true,
+	}
+
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/api:v0.3.1-dev.24", nil); got != "v0.3.1-dev.24" {
+		t.Errorf("got %q, want v0.3.1-dev.24 from the image tag", got)
+	}
+}
