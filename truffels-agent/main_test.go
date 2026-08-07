@@ -970,6 +970,45 @@ func TestHandleGitCheckout_InvalidTagFormat(t *testing.T) {
 	}
 }
 
+func TestHandleGitCheckout_CommitHashRejectedWithoutRefScheme(t *testing.T) {
+	// A bare commit hash must NOT pass under the default (tag) validator.
+	// If it did, the scheme selection defaulted to the loose check instead
+	// of the strict one the self-update path relies on.
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: "4bccedb"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid ref format" {
+		t.Fatalf("expected 'invalid ref format', got %q", resp["error"])
+	}
+}
+
+func TestHandleGitCheckout_TagRejectedUnderCommitScheme(t *testing.T) {
+	// A tag must NOT pass when ref_scheme is explicitly "commit". If it
+	// did, the branch that picks the validator was inverted.
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: "/repo", Tag: "v0.2.0", RefScheme: "commit"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid ref format" {
+		t.Fatalf("expected 'invalid ref format', got %q", resp["error"])
+	}
+}
+
 func TestHandleGitCheckout_MalformedJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader([]byte("bad")))
