@@ -292,6 +292,36 @@ func TestComposeClient_SystemAction_AgentError(t *testing.T) {
 	}
 }
 
+// SystemAction was one of the fifteen methods that discarded ar.Output on a
+// failed agent response, keeping only the bare exit status from ar.Error.
+// This mirrors the GitCheckout regression test above: the agent's actual
+// diagnosis must survive into the returned error.
+func TestComposeClient_SystemAction_ErrorIncludesAgentOutput(t *testing.T) {
+	const journalTail = "systemctl: Failed to restart truffels-agent.service: " +
+		"Unit truffels-agent.service not found."
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":  "system restart failed: exit status 1",
+			"output": journalTail,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.SystemAction("restart")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "Unit truffels-agent.service not found") {
+		t.Errorf("agent output was discarded; error is not actionable:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error field was dropped: %v", err)
+	}
+}
+
 func TestComposeClient_SystemAction_AgentUnreachable(t *testing.T) {
 	client := NewComposeClient("http://127.0.0.1:1")
 	err := client.SystemAction("shutdown")
@@ -458,5 +488,34 @@ func TestComposeClient_ComposeUpDetached_Error(t *testing.T) {
 	err := client.ComposeUpDetached("truffels-agent")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// A failed pull explains itself in the agent's output — "manifest unknown",
+// "no space left on device", a registry auth prompt. Dropping it left the
+// update log and the alert with nothing but the generic error line.
+func TestComposeClient_Pull_ErrorIncludesAgentOutput(t *testing.T) {
+	const dockerStderr = "Error response from daemon: manifest for " +
+		"mariadb:lts not found: manifest unknown\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":  "pull failed: exit status 1",
+			"output": dockerStderr,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	_, err := client.Pull("mariadb:lts")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "manifest unknown") {
+		t.Errorf("agent output was discarded; error is not actionable:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error field was dropped: %v", err)
 	}
 }

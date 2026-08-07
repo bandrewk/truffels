@@ -31,8 +31,8 @@ func TestExtractCurrentVersion_DockerHub_StripDigest(t *testing.T) {
 func TestExtractCurrentVersion_DockerHub_NoTag(t *testing.T) {
 	src := &model.UpdateSource{Type: model.SourceDockerHub}
 	got := ExtractCurrentVersion(src, "owner/repo")
-	if got != "unknown" {
-		t.Errorf("expected unknown, got %s", got)
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
 	}
 }
 
@@ -55,8 +55,8 @@ func TestExtractCurrentVersion_Bitbucket(t *testing.T) {
 func TestExtractCurrentVersion_UnknownType(t *testing.T) {
 	src := &model.UpdateSource{Type: "something_else"}
 	got := ExtractCurrentVersion(src, "whatever")
-	if got != "unknown" {
-		t.Errorf("expected unknown, got %s", got)
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
 	}
 }
 
@@ -503,8 +503,8 @@ func TestExtractCurrentVersion_GitHubRelease(t *testing.T) {
 func TestExtractCurrentVersion_GitHubRelease_NoTag(t *testing.T) {
 	src := &model.UpdateSource{Type: model.SourceGitHubRelease}
 	got := ExtractCurrentVersion(src, "truffels/agent")
-	if got != "unknown" {
-		t.Errorf("expected unknown, got %s", got)
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
 	}
 }
 

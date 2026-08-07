@@ -669,7 +669,7 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 		if idx := strings.LastIndex(name, ":"); idx >= 0 {
 			return name[idx+1:]
 		}
-		return "unknown"
+		return ""
 	case model.SourceDockerDigest:
 		// Digest is extracted directly in checkService via ImageInspect
 		return ""
@@ -685,9 +685,9 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 		if idx := strings.LastIndex(name, ":"); idx >= 0 {
 			return name[idx+1:]
 		}
-		return "unknown"
+		return ""
 	default:
-		return "unknown"
+		return ""
 	}
 }
 
@@ -695,6 +695,15 @@ func ExtractCurrentVersion(src *model.UpdateSource, imageName string) string {
 // trustworthy statement about what a NeedsBuild service is actually running —
 // the update_checks row merely records what the engine intended to build.
 const SourceRefLabel = "org.truffels.source-ref"
+
+// VersionLabel carries the release version an image was built for. It is the
+// truffels stack's own equivalent of SourceRefLabel and the two must not be
+// confused: SourceRefLabel records an *upstream* git ref for the sources we
+// vendor and build (ckpool, ckstats), while this one records *our* release tag,
+// stamped by truffels-{agent,api,web}/Dockerfile from the VERSION build arg.
+// Those Dockerfiles default the arg to "dev", so an image built without it says
+// so rather than claiming a version it does not have.
+const VersionLabel = "org.opencontainers.image.version"
 
 // ExtractCurrentVersionFromLabels resolves the running version, preferring the
 // build label for the git sources we build ourselves (ckpool, ckstats).

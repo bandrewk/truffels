@@ -13,8 +13,12 @@ var Ckstats = model.ServiceTemplate{
 	ConfigPath:     "",
 	Port:           "80/ckstats (via proxy)",
 	UpdateSource: &model.UpdateSource{
-		Type:       model.SourceGitHub,
-		Repo:       "mrv777/ckstats",
+		Type: model.SourceGitHub,
+		Repo: "mrv777/ckstats",
+		// Both compose services (ckstats and ckstats-cron) run this image, so
+		// one entry retags both lines. Without it the file kept saying
+		// ":latest" for every build it ever ran.
+		Images:     []string{"truffels/ckstats"},
 		Branch:     "main",
 		NeedsBuild: true,
 		RefScheme:  model.RefSchemeCommit,

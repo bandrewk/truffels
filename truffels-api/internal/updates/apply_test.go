@@ -34,6 +34,35 @@ type mockAgentOpts struct {
 	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
 	imageLabels      map[string]string // labels returned by /v1/image/inspect (NeedsBuild verification)
 	tags             *tagRecorder      // records /v1/image/tag calls when set
+	// labelsByRef serves /v1/image/inspect-by-name in the self-update mock,
+	// keyed by the exact image ref requested. A ref with no entry answers with
+	// no labels at all — that is how the real agent reports an image it cannot
+	// resolve, and how an image built without the VERSION arg reaching the
+	// labelling stage looks from here.
+	labelsByRef map[string]map[string]string
+	detached    *callCounter // counts /v1/compose/up-detached calls when set
+	// rewriteFailFrom makes /v1/compose/rewrite-tags fail from the Nth call on
+	// (1-based, 0 = never). Step 2 of the self-update is call 1 and the restore
+	// after a refusal is call 2, so this can break the restore alone.
+	rewriteFailFrom int
+}
+
+// callCounter counts handler hits from the httptest server goroutine.
+type callCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *callCounter) inc() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+func (c *callCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 // tagCall is one /v1/image/tag request. JSON tags match the agent's wire format
@@ -836,6 +865,7 @@ func TestApplyUpdate_CreatesConfigSnapshot(t *testing.T) {
 // --- Self-update (github_release) ---
 
 func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
+	rewrites := &callCounter{}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/git/checkout":
@@ -850,6 +880,9 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/compose/up-detached":
+			if opts.detached != nil {
+				opts.detached.inc()
+			}
 			w.WriteHeader(202)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 
@@ -861,15 +894,32 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 				NewTag    string   `json:"new_tag"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			rewrites.inc()
+			if opts.rewriteFailFrom > 0 && rewrites.count() >= opts.rewriteFailFrom {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "write compose file: read-only file system"})
+				return
+			}
 			if dir, ok := opts.composeDirs[req.ServiceID]; ok {
 				composePath := filepath.Join(dir, "docker-compose.yml")
 				data, _ := os.ReadFile(composePath)
 				content := string(data)
 				for _, img := range req.Images {
-					pattern := fmt.Sprintf(`(image:\s*)%s:%s(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img), regexp.QuoteMeta(req.OldTag))
+					// handleComposeRewriteTags ignores old_tag and replaces
+					// whatever tag is on the line. Mirror that: step 2 of the
+					// self-update sends an empty old_tag, and a mock keyed on it
+					// would mangle the file instead of moving the tag.
+					pattern := fmt.Sprintf(`(image:\s*)%s:[^\s@]+(@sha256:[a-f0-9]+)?`, regexp.QuoteMeta(img))
 					re, _ := regexp.Compile(pattern)
 					content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
 				}
+				// handleComposeRewriteTags moves the VERSION build args along
+				// with the tags (main.go:2138). The truffels stack builds all
+				// three services from source, so this line is what the next
+				// build stamps into the image label — leaving it on a rejected
+				// version is the same lie as leaving the tag there.
+				versionRe := regexp.MustCompile(`(VERSION:\s+)\S+`)
+				content = versionRe.ReplaceAllString(content, "${1}"+req.NewTag)
 				_ = os.WriteFile(composePath, []byte(content), 0644)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -879,6 +929,23 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 				Image: "truffels/agent:v0.1.0",
 			}
 			_ = json.NewEncoder(w).Encode(info)
+
+		case "/v1/image/inspect-by-name":
+			var req struct {
+				Image string `json:"image"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if opts.imageInspectFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "inspect failed"})
+				return
+			}
+			// Mirrors the agent: an unknown image is still a 200, just with
+			// nothing in it.
+			_ = json.NewEncoder(w).Encode(docker.ImageInfo{
+				Image:  req.Image,
+				Labels: opts.labelsByRef[req.Image],
+			})
 
 		case "/v1/inspect":
 			var req struct {
@@ -903,23 +970,19 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 	}))
 }
 
-func TestApplySelfUpdate_Success(t *testing.T) {
-	cd := t.TempDir()
-	agent := newSelfUpdateMockAgent(mockAgentOpts{composeDirs: map[string]string{"truffels": cd}})
-	defer agent.Close()
+// selfUpdateLabels builds the inspect-by-name answer for a self-update that
+// stamped every image with the version it was asked to build.
+func selfUpdateLabels(version string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, img := range []string{"truffels/agent", "truffels/api", "truffels/web"} {
+		out[img+":"+version] = map[string]string{VersionLabel: version}
+	}
+	return out
+}
 
-	composeDir := cd
-	composePath := filepath.Join(composeDir, "docker-compose.yml")
-	_ = os.WriteFile(composePath, []byte(`services:
-  agent:
-    image: truffels/agent:v0.1.0
-  api:
-    image: truffels/api:v0.1.0
-  web:
-    image: truffels/web:v0.1.0
-`), 0644)
-
-	tmpls := []model.ServiceTemplate{
+// selfUpdateTemplates is the truffels stack as applySelfUpdate sees it.
+func selfUpdateTemplates(composeDir string) []model.ServiceTemplate {
+	return []model.ServiceTemplate{
 		{
 			ID: "truffels", ComposeDir: composeDir,
 			ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
@@ -929,6 +992,139 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 			},
 		},
 	}
+}
+
+// writeSelfUpdateCompose lays down a compose file at the pre-update version.
+func writeSelfUpdateCompose(t *testing.T, dir, version string) string {
+	t.Helper()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	// Shaped like the real /srv/truffels/compose/truffels/docker-compose.yml:
+	// all three services carry a build: block with a VERSION arg alongside the
+	// image tag. Both move together, and both have to move back — a file left
+	// with the rejected version in build.args would hand it to the next build.
+	body := fmt.Sprintf(`services:
+  agent:
+    image: truffels/agent:%[1]s
+    build:
+      context: /repo/truffels-agent
+      args:
+        VERSION: %[1]s
+  api:
+    image: truffels/api:%[1]s
+    build:
+      context: /repo/truffels-api
+      args:
+        VERSION: %[1]s
+  web:
+    image: truffels/web:%[1]s
+    build:
+      context: /repo/truffels-web
+      args:
+        VERSION: %[1]s
+`, version)
+	if err := os.WriteFile(composePath, []byte(body), 0644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+	return composePath
+}
+
+// composeTagProblems reports every way the compose file fails to sit at version:
+// each of the three image lines and each of the three VERSION build args must be
+// exactly that version and nothing else.
+//
+// It anchors whole lines rather than counting substrings. A count of
+// occurrences passes the one shape this exists to catch — an appended rather
+// than replaced tag, "image: truffels/agent:v0.2.0v0.1.0", which contains
+// ":v0.2.0" exactly once and satisfies any Contains check for it.
+func composeTagProblems(content, version string) []string {
+	var problems []string
+	for _, img := range []string{"truffels/agent", "truffels/api", "truffels/web"} {
+		re := regexp.MustCompile(`(?m)^\s*image:\s*` + regexp.QuoteMeta(img+":"+version) + `\s*$`)
+		if n := len(re.FindAllString(content, -1)); n != 1 {
+			problems = append(problems, fmt.Sprintf("expected exactly one line naming %s:%s, found %d", img, version, n))
+		}
+	}
+	argRe := regexp.MustCompile(`(?m)^\s*VERSION:\s*` + regexp.QuoteMeta(version) + `\s*$`)
+	if n := len(argRe.FindAllString(content, -1)); n != 3 {
+		problems = append(problems, fmt.Sprintf("expected 3 VERSION build args at %s, found %d", version, n))
+	}
+	return problems
+}
+
+// assertComposeTags fails unless all three services, image tag and build arg
+// alike, sit exactly at version.
+func assertComposeTags(t *testing.T, composePath, version string) {
+	t.Helper()
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read compose: %v", err)
+	}
+	content := string(data)
+	if problems := composeTagProblems(content, version); len(problems) > 0 {
+		t.Errorf("compose file is not at %s: %s\n%s", version, strings.Join(problems, "; "), content)
+	}
+}
+
+// The assertion has to reject the exact mangling that motivated it, or it is
+// decoration. An appended tag survives every substring check for the version it
+// claims to be at.
+func TestComposeTagProblems(t *testing.T) {
+	clean := `services:
+  agent:
+    image: truffels/agent:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+  api:
+    image: truffels/api:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+  web:
+    image: truffels/web:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+`
+	if problems := composeTagProblems(clean, "v0.2.0"); len(problems) > 0 {
+		t.Errorf("a correct file must pass, got: %v", problems)
+	}
+
+	// The mock bug: the new tag written in front of the old one instead of over
+	// it. strings.Contains(content, "truffels/agent:v0.2.0") is true here and
+	// strings.Count(content, ":v0.2.0") is still 3.
+	mangled := strings.Replace(clean, "truffels/agent:v0.2.0", "truffels/agent:v0.2.0v0.1.0", 1)
+	if strings.Count(mangled, ":v0.2.0") != 3 || !strings.Contains(mangled, "truffels/agent:v0.2.0") {
+		t.Fatal("this fixture no longer reproduces the shape a counting check misses")
+	}
+	if problems := composeTagProblems(mangled, "v0.2.0"); len(problems) == 0 {
+		t.Error("an appended tag must be rejected")
+	}
+
+	// A tag that was never written back at all.
+	if problems := composeTagProblems(clean, "v0.1.0"); len(problems) != 4 {
+		t.Errorf("expected all three images and the build args to be reported, got: %v", problems)
+	}
+
+	// The build args left behind while the image tags moved.
+	staleArgs := strings.ReplaceAll(clean, "VERSION: v0.2.0", "VERSION: v0.1.0")
+	if problems := composeTagProblems(staleArgs, "v0.2.0"); len(problems) != 1 {
+		t.Errorf("expected the stale build args to be reported on their own, got: %v", problems)
+	}
+}
+
+func TestApplySelfUpdate_Success(t *testing.T) {
+	cd := t.TempDir()
+	restarts := &callCounter{}
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		labelsByRef: selfUpdateLabels("v0.2.0"),
+		detached:    restarts,
+	})
+	defer agent.Close()
+
+	composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
+	tmpls := selfUpdateTemplates(cd)
 
 	eng, st := newTestEngine(t, agent, tmpls)
 
@@ -944,18 +1140,9 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify compose file was rewritten for all three
-	data, _ := os.ReadFile(composePath)
-	content := string(data)
-	if !strings.Contains(content, "truffels/agent:v0.2.0") {
-		t.Error("expected agent image tag updated to v0.2.0")
-	}
-	if !strings.Contains(content, "truffels/api:v0.2.0") {
-		t.Error("expected api image tag updated to v0.2.0")
-	}
-	if !strings.Contains(content, "truffels/web:v0.2.0") {
-		t.Error("expected web image tag updated to v0.2.0")
-	}
+	// Verify compose file was rewritten for all three — and only rewritten,
+	// with no remnant of the old tag left behind.
+	assertComposeTags(t, composePath, "v0.2.0")
 
 	// Verify single update log is "restarting" (will be reconciled on startup)
 	logs, _ := st.GetUpdateLogs("truffels", 5)
@@ -964,6 +1151,273 @@ func TestApplySelfUpdate_Success(t *testing.T) {
 	}
 	if logs[0].Status != model.UpdateRestarting {
 		t.Errorf("expected status restarting, got %s", logs[0].Status)
+	}
+
+	if restarts.count() != 1 {
+		t.Errorf("expected exactly one detached restart, got %d", restarts.count())
+	}
+}
+
+// --- Self-update build verification (the images must hold the version we asked
+// for before anything restarts into them) ---
+
+// selfUpdateVerifyCase drives one run of the shared verification harness.
+type selfUpdateVerifyCase struct {
+	name   string
+	labels map[string]map[string]string
+	want   string // substring the failure must name
+}
+
+func TestApplySelfUpdate_RefusesMisbuiltImages(t *testing.T) {
+	// The new tag exists but a layer-cache hit left the old version stamped on
+	// every image behind it.
+	stale := selfUpdateLabels("v0.2.0")
+	for ref := range stale {
+		stale[ref] = map[string]string{VersionLabel: "v0.1.0"}
+	}
+	// Only web is wrong: agent and api verify fine, so a check that stopped
+	// after the first image would sail past this one.
+	lastWrong := selfUpdateLabels("v0.2.0")
+	lastWrong["truffels/web:v0.2.0"] = map[string]string{VersionLabel: "dev"}
+	// The label is missing entirely — also what the agent reports for an image
+	// that does not exist, since it answers 200 with empty fields.
+	noLabel := selfUpdateLabels("v0.2.0")
+	noLabel["truffels/agent:v0.2.0"] = map[string]string{}
+	// Present but blank. Empty is not "matching".
+	blank := selfUpdateLabels("v0.2.0")
+	blank["truffels/agent:v0.2.0"] = map[string]string{VersionLabel: "   "}
+
+	cases := []selfUpdateVerifyCase{
+		{name: "every image still holds the old version", labels: stale, want: `"v0.1.0"`},
+		{name: "only the last image is wrong", labels: lastWrong, want: `"dev"`},
+		{name: "version label missing", labels: noLabel, want: "carries no " + VersionLabel},
+		{name: "version label blank", labels: blank, want: "carries no " + VersionLabel},
+		{name: "no image under the new tag at all", labels: nil, want: "carries no " + VersionLabel},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cd := t.TempDir()
+			restarts := &callCounter{}
+			agent := newSelfUpdateMockAgent(mockAgentOpts{
+				composeDirs: map[string]string{"truffels": cd},
+				labelsByRef: tc.labels,
+				detached:    restarts,
+			})
+			defer agent.Close()
+
+			composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
+			eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+			_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+				ServiceID:      "truffels",
+				CurrentVersion: "v0.1.0",
+				LatestVersion:  "v0.2.0",
+				HasUpdate:      true,
+			})
+
+			err := eng.ApplyUpdate("truffels")
+			if err == nil {
+				t.Fatal("expected the update to fail on build verification")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("expected %q in error, got: %s", tc.want, err)
+			}
+
+			// The whole point: nothing may restart into an unverified image.
+			if restarts.count() != 0 {
+				t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
+			}
+
+			// Step 2 moved the compose file onto v0.2.0 before building. A
+			// refusal that leaves it there hands the rejected version to the
+			// next `up` from anywhere — and compose would build the missing
+			// image itself, without the VERSION arg.
+			assertComposeTags(t, composePath, "v0.1.0")
+
+			logs, _ := st.GetUpdateLogs("truffels", 5)
+			if len(logs) == 0 {
+				t.Fatal("expected an update log")
+			}
+			if logs[0].Status != model.UpdateFailed {
+				t.Errorf("expected status failed, got %s", logs[0].Status)
+			}
+
+			alerts, _ := st.GetActiveAlerts()
+			found := false
+			for _, a := range alerts {
+				if a.Type == "update_failed" && a.ServiceID == "truffels" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("expected an update_failed alert for truffels")
+			}
+		})
+	}
+}
+
+// The build-failure path predates verifySelfBuild and left the same debris:
+// step 2 had already moved the compose file onto the version that then failed
+// to build.
+func TestApplySelfUpdate_BuildFailureRestoresComposeTag(t *testing.T) {
+	cd := t.TempDir()
+	restarts := &callCounter{}
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+		detached:    restarts,
+	})
+	defer agent.Close()
+
+	composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "build failed") {
+		t.Errorf("expected 'build failed' in error, got: %s", err)
+	}
+	assertComposeTags(t, composePath, "v0.1.0")
+	if restarts.count() != 0 {
+		t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
+	}
+}
+
+// When the compose file cannot be put back, the failure has to say so — a file
+// left naming a rejected version needs a human, and silence is how it stays
+// unnoticed until the next restart builds an unlabelled image over it.
+func TestApplySelfUpdate_RestoreFailureIsNamed(t *testing.T) {
+	cd := t.TempDir()
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+		// Call 1 is step 2's rewrite onto v0.2.0; call 2 is the restore.
+		rewriteFailFrom: 2,
+	})
+	defer agent.Close()
+
+	writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "still names v0.2.0") {
+		t.Errorf("expected the stranded compose file to be named in the error, got: %s", err)
+	}
+	if !strings.Contains(err.Error(), `restore the image tags to "v0.1.0"`) {
+		t.Errorf("expected the error to say what to restore, got: %s", err)
+	}
+	logs, _ := st.GetUpdateLogs("truffels", 5)
+	if len(logs) == 0 || !strings.Contains(logs[0].Error, "still names v0.2.0") {
+		t.Errorf("expected the update log to carry the same warning, got: %+v", logs)
+	}
+}
+
+// With no known previous version there is no tag to write back. Say that
+// instead of inventing one or leaving the file quietly on the rejected version.
+func TestApplySelfUpdate_UnknownPreviousVersionIsReported(t *testing.T) {
+	cd := t.TempDir()
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs: map[string]string{"truffels": cd},
+		buildFail:   true,
+	})
+	defer agent.Close()
+
+	writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected error for build failure")
+	}
+	if !strings.Contains(err.Error(), "the previous version is unknown") {
+		t.Errorf("expected the unknown previous version to be reported, got: %s", err)
+	}
+}
+
+// A build that cannot be inspected at all is not a build that passed.
+func TestApplySelfUpdate_InspectFailureBlocksRestart(t *testing.T) {
+	cd := t.TempDir()
+	restarts := &callCounter{}
+	agent := newSelfUpdateMockAgent(mockAgentOpts{
+		composeDirs:      map[string]string{"truffels": cd},
+		imageInspectFail: true,
+		detached:         restarts,
+	})
+	defer agent.Close()
+
+	composePath := writeSelfUpdateCompose(t, cd, "v0.1.0")
+	eng, st := newTestEngine(t, agent, selfUpdateTemplates(cd))
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.1.0",
+		LatestVersion:  "v0.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("truffels")
+	if err == nil {
+		t.Fatal("expected the update to fail when the built image cannot be inspected")
+	}
+	if !strings.Contains(err.Error(), "cannot verify") {
+		t.Errorf("expected 'cannot verify' in error, got: %s", err)
+	}
+	if restarts.count() != 0 {
+		t.Errorf("detached restart must not run, got %d call(s)", restarts.count())
+	}
+	assertComposeTags(t, composePath, "v0.1.0")
+	logs, _ := st.GetUpdateLogs("truffels", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
+		t.Error("expected a failed update log")
+	}
+}
+
+// selfUpdateImage must pair the build loop with the declared image list, and
+// say so rather than guess when the two do not line up.
+func TestSelfUpdateImage(t *testing.T) {
+	images := []string{"truffels/agent", "truffels/api", "truffels/web"}
+	for _, svc := range []string{"agent", "api", "web"} {
+		got, ok := selfUpdateImage(images, svc)
+		if !ok || got != "truffels/"+svc {
+			t.Errorf("svc %q: got %q ok=%v", svc, got, ok)
+		}
+	}
+	if _, ok := selfUpdateImage(images, "nope"); ok {
+		t.Error("an undeclared service must not resolve to an image")
+	}
+	if _, ok := selfUpdateImage(nil, "api"); ok {
+		t.Error("an empty image list must not resolve to an image")
+	}
+	// The prefix is not what matches — the component name is.
+	if got, ok := selfUpdateImage([]string{"ghcr.io/bandrewk/api"}, "api"); !ok || got != "ghcr.io/bandrewk/api" {
+		t.Errorf("expected the declared ref back, got %q ok=%v", got, ok)
 	}
 }
 
