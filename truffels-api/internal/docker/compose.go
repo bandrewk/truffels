@@ -116,7 +116,10 @@ func (c *ComposeClient) Pull(image string) (string, error) {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("agent pull: %s", ar.Error)
+		// agentError keeps the tail of ar.Output. A failed pull says why in it
+		// — manifest unknown, no space left, auth required — and that text is
+		// what reaches the update log and the alert.
+		return "", agentError("agent pull", ar)
 	}
 	return ar.Output, nil
 }
