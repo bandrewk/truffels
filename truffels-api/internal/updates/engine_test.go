@@ -376,7 +376,11 @@ func TestRollbackService_AlreadyAtPreviousVersion(t *testing.T) {
 // registry to pull an old build from.
 func TestRollbackService_CustomBuildRetagsPreviousImage(t *testing.T) {
 	tags := &tagRecorder{}
-	agent := newMockAgent(mockAgentOpts{tags: tags})
+	// The staged image must prove it carries the version we are rolling back to.
+	agent := newMockAgent(mockAgentOpts{
+		tags:        tags,
+		imageLabels: map[string]string{SourceRefLabel: "abc123"},
+	})
 	defer agent.Close()
 
 	tmpl := model.ServiceTemplate{
@@ -436,7 +440,12 @@ func TestRollbackService_CustomBuildRetagsPreviousImage(t *testing.T) {
 // Without a staged image there is nothing to roll back to. Reporting success
 // here is exactly the old bug: Down/Up would restart the broken build.
 func TestRollbackService_CustomBuildFailsWithoutStagedImage(t *testing.T) {
-	agent := newMockAgent(mockAgentOpts{tagFail: true})
+	// Staged and labelled, but the retag itself fails (e.g. the image was
+	// pruned between inspect and tag).
+	agent := newMockAgent(mockAgentOpts{
+		tagFail:     true,
+		imageLabels: map[string]string{SourceRefLabel: "abc123"},
+	})
 	defer agent.Close()
 
 	tmpl := model.ServiceTemplate{
@@ -478,6 +487,139 @@ func TestRollbackService_CustomBuildFailsWithoutStagedImage(t *testing.T) {
 	logs, _ := st.GetUpdateLogs("ckpool", 5)
 	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
 		t.Errorf("expected a failed rollback log, got %+v", logs)
+	}
+}
+
+// An image staged before source-ref labels existed (or no image at all — the
+// agent answers 200 with empty fields for an unknown image) cannot prove what
+// it would restore. Refuse before touching a tag.
+func TestRollbackService_RefusesUnverifiableStagedImage(t *testing.T) {
+	tags := &tagRecorder{}
+	agent := newMockAgent(mockAgentOpts{tags: tags})
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckpool", FromVersion: "v1.0.0", ToVersion: "v1.2.0", Status: model.UpdateDone,
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID: "ckpool", CurrentVersion: "v1.2.0", LatestVersion: "v1.2.0",
+	})
+
+	err := eng.RollbackService("ckpool")
+	if err == nil {
+		t.Fatal("expected a refusal for an unlabelled rollback image")
+	}
+	if !strings.Contains(err.Error(), "no rollback image available") {
+		t.Errorf("expected 'no rollback image available', got: %v", err)
+	}
+	if calls := tags.snapshot(); len(calls) != 0 {
+		t.Errorf("nothing may be retagged before the staged image is verified, got %+v", calls)
+	}
+	if check, _ := st.GetLatestUpdateCheck("ckpool"); check == nil || check.CurrentVersion != "v1.2.0" {
+		t.Errorf("version bookkeeping must be untouched, got %+v", check)
+	}
+}
+
+// :rollback keeps exactly one generation and is only staged by an update. After
+// one successful rollback it points at the image that is already running, so a
+// second rollback used to retag a no-op, come up healthy and record the version
+// it did NOT restore.
+func TestRollbackService_SecondRollbackRefusesStaleStagedImage(t *testing.T) {
+	tags := &tagRecorder{}
+	agent := newMockAgent(mockAgentOpts{
+		tags: tags,
+		// Still the image staged by the update that ran before the first
+		// rollback — i.e. v1.0.0, the version already running.
+		imageLabels: map[string]string{SourceRefLabel: "v1.0.0"},
+	})
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// The update, then the rollback that followed it — both successful.
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckpool", FromVersion: "v1.0.0", ToVersion: "v1.2.0", Status: model.UpdateDone,
+	})
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckpool", FromVersion: "v1.2.0", ToVersion: "v1.0.0", Status: model.UpdateDone,
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID: "ckpool", CurrentVersion: "v1.0.0", LatestVersion: "v1.2.0", HasUpdate: true,
+	})
+
+	err := eng.RollbackService("ckpool")
+	if err == nil {
+		t.Fatal("expected the second rollback to be refused")
+	}
+	if !strings.Contains(err.Error(), "v1.0.0") || !strings.Contains(err.Error(), "v1.2.0") {
+		t.Errorf("error should name both the staged and the requested ref, got: %v", err)
+	}
+	if calls := tags.snapshot(); len(calls) != 0 {
+		t.Errorf("a no-op retag must not happen, got %+v", calls)
+	}
+	check, _ := st.GetLatestUpdateCheck("ckpool")
+	if check == nil || check.CurrentVersion != "v1.0.0" {
+		t.Errorf("current version must stay v1.0.0 — that is what runs, got %+v", check)
+	}
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 || logs[0].Status != model.UpdateFailed {
+		t.Errorf("expected a failed rollback log, got %+v", logs)
+	}
+}
+
+// The truffels stack is NeedsBuild but a github_release: it has no staged
+// :rollback image and its live image ref cannot be found in its own compose
+// file. It must say so instead of failing deep inside the retag path.
+func TestRollbackService_SelfUpdateIsRefusedHonestly(t *testing.T) {
+	tags := &tagRecorder{}
+	agent := newMockAgent(mockAgentOpts{tags: tags})
+	defer agent.Close()
+
+	tmpl := model.ServiceTemplate{
+		ID:             "truffels",
+		DisplayName:    "Truffels",
+		ComposeDir:     t.TempDir(),
+		ContainerNames: []string{"truffels-agent", "truffels-api", "truffels-web"},
+		UpdateSource: &model.UpdateSource{
+			Type:       model.SourceGitHubRelease,
+			Repo:       "bandrewk/truffels",
+			Images:     []string{"truffels/agent", "truffels/api", "truffels/web"},
+			NeedsBuild: true,
+		},
+	}
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_, _ = st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID:   "truffels",
+		FromVersion: "v0.3.1-dev.23",
+		ToVersion:   "v0.3.1-dev.24",
+		Status:      model.UpdateDone,
+	})
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "truffels",
+		CurrentVersion: "v0.3.1-dev.24",
+		LatestVersion:  "v0.3.1-dev.24",
+	})
+
+	err := eng.RollbackService("truffels")
+	if err == nil {
+		t.Fatal("expected rollback of the truffels stack to be refused")
+	}
+	if !strings.Contains(err.Error(), "rollback not supported for custom-built services") {
+		t.Errorf("expected the honest custom-build message, got: %v", err)
+	}
+	if calls := tags.snapshot(); len(calls) != 0 {
+		t.Errorf("the self-update stack must not enter the retag path, got %+v", calls)
+	}
+	alerts, _ := st.GetActiveAlerts()
+	for _, a := range alerts {
+		if a.Type == "update_failed" && a.ServiceID == "truffels" {
+			t.Errorf("a refused, never-started rollback must not raise an update_failed alert: %+v", a)
+		}
 	}
 }
 

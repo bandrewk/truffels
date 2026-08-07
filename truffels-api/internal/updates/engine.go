@@ -651,13 +651,57 @@ func (e *Engine) RollbackService(serviceID string) error {
 	// Restore the old image
 	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
 	if src.NeedsBuild {
+		// The truffels stack is NeedsBuild as well, but it is a github_release:
+		// ApplyUpdateToVersion routes it to applySelfUpdate before it ever gets
+		// here, and nothing is staged under a truffels/truffels:rollback tag.
+		// Without this guard the retag path below chases an image that does not
+		// exist and ends in a misleading "no rollback image available" plus an
+		// alert. Keep the honest message this path had before retag rollbacks.
+		if src.Type == model.SourceGitHubRelease {
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "rollback not supported for custom-built services", "")
+			return &UpdateError{Msg: "rollback not supported for custom-built services"}
+		}
+
 		// Nothing to pull — a custom build exists only on this box. The image
 		// running before the last update was staged under :rollback; move that
 		// tag back onto the ref the compose file runs. Fail loudly if it is
 		// gone: restarting the current image and calling it a rollback is the
 		// bug this replaces.
+		//
+		// Check the staged image *before* moving any tag: :rollback holds
+		// exactly one generation and is only ever staged by an update, never by
+		// a rollback. After one successful rollback it points at the image that
+		// is already running, so a second rollback would retag a no-op, come up
+		// healthy and then record prevVersion as the running version — the
+		// running code would be one generation older than the UI claims.
+		// Verifying first means a refusal leaves nothing half-done.
+		rollbackRef := rollbackImageRef(serviceID)
+		info, inspectErr := e.compose.ImageInspectByName(rollbackRef)
+		if inspectErr != nil {
+			msg := "cannot verify the staged rollback image: " + inspectErr.Error()
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+		staged := info.Labels[SourceRefLabel]
+		switch {
+		case staged == "":
+			// Either nothing is staged (the agent answers 200 with empty fields
+			// for an unknown image) or the staged image predates source-ref
+			// labels. Both mean we cannot prove what it would restore.
+			msg := fmt.Sprintf("no rollback image available: %s carries no source ref, so it cannot be shown to hold %s", rollbackRef, prevVersion)
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		case staged != prevVersion:
+			msg := fmt.Sprintf("staged rollback image holds ref %q, not %q — only one generation is kept, so this version is gone", staged, prevVersion)
+			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+			e.alertUpdateFailed(serviceID, msg)
+			return &UpdateError{Msg: msg}
+		}
+
 		live := liveImageRef(tmpl, serviceID)
-		if err := e.compose.ImageTag(rollbackImageRef(serviceID), live); err != nil {
+		if err := e.compose.ImageTag(rollbackRef, live); err != nil {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "no rollback image available: "+err.Error(), "")
 			e.alertUpdateFailed(serviceID, "rollback image restore failed: "+err.Error())
 			return &UpdateError{Msg: "no rollback image available: " + err.Error()}
