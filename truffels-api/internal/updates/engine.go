@@ -280,9 +280,18 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 	} else {
 		result.FromVersion = check.CurrentVersion
 		result.ToVersion = check.LatestVersion
+		// An empty CurrentVersion is a deliberate statement, not a gap:
+		// checkService leaves it empty when the running image carries no
+		// source-ref label. Say so, rather than rendering it as a blank on the
+		// left of the arrow ("update available:  → 8f2e7c2f"), which reads like
+		// a formatting bug and tells the user nothing about why.
+		msg := fmt.Sprintf("update available: %s → %s", check.CurrentVersion, check.LatestVersion)
+		if check.CurrentVersion == "" {
+			msg = fmt.Sprintf("update available: running version unknown (the image carries no source ref) → %s; rebuilding stamps it", check.LatestVersion)
+		}
 		result.Checks = append(result.Checks, model.PreflightCheck{
 			Name: "update_available", Status: "pass",
-			Message:  fmt.Sprintf("update available: %s → %s", check.CurrentVersion, check.LatestVersion),
+			Message:  msg,
 			Blocking: true,
 		})
 	}

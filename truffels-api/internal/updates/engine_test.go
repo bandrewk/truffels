@@ -1343,6 +1343,59 @@ func TestRunPreflight_UpdateAvailable_SetsVersions(t *testing.T) {
 	}
 }
 
+// checkService now leaves CurrentVersion empty for a build whose image carries
+// no source ref. The preflight message must name that state, not render it as
+// an empty side of an arrow ("update available:  → 8f2e7c2f"), which reads like
+// a formatting bug rather than the deliberate "we do not know" it is.
+func TestRunPreflight_UnknownCurrentVersionIsNamed(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{})
+	defer agent.Close()
+
+	composeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(composeDir, "docker-compose.yml"), []byte(`services:
+  ckstats:
+    image: truffels/ckstats:latest
+`), 0644)
+
+	tmpl := ckstatsBuildTemplate(composeDir, model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "",
+		LatestVersion:  "8f2e7c2f1a2b",
+		HasUpdate:      true,
+	})
+
+	result, err := eng.RunPreflight("ckstats")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// FromVersion stays empty — it is the honest value and the UI renders its
+	// own placeholder. Only the human-readable message changes.
+	if result.FromVersion != "" {
+		t.Errorf("FromVersion = %q, want empty", result.FromVersion)
+	}
+	var msg string
+	for _, c := range result.Checks {
+		if c.Name == "update_available" {
+			msg = c.Message
+		}
+	}
+	if msg == "" {
+		t.Fatal("no update_available check found")
+	}
+	if strings.Contains(msg, "available:  ") || strings.Contains(msg, ": →") {
+		t.Errorf("message renders the unknown version as a blank: %q", msg)
+	}
+	if !strings.Contains(msg, "unknown") || !strings.Contains(msg, "source ref") {
+		t.Errorf("message = %q, want it to say the running version is unknown and why", msg)
+	}
+	if !strings.Contains(msg, "8f2e7c2f1a2b") {
+		t.Errorf("message = %q, want it to name the target version", msg)
+	}
+}
+
 // --- pruneOldImages tests ---
 
 func TestPruneOldImages_KeepsCurrentAndN1(t *testing.T) {

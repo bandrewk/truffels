@@ -5,6 +5,40 @@ export function truncDigest(v: string): string {
   return v
 }
 
+/**
+ * Render a version string, or an em-dash when it is unknown.
+ *
+ * The API deliberately reports an empty current_version for a service we build
+ * ourselves whose image carries no org.truffels.source-ref label: the running
+ * build cannot be proven, and inventing a version string would put a fiction
+ * into rollback targets and update logs. The UI's job is to show that as a
+ * placeholder rather than as a blank next to an arrow.
+ */
+export function displayVersion(v?: string | null): string {
+  return v ? v : '—'
+}
+
+/**
+ * Whether a rollback may be offered for a service.
+ *
+ * A rollback restores the version the last successful update came *from*, so
+ * it needs a known starting point on both ends. An empty currentVersion means
+ * we cannot prove what is running — offering to roll back from an unknown
+ * state is exactly the guess the source-ref label check exists to prevent.
+ * The previous `fromVersion !== currentVersion` test compared truthy against
+ * '', so the button appeared for every unlabelled ckpool/ckstats build.
+ */
+export function canRollback(args: {
+  floatingTag?: boolean | null
+  fromVersion?: string | null
+  currentVersion?: string | null
+}): boolean {
+  if (args.floatingTag) return false
+  if (!args.fromVersion) return false
+  if (!args.currentVersion) return false
+  return args.fromVersion !== args.currentVersion
+}
+
 /** Format an ISO timestamp for display. */
 export function formatTime(iso: string): string {
   if (!iso) return ''

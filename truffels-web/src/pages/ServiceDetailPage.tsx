@@ -11,6 +11,7 @@ import {
   Legend,
 } from 'recharts'
 import { api, ServiceInstance, UpdateCheck, UpdateLog, ContainerSnapshot } from '@/lib/api'
+import { canRollback } from '@/lib/updates'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
@@ -415,8 +416,11 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
 
   // Find previous version from last successful update log
   const lastDoneLog = updateLogs?.find((l: UpdateLog) => l.status === 'done')
-  const canRollback = !svc.template.floating_tag && !!lastDoneLog?.from_version
-    && lastDoneLog.from_version !== updateCheck?.current_version
+  const rollbackAvailable = canRollback({
+    floatingTag: svc.template.floating_tag,
+    fromVersion: lastDoneLog?.from_version,
+    currentVersion: updateCheck?.current_version,
+  })
 
   const doRollback = async () => {
     setRollbackLoading(true)
@@ -511,7 +515,7 @@ function OverviewTab({ svc, updateCheck, serviceId }: { svc: ServiceInstance; up
                   </span>
                 )}
               </dd>
-              {canRollback && (
+              {rollbackAvailable && (
                 <>
                   <dt className="text-gray-500">Rollback</dt>
                   <dd>
