@@ -124,6 +124,52 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 	return &info, nil
 }
 
+// ImageInspectByName returns image info for an image reference, without going
+// through a container. Needed for custom-built services: their container may be
+// absent (never started, or removed by a failed update), and the container-based
+// lookup then reports nothing at all.
+func (c *ComposeClient) ImageInspectByName(image string) (*ImageInfo, error) {
+	body, _ := json.Marshal(map[string]string{"image": image})
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/inspect-by-name", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("agent image inspect by name: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		var ar agentResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
+		return nil, fmt.Errorf("agent image inspect by name: %s", ar.Error)
+	}
+
+	var info ImageInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("agent image inspect by name decode: %w", err)
+	}
+	return &info, nil
+}
+
+// ImageTag points target at the image currently behind source. Used to stage
+// and to restore the rollback generation of a custom-built service.
+func (c *ComposeClient) ImageTag(source, target string) error {
+	body, _ := json.Marshal(map[string]string{"source": source, "target": target})
+	slog.Info("agent image tag", "source", source, "target", target)
+
+	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/tag", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("agent image tag: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent image tag: %s", ar.Error)
+	}
+	return nil
+}
+
 // Build runs docker compose build for a service via the agent.
 func (c *ComposeClient) Build(serviceID string) error {
 	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})

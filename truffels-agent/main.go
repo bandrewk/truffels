@@ -93,6 +93,8 @@ func main() {
 	mux.HandleFunc("POST /v1/inspect", handleInspect)
 	mux.HandleFunc("POST /v1/image/pull", handleImagePull)
 	mux.HandleFunc("POST /v1/image/inspect", handleImageInspect)
+	mux.HandleFunc("POST /v1/image/inspect-by-name", handleImageInspectByName)
+	mux.HandleFunc("POST /v1/image/tag", handleImageTag)
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
@@ -607,6 +609,13 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 	}
 	imageName := strings.TrimSpace(imageOut.String())
 
+	writeJSON(w, 200, inspectImageByName(ctx, imageName))
+}
+
+// inspectImageByName reads digest, tags and labels straight off an image. Every
+// docker call here is best-effort: a missing field is reported as empty rather
+// than as a failure, which is what the digest/tag lookups have always done.
+func inspectImageByName(ctx context.Context, imageName string) imageInspectResponse {
 	// Get image digest
 	cmd2 := exec.CommandContext(ctx, "docker", "inspect", "--format",
 		"{{index .RepoDigests 0}}", imageName)
@@ -642,12 +651,85 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(bytes.TrimSpace(labelsOut.Bytes()), &labels)
 	}
 
-	writeJSON(w, 200, imageInspectResponse{
+	return imageInspectResponse{
 		Image:  imageName,
 		Digest: digest,
 		Tags:   tags,
 		Labels: labels,
-	})
+	}
+}
+
+// isAllowedImageRef restricts image operations to images this appliance builds
+// itself. Anything else — upstream images, anything with shell metacharacters —
+// is refused; the agent runs as root against the docker socket. Exact charset
+// check, no normalising: a cleaned or lowercased ref would let something that
+// should fail slip through.
+func isAllowedImageRef(ref string) bool {
+	if !strings.HasPrefix(ref, "truffels/") {
+		return false
+	}
+	for _, c := range ref {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') &&
+			c != '/' && c != ':' && c != '.' && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type imageByNameRequest struct {
+	Image string `json:"image"`
+}
+
+// handleImageInspectByName inspects an image without going through a container.
+// The container-based route cannot answer for a service that is down — which is
+// exactly the state a failed or never-started custom build leaves behind.
+func handleImageInspectByName(w http.ResponseWriter, r *http.Request) {
+	var req imageByNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !isAllowedImageRef(req.Image) {
+		writeJSON(w, 403, map[string]string{"error": "image ref not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	writeJSON(w, 200, inspectImageByName(ctx, req.Image))
+}
+
+// handleImageTag retags an image, used to stage and restore the rollback
+// generation of a custom-built service.
+func handleImageTag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !isAllowedImageRef(req.Source) || !isAllowedImageRef(req.Target) {
+		writeJSON(w, 403, map[string]string{"error": "image ref not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "tag", req.Source, req.Target)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "docker tag failed: " + err.Error(), "output": out.String()})
+		return
+	}
+	slog.Info("image tagged", "source", req.Source, "target", req.Target)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // --- Container Stats ---

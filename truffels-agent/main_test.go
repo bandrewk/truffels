@@ -2282,3 +2282,135 @@ func TestImageInspectResponseCarriesLabels(t *testing.T) {
 		t.Errorf("response JSON lacks the source-ref label: %s", b)
 	}
 }
+
+// --- Image retag / inspect-by-name (security boundary: agent is root) ---
+
+func TestImageTagRejectsForeignImages(t *testing.T) {
+	// Der Endpunkt darf nur Truffels-eigene Images umtaggen.
+	if isAllowedImageRef("bitcoin/bitcoin:29.0") {
+		t.Error("must reject images outside the truffels namespace")
+	}
+	if !isAllowedImageRef("truffels/ckpool:rollback") {
+		t.Error("must accept truffels images")
+	}
+	if isAllowedImageRef("truffels/ckpool:latest; rm -rf /") {
+		t.Error("must reject shell metacharacters")
+	}
+}
+
+func TestIsAllowedImageRef_Charset(t *testing.T) {
+	allowed := []string{
+		"truffels/ckpool:v1.0.0", "truffels/ckstats:latest",
+		"truffels/ckstats-cron:rollback", "truffels/api:v0.3.1-dev.23",
+		"truffels/web:sha256_abc",
+	}
+	for _, ref := range allowed {
+		if !isAllowedImageRef(ref) {
+			t.Errorf("ref %q should be allowed", ref)
+		}
+	}
+	denied := []string{
+		"", "ckpool:latest", "docker.io/truffels/ckpool:latest",
+		"Truffels/ckpool:latest", "truffels/CKPOOL:latest",
+		"truffels/ckpool:latest $(id)", "truffels/ckpool:latest`id`",
+		"truffels/ckpool:latest&&id", "truffels/ckpool:latest|id",
+		"truffels/ckpool:latest\nid", "truffels/ck pool:latest",
+		"truffels/ckpool:latest'", `truffels/ckpool:latest"`,
+		"truffels/ckpool:*", "truffels/ckpool:latest;id",
+	}
+	for _, ref := range denied {
+		if isAllowedImageRef(ref) {
+			t.Errorf("ref %q must be rejected", ref)
+		}
+	}
+}
+
+func TestHandleImageTag_RejectsForeignSource(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{
+		"source": "bitcoin/bitcoin:29.0", "target": "truffels/ckpool:latest",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader(body))
+
+	handleImageTag(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImageTag_RejectsForeignTarget(t *testing.T) {
+	// Source allowed, target not — both sides must be checked.
+	body, _ := json.Marshal(map[string]string{
+		"source": "truffels/ckpool:rollback", "target": "nginx:latest",
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader(body))
+
+	handleImageTag(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImageTag_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader([]byte("nope")))
+
+	handleImageTag(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageInspectByName_RejectsForeignImage(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{"image": "mariadb:lts"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader(body))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "image ref not allowed" {
+		t.Errorf("expected 'image ref not allowed', got %q", resp["error"])
+	}
+}
+
+func TestHandleImageInspectByName_MalformedJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader([]byte("{")))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImageInspectByName_AllowedImageAnswersWithoutContainer(t *testing.T) {
+	// docker is not available in the test container, so the lookups inside come
+	// back empty — the point here is that an allowed ref gets past the guard and
+	// is answered with the shared inspect response shape.
+	body, _ := json.Marshal(map[string]string{"image": "truffels/ckpool:rollback"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/inspect-by-name", bytes.NewReader(body))
+
+	handleImageInspectByName(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp imageInspectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Image != "truffels/ckpool:rollback" {
+		t.Errorf("image = %q, want the requested ref", resp.Image)
+	}
+}
