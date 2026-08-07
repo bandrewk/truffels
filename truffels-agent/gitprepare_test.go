@@ -190,6 +190,164 @@ func TestPrepareBuildSource_DiscardsTrackedEdits(t *testing.T) {
 	}
 }
 
+// --- removeUntrackedCollisionsForCheckout ---
+//
+// The second half of the same outage. With the tree reset, `git checkout` still
+// aborted:
+//
+//	error: The following untracked working tree files would be overwritten by checkout:
+//		pnpm-workspace.yaml
+//
+// The target commit tracks pnpm-workspace.yaml, the current HEAD does not, and
+// a local `pnpm install` had left an untracked copy in the way. reset --hard
+// cannot help — the file is untracked, so it is not the reset's business — and
+// the update was stuck with no way out.
+
+// newCollisionRepo builds a repo where the target commit tracks a file that
+// HEAD does not, standing in for the ckstats tree at the moment it jammed.
+// Returns the repo dir and the target commit.
+//
+// t.TempDir() is resolved through EvalSymlinks first: the removal path runs
+// every candidate through validateUnderRoot, which rejects a root reached via a
+// symlinked ancestor. On a host where /tmp is a symlink an unresolved temp dir
+// would fail the check for reasons that have nothing to do with the behaviour
+// under test.
+func newCollisionRepo(t *testing.T) (string, string) {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerResettable(t, dir)
+	git(t, dir, "init", "-q", "-b", "main")
+	git(t, dir, "config", "user.email", "t@example.invalid")
+	git(t, dir, "config", "user.name", "t")
+
+	// Commit A: no pnpm-workspace.yaml.
+	write(t, dir, "next.config.js", "const nextConfig = {}\n")
+	git(t, dir, "add", "next.config.js")
+	git(t, dir, "commit", "-q", "-m", "A")
+	first := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD"))
+
+	// Commit B: pnpm-workspace.yaml is tracked from here on.
+	write(t, dir, "pnpm-workspace.yaml", "packages:\n  - upstream\n")
+	git(t, dir, "add", "pnpm-workspace.yaml")
+	git(t, dir, "commit", "-q", "-m", "B")
+	target := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD"))
+
+	// Back to A, so the file is absent from the index and from HEAD.
+	git(t, dir, "checkout", "-q", first)
+	return dir, target
+}
+
+// The bug: an untracked file that the target commit tracks blocks the checkout
+// permanently. It must be removed — and only it.
+func TestRemoveUntrackedCollisions_UnblocksCheckout(t *testing.T) {
+	dir, target := newCollisionRepo(t)
+
+	// The leftover from a local `pnpm install`, and a second untracked entry
+	// that the target does NOT track and therefore must survive untouched.
+	write(t, dir, "pnpm-workspace.yaml", "packages:\n  - local-junk\n")
+	write(t, dir, ".pnpm-store/v3/files/00/abc", "cached tarball\n")
+
+	// Baseline: without the fix the checkout fails, or this test proves nothing.
+	out, err := exec.Command("git", "-C", dir, "checkout", target).CombinedOutput()
+	if err == nil {
+		t.Fatal("baseline broken: checkout succeeded despite the untracked collision")
+	}
+	if !strings.Contains(string(out), "untracked working tree files") {
+		t.Fatalf("baseline broken: checkout failed for the wrong reason:\n%s", out)
+	}
+
+	if log, err := removeUntrackedCollisionsForCheckout(context.Background(), dir, target); err != nil {
+		t.Fatalf("remove failed: %v\n%s", err, log)
+	} else if !strings.Contains(log, "pnpm-workspace.yaml") {
+		t.Errorf("removal was not logged with its path: %q", log)
+	}
+
+	if out, err := exec.Command("git", "-C", dir, "checkout", target).CombinedOutput(); err != nil {
+		t.Fatalf("checkout still blocked: %v\n%s", err, out)
+	}
+
+	// The collision now carries the target commit's content, not the local one.
+	body, err := os.ReadFile(filepath.Join(dir, "pnpm-workspace.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "packages:\n  - upstream\n" {
+		t.Errorf("pnpm-workspace.yaml = %q, want the target commit's content", body)
+	}
+
+	// The untracked file the target does not track is untouched. This is the
+	// difference between the intersection and `git clean`.
+	body, err = os.ReadFile(filepath.Join(dir, ".pnpm-store/v3/files/00/abc"))
+	if err != nil {
+		t.Fatalf("untracked non-colliding file was destroyed: %v", err)
+	}
+	if string(body) != "cached tarball\n" {
+		t.Errorf("untracked non-colliding file was modified: %q", body)
+	}
+}
+
+// Ignored files are excluded from the candidate list on purpose:
+// --exclude-standard matches what git itself does, and git overwrites ignored
+// files during checkout without complaining. Listing them would widen the blast
+// radius for no benefit.
+func TestRemoveUntrackedCollisions_LeavesIgnoredFilesToGit(t *testing.T) {
+	dir, target := newCollisionRepo(t)
+	write(t, dir, ".gitignore", "*.log\n")
+	write(t, dir, "build.log", "local build output\n")
+	write(t, dir, "pnpm-workspace.yaml", "packages:\n  - local-junk\n")
+
+	if log, err := removeUntrackedCollisionsForCheckout(context.Background(), dir, target); err != nil {
+		t.Fatalf("remove failed: %v\n%s", err, log)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build.log")); err != nil {
+		t.Errorf("ignored file was removed: %v", err)
+	}
+}
+
+// Same guard, same reasoning as prepareBuildSourceForCheckout: this function
+// deletes files, so it must refuse anything outside the build-source allowlist
+// *before* executing git, not merely because its one caller is wired correctly.
+// The shim records every invocation; the canary must never appear.
+func TestRemoveUntrackedCollisions_RefusesNonBuildSourceWithoutRunningGit(t *testing.T) {
+	shimDir := t.TempDir()
+	canary := filepath.Join(shimDir, "git-was-invoked")
+	shim := "#!/bin/sh\necho \"$@\" >> " + canary + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir)
+
+	if err := exec.Command("git", "--version").Run(); err != nil {
+		t.Fatalf("shim not reachable on PATH: %v", err)
+	}
+	if _, err := os.Stat(canary); err != nil {
+		t.Fatalf("control failed: shim ran but left no canary: %v", err)
+	}
+	if err := os.Remove(canary); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range []string{"/repo", "/", "/srv/truffels/data", "/home/truffel/Project-Truffels", ""} {
+		out, err := removeUntrackedCollisionsForCheckout(context.Background(), dir, "8f2e7c2f8403")
+		if err == nil {
+			t.Errorf("remove accepted %q; it may only ever touch build source trees", dir)
+		}
+		if out != "" {
+			t.Errorf("remove returned output for %q, so it did work before refusing: %q", dir, out)
+		}
+		if err != nil && !strings.Contains(err.Error(), dir) {
+			t.Errorf("error for %q does not name the directory: %v", dir, err)
+		}
+		if _, statErr := os.Stat(canary); statErr == nil {
+			body, _ := os.ReadFile(canary)
+			t.Fatalf("remove executed git for %q before refusing: %s", dir, body)
+		}
+	}
+}
+
 // --- the allowlist that keeps this away from /repo ---
 
 // /repo is the user's own project checkout, bind-mounted from
