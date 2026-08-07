@@ -1715,6 +1715,16 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	// ref_scheme selects the validator. Absent means tag — the self-update
 	// path predates this field and must keep its stricter check.
+	//
+	// Note the asymmetry with model.UpdateSource.RefScheme in truffels-api,
+	// which documents an empty value as "commit": that is the *registry's*
+	// default for a service definition, and the API resolves it to an explicit
+	// "commit" before it ever reaches this endpoint (see applyNeedsBuild). Here,
+	// at the root boundary, an absent field is a request that predates the
+	// field, so it gets the STRICTER of the two validators — a commit hash sent
+	// without a ref_scheme is rejected with 400 rather than silently accepted.
+	// Both defaults therefore fail closed; they must not be "harmonised" by
+	// making this one accept commit hashes.
 	valid := isValidTag(req.Tag)
 	if req.RefScheme == "commit" {
 		valid = isValidCommitHash(req.Tag)
@@ -1724,7 +1734,9 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("git checkout", "repo", req.RepoDir, "tag", req.Tag)
+	// Audit line for the only endpoint that runs git checkout as root: record
+	// which validator let the ref through, not just the ref itself.
+	slog.Info("git checkout", "repo", req.RepoDir, "tag", req.Tag, "scheme", req.RefScheme)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
