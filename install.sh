@@ -975,6 +975,10 @@ services:
       - /srv/truffels/backups:/srv/truffels/backups
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      # The Dockerfile reconciler runs here and reads the expected Dockerfiles
+      # from /repo before writing them into the deployed compose dirs. Read-only:
+      # only the agent's self-update checkout writes to the working copy.
+      - $TRUFFELS_REPO_SRC:/repo:ro
     environment:
       TRUFFELS_LISTEN: ":8080"
       TRUFFELS_DB_PATH: "/data/truffels.db"

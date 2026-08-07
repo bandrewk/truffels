@@ -196,6 +196,73 @@ func TestRender_Truffels(t *testing.T) {
 	assertContains(t, got, "container_name: truffels-web")
 }
 
+// The Dockerfile reconciler runs in the *API* container: it reads the expected
+// Dockerfile from /repo and writes it into the deployed compose dir. Without
+// this mount every reconcile logged "open /repo/dockerfiles/ckpool/Dockerfile:
+// no such file or directory" and the deployed Dockerfiles silently stayed on
+// whatever the installer wrote months earlier. That is how ckpool got rebuilt
+// from a Dockerfile with no ARG SOURCE_REF and no source-ref LABEL, producing
+// an unlabelled image that the update engine then correctly rejected with
+// `built ref "" does not match requested "v1.2.0"`. Read-only is enough — the
+// reconciler only reads; only the agent's self-update checkout writes.
+func TestRender_TruffelsAPIMountsRepoReadOnly(t *testing.T) {
+	got, err := Render("truffels", TruffelsParams{
+		AgentTag: "truffels/agent:v0.3.1-dev.25",
+		APITag:   "truffels/api:v0.3.1-dev.25",
+		WebTag:   "truffels/web:v0.3.1-dev.25",
+		RepoSrc:  "/home/truffel/Project-Truffels",
+		Version:  "v0.3.1-dev.25",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, serviceBlock(t, got, "api"), "- /home/truffel/Project-Truffels:/repo:ro")
+	// And the agent keeps write access — its self-update checkout needs it.
+	assertContains(t, serviceBlock(t, got, "agent"), "- /home/truffel/Project-Truffels:/repo:rw")
+}
+
+// The installed compose file and the reconciled template must agree, otherwise
+// the first API boot after an install rewrites what the installer just wrote —
+// or a fresh install runs for a whole release cycle without the mount.
+func TestInstaller_TruffelsAPIMountsRepoReadOnly(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	assertContains(t, serviceBlock(t, string(installer), "api"), "- $TRUFFELS_REPO_SRC:/repo:ro")
+	assertContains(t, serviceBlock(t, string(installer), "agent"), "- $TRUFFELS_REPO_SRC:/repo:rw")
+}
+
+// serviceBlock returns just the given service's block from a compose document.
+// Asserting against the whole document would let one service's mount satisfy
+// an assertion about another's — exactly the mistake that hid the missing api
+// /repo mount, since the agent block carries a matching line.
+func serviceBlock(t *testing.T, doc, name string) string {
+	t.Helper()
+	lines := strings.Split(doc, "\n")
+	start := -1
+	for i, l := range lines {
+		if l == "  "+name+":" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("no %q service block found in:\n%s", name, doc)
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		if len(lines[i])-len(strings.TrimLeft(lines[i], " ")) <= 2 {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
 func assertContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if !strings.Contains(s, substr) {
