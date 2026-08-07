@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"truffels-api/internal/model"
@@ -332,6 +333,61 @@ func TestComposeClient_GitCheckout_Error(t *testing.T) {
 	err := client.GitCheckout("/repo", "v0.2.0", "tag")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// The agent puts git's own stderr in "output" and only the exit status in
+// "error". Dropping "output" left the UI showing "git checkout failed: exit
+// status 1" twice in a row, and the real cause — the list of untracked files in
+// the way — had to be fetched off the device by hand. BuildWithArgs already
+// appends the output; GitCheckout must too.
+func TestComposeClient_GitCheckout_ErrorIncludesAgentOutput(t *testing.T) {
+	const gitStderr = "error: The following untracked working tree files would be " +
+		"overwritten by checkout:\n\tpnpm-workspace.yaml\nPlease move or remove them " +
+		"before you switch branches.\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":  "git checkout failed: exit status 1",
+			"output": gitStderr,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.GitCheckout("/srv/truffels/data/ckpoolstats", "8f2e7c2f8403", "commit")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "pnpm-workspace.yaml") {
+		t.Errorf("agent output was discarded; error is not actionable:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error field was dropped: %v", err)
+	}
+}
+
+// Long output is truncated to the tail, the same way BuildWithArgs does it:
+// git prints the interesting lines last.
+func TestComposeClient_GitCheckout_ErrorTruncatesLongOutput(t *testing.T) {
+	long := strings.Repeat("x", 4000) + "THE-ACTUAL-CAUSE"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "boom", "output": long})
+	}))
+	defer srv.Close()
+
+	client := NewComposeClient(srv.URL)
+	err := client.GitCheckout("/srv/truffels/data/ckpoolstats", "8f2e7c2f8403", "commit")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "THE-ACTUAL-CAUSE") {
+		t.Errorf("tail of the output was not kept: %v", err)
+	}
+	if len(err.Error()) > 700 {
+		t.Errorf("output was not truncated: %d chars", len(err.Error()))
 	}
 }
 

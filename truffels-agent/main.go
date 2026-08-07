@@ -1777,6 +1777,124 @@ func prepareBuildSourceForCheckout(ctx context.Context, repoDir string) (string,
 	return log.String(), nil
 }
 
+// gitPathList runs a git command that emits NUL-separated pathnames and returns
+// them. -z is mandatory in the caller's args: without it git quotes and escapes
+// names containing spaces or non-ASCII bytes, and a quoted name would not match
+// the file on disk — the intersection below would silently miss a collision, or
+// worse, name a path that does not exist.
+func gitPathList(ctx context.Context, repoDir string, args ...string) ([]string, error) {
+	full := append([]string{"-c", "safe.directory=*", "-C", repoDir}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errOut.String()))
+	}
+	var paths []string
+	for _, p := range strings.Split(out.String(), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// removeUntrackedCollisionsForCheckout removes the untracked files in a build
+// source tree that the target commit tracks — and nothing else.
+//
+// The second half of the ckstats outage. With the tree reset, `git checkout`
+// still refused:
+//
+//	error: The following untracked working tree files would be overwritten by checkout:
+//		pnpm-workspace.yaml
+//
+// The target commit tracks that file, the current HEAD does not, and a local
+// `pnpm install` had left an untracked copy in the way. `reset --hard` cannot
+// help — an untracked file is not the reset's business — so the update was
+// stuck with no way out.
+//
+// Why this exact intersection is safe, and why `git clean` is not:
+//
+// A file that is untracked here AND tracked in the target commit is a file git
+// is about to own. Seconds from now `checkout` writes the committed version
+// over that path; whatever is there is discarded either way. Keeping the local
+// copy is not an option the operator has — it only decides between "checkout
+// overwrites it" and "checkout refuses forever". So the set of files this can
+// destroy is exactly the set the checkout would have destroyed anyway, and it
+// is computed from the target commit, not from a pattern.
+//
+// `git clean -fd` answers a different question: "what is not tracked *now*". It
+// would take .pnpm-store/, any local notes, any file the operator put there —
+// its blast radius is decided by git's idea of untracked, not by us, and it
+// cannot be reasoned about ahead of time from the call site. `-x` would widen
+// it again to ignored files. Neither belongs in a program that can be pointed
+// at a repository holding work nothing can recreate.
+//
+// --exclude-standard is load-bearing for the same reason it is in git itself:
+// ignored files are absent from the candidate list because `checkout`
+// overwrites them without complaining. They are never a reason for the failure,
+// so they are never a reason to delete anything.
+//
+// Must run after `fetch` (the target commit has to be local for ls-tree) and
+// before `checkout`.
+func removeUntrackedCollisionsForCheckout(ctx context.Context, repoDir, ref string) (string, error) {
+	// Re-check the allowlist here, not only at the call site — same argument as
+	// in prepareBuildSourceForCheckout, with a sharper edge: this function calls
+	// os.Remove. It returns before any git command is executed.
+	if !isResettableRepoDir(repoDir) {
+		return "", fmt.Errorf("refusing to remove untracked files in %q: not a build source directory", repoDir)
+	}
+
+	untracked, err := gitPathList(ctx, repoDir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", err
+	}
+	if len(untracked) == 0 {
+		return "", nil
+	}
+
+	inTarget, err := gitPathList(ctx, repoDir, "ls-tree", "-r", "--name-only", "-z", ref)
+	if err != nil {
+		return "", err
+	}
+	tracked := make(map[string]bool, len(inTarget))
+	for _, p := range inTarget {
+		tracked[p] = true
+	}
+
+	var log bytes.Buffer
+	for _, rel := range untracked {
+		if !tracked[rel] {
+			continue
+		}
+		// The paths come from git and are repo-relative, but that is an
+		// assumption about another program's output, and this one deletes files.
+		// Verify independently that the joined path still lies under repoDir.
+		// A path that fails aborts the whole operation: a candidate outside the
+		// build source means the premise is broken, and continuing past it would
+		// mean deleting the remaining entries on a premise already known false.
+		full, err := validateUnderRoot(filepath.Join(repoDir, rel), repoDir)
+		if err != nil {
+			return log.String(), fmt.Errorf("refusing to remove %q in %q: %w", rel, repoDir, err)
+		}
+		// os.Remove, never os.RemoveAll: ls-files --others lists files, so every
+		// candidate is a file. If one is somehow a non-empty directory, os.Remove
+		// fails and this aborts — which is the correct outcome. A recursive
+		// delete here would turn one wrong path into an unbounded one.
+		if err := os.Remove(full); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return log.String(), fmt.Errorf("remove %q: %w", full, err)
+		}
+		slog.Info("removed untracked file that the target commit tracks",
+			"repo", repoDir, "path", full, "ref", ref)
+		fmt.Fprintf(&log, "removed untracked file that %s tracks: %s\n", ref, rel)
+	}
+	return log.String(), nil
+}
+
 type gitCheckoutRequest struct {
 	RepoDir   string `json:"repo_dir"`
 	Tag       string `json:"tag"`
@@ -1850,17 +1968,37 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Untracked files that the target commit tracks abort the checkout, and no
+	// reset can clear them. Build source trees get exactly those removed; /repo
+	// never does. This has to sit after the fetch — the ref must be local for
+	// ls-tree to resolve it — and before the checkout.
+	var collisionOut string
+	if isResettableRepoDir(req.RepoDir) {
+		out, err := removeUntrackedCollisionsForCheckout(ctx, req.RepoDir, req.Tag)
+		collisionOut = out
+		if err != nil {
+			writeJSON(w, 500, map[string]string{
+				"error":  "git prepare failed: " + err.Error(),
+				"output": prepOut + fetchOut.String() + out,
+			})
+			return
+		}
+	}
+
 	// Checkout tag
 	checkoutCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag)
 	var checkoutOut bytes.Buffer
 	checkoutCmd.Stdout = &checkoutOut
 	checkoutCmd.Stderr = &checkoutOut
 	if err := checkoutCmd.Run(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "git checkout failed: " + err.Error(), "output": checkoutOut.String()})
+		writeJSON(w, 500, map[string]string{
+			"error":  "git checkout failed: " + err.Error(),
+			"output": prepOut + fetchOut.String() + collisionOut + checkoutOut.String(),
+		})
 		return
 	}
 
-	writeJSON(w, 200, map[string]string{"status": "ok", "output": prepOut + fetchOut.String() + checkoutOut.String()})
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": prepOut + fetchOut.String() + collisionOut + checkoutOut.String()})
 }
 
 func isValidTag(tag string) bool {
