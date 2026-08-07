@@ -1152,11 +1152,20 @@ func selfUpdateImage(images []string, svc string) (string, bool) {
 // re-reads the single ref a custom-built service runs out of the compose file,
 // because there the pre-build rewrite is best-effort and only warns, so what
 // the file says afterwards is genuinely unknown. Here the rewrite is fatal on
-// failure — getting this far means the file really did move — the version to go
-// back to is the one the check row already holds, and three images move as a
-// set. The shared residue is a single RewriteTags call; parameterising one
-// helper for both would cost more than it saves and would mean reopening a path
-// that has shipped since dev.24.
+// failure, the version to go back to is the one the check row already holds,
+// and three images move as a set. The shared residue is a single RewriteTags
+// call; parameterising one helper for both would cost more than it saves and
+// would mean reopening a path that has shipped since dev.24.
+//
+// Writing the old tags unconditionally is not quite the same as knowing the
+// file moved: a RewriteTags error can also mean "written, but the answer was
+// lost on the way back", the distinction applyNeedsBuild draws by re-reading.
+// That residue is accepted here rather than hidden. Step 2 treats such an error
+// as fatal and returns before anything is built, so the only way to reach this
+// function is through a rewrite that reported success; and the restore is
+// idempotent — the agent replaces whatever tag is on the line, so writing the
+// old version over a file that never left it is a no-op that reports "already
+// at target version".
 func (e *Engine) restoreSelfComposeTags(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck) string {
 	if check.CurrentVersion == "" {
 		// checkService leaves this empty when it cannot identify what runs. We

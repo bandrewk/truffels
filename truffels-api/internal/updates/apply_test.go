@@ -913,6 +913,13 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 					re, _ := regexp.Compile(pattern)
 					content = re.ReplaceAllString(content, fmt.Sprintf("${1}%s:%s", img, req.NewTag))
 				}
+				// handleComposeRewriteTags moves the VERSION build args along
+				// with the tags (main.go:2138). The truffels stack builds all
+				// three services from source, so this line is what the next
+				// build stamps into the image label — leaving it on a rejected
+				// version is the same lie as leaving the tag there.
+				versionRe := regexp.MustCompile(`(VERSION:\s+)\S+`)
+				content = versionRe.ReplaceAllString(content, "${1}"+req.NewTag)
 				_ = os.WriteFile(composePath, []byte(content), 0644)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -991,13 +998,29 @@ func selfUpdateTemplates(composeDir string) []model.ServiceTemplate {
 func writeSelfUpdateCompose(t *testing.T, dir, version string) string {
 	t.Helper()
 	composePath := filepath.Join(dir, "docker-compose.yml")
+	// Shaped like the real /srv/truffels/compose/truffels/docker-compose.yml:
+	// all three services carry a build: block with a VERSION arg alongside the
+	// image tag. Both move together, and both have to move back — a file left
+	// with the rejected version in build.args would hand it to the next build.
 	body := fmt.Sprintf(`services:
   agent:
     image: truffels/agent:%[1]s
+    build:
+      context: /repo/truffels-agent
+      args:
+        VERSION: %[1]s
   api:
     image: truffels/api:%[1]s
+    build:
+      context: /repo/truffels-api
+      args:
+        VERSION: %[1]s
   web:
     image: truffels/web:%[1]s
+    build:
+      context: /repo/truffels-web
+      args:
+        VERSION: %[1]s
 `, version)
 	if err := os.WriteFile(composePath, []byte(body), 0644); err != nil {
 		t.Fatalf("write compose: %v", err)
@@ -1005,8 +1028,31 @@ func writeSelfUpdateCompose(t *testing.T, dir, version string) string {
 	return composePath
 }
 
-// assertComposeTags fails unless all three services name exactly version, and
-// no other version is left anywhere in the file.
+// composeTagProblems reports every way the compose file fails to sit at version:
+// each of the three image lines and each of the three VERSION build args must be
+// exactly that version and nothing else.
+//
+// It anchors whole lines rather than counting substrings. A count of
+// occurrences passes the one shape this exists to catch — an appended rather
+// than replaced tag, "image: truffels/agent:v0.2.0v0.1.0", which contains
+// ":v0.2.0" exactly once and satisfies any Contains check for it.
+func composeTagProblems(content, version string) []string {
+	var problems []string
+	for _, img := range []string{"truffels/agent", "truffels/api", "truffels/web"} {
+		re := regexp.MustCompile(`(?m)^\s*image:\s*` + regexp.QuoteMeta(img+":"+version) + `\s*$`)
+		if n := len(re.FindAllString(content, -1)); n != 1 {
+			problems = append(problems, fmt.Sprintf("expected exactly one line naming %s:%s, found %d", img, version, n))
+		}
+	}
+	argRe := regexp.MustCompile(`(?m)^\s*VERSION:\s*` + regexp.QuoteMeta(version) + `\s*$`)
+	if n := len(argRe.FindAllString(content, -1)); n != 3 {
+		problems = append(problems, fmt.Sprintf("expected 3 VERSION build args at %s, found %d", version, n))
+	}
+	return problems
+}
+
+// assertComposeTags fails unless all three services, image tag and build arg
+// alike, sit exactly at version.
 func assertComposeTags(t *testing.T, composePath, version string) {
 	t.Helper()
 	data, err := os.ReadFile(composePath)
@@ -1014,15 +1060,56 @@ func assertComposeTags(t *testing.T, composePath, version string) {
 		t.Fatalf("read compose: %v", err)
 	}
 	content := string(data)
-	for _, img := range []string{"truffels/agent", "truffels/api", "truffels/web"} {
-		want := img + ":" + version
-		if !strings.Contains(content, want) {
-			t.Errorf("expected %s in the compose file, got:\n%s", want, content)
-		}
+	if problems := composeTagProblems(content, version); len(problems) > 0 {
+		t.Errorf("compose file is not at %s: %s\n%s", version, strings.Join(problems, "; "), content)
 	}
-	// Catch a tag that was appended rather than replaced.
-	if n := strings.Count(content, ":"+version); n != 3 {
-		t.Errorf("expected exactly 3 image tags at %s, found %d:\n%s", version, n, content)
+}
+
+// The assertion has to reject the exact mangling that motivated it, or it is
+// decoration. An appended tag survives every substring check for the version it
+// claims to be at.
+func TestComposeTagProblems(t *testing.T) {
+	clean := `services:
+  agent:
+    image: truffels/agent:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+  api:
+    image: truffels/api:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+  web:
+    image: truffels/web:v0.2.0
+    build:
+      args:
+        VERSION: v0.2.0
+`
+	if problems := composeTagProblems(clean, "v0.2.0"); len(problems) > 0 {
+		t.Errorf("a correct file must pass, got: %v", problems)
+	}
+
+	// The mock bug: the new tag written in front of the old one instead of over
+	// it. strings.Contains(content, "truffels/agent:v0.2.0") is true here and
+	// strings.Count(content, ":v0.2.0") is still 3.
+	mangled := strings.Replace(clean, "truffels/agent:v0.2.0", "truffels/agent:v0.2.0v0.1.0", 1)
+	if strings.Count(mangled, ":v0.2.0") != 3 || !strings.Contains(mangled, "truffels/agent:v0.2.0") {
+		t.Fatal("this fixture no longer reproduces the shape a counting check misses")
+	}
+	if problems := composeTagProblems(mangled, "v0.2.0"); len(problems) == 0 {
+		t.Error("an appended tag must be rejected")
+	}
+
+	// A tag that was never written back at all.
+	if problems := composeTagProblems(clean, "v0.1.0"); len(problems) != 4 {
+		t.Errorf("expected all three images and the build args to be reported, got: %v", problems)
+	}
+
+	// The build args left behind while the image tags moved.
+	staleArgs := strings.ReplaceAll(clean, "VERSION: v0.2.0", "VERSION: v0.1.0")
+	if problems := composeTagProblems(staleArgs, "v0.2.0"); len(problems) != 1 {
+		t.Errorf("expected the stale build args to be reported on their own, got: %v", problems)
 	}
 }
 
