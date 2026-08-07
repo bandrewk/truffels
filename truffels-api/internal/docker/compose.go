@@ -380,7 +380,21 @@ func (c *ComposeClient) GitCheckout(repoDir, ref, refScheme string) error {
 	var ar agentResponse
 	_ = json.NewDecoder(resp.Body).Decode(&ar)
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent git checkout: %s", ar.Error)
+		msg := ar.Error
+		// ar.Error is only the exit status ("git checkout failed: exit status
+		// 1"); git's own message — which untracked files are in the way, which
+		// ref could not be resolved — is in ar.Output. Dropping it made two
+		// consecutive failed updates indistinguishable in the UI and the cause
+		// had to be fetched off the device by hand. Same tail-truncation as
+		// BuildWithArgs: git prints the interesting lines last.
+		if ar.Output != "" {
+			out := ar.Output
+			if len(out) > 500 {
+				out = "..." + out[len(out)-500:]
+			}
+			msg += "\n" + out
+		}
+		return fmt.Errorf("agent git checkout: %s", msg)
 	}
 	return nil
 }
