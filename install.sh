@@ -486,9 +486,12 @@ cp "$SCRIPT_DIR/dockerfiles/ckpool/Dockerfile" "$COMPOSE_DIR/ckpool/Dockerfile"
 tee "$COMPOSE_DIR/ckpool/docker-compose.yml" >/dev/null <<'CKPOOLDC'
 services:
   ckpool:
+    # Absolute paths, matching ckpoolTemplate in truffels-api: the API
+    # reconciles this file on every boot, and the agent builds through nsenter
+    # where a relative context would resolve against a different cwd.
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: /srv/truffels/compose/ckpool
+      dockerfile: /srv/truffels/compose/ckpool/Dockerfile
     image: truffels/ckpool:v1.0.0
     container_name: truffels-ckpool
     restart: unless-stopped

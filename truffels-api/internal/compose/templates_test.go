@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,37 @@ func TestRender_Ckpool(t *testing.T) {
 	assertContains(t, got, "image: truffels/ckpool:v1.0.0")
 	assertContains(t, got, "memory: 1024M")
 	assertContains(t, got, "container_name: truffels-ckpool")
+	// ckpool is built locally, and this template is what the reconciler
+	// enforces on every API start. Without a build section
+	// "docker compose build --build-arg SOURCE_REF=..." has nothing to build,
+	// exits 0, and the update engine verifies the label of the *old* image —
+	// i.e. every ckpool update silently becomes a no-op that reports success.
+	assertContains(t, got, "build:")
+	assertContains(t, got, "context: /srv/truffels/compose/ckpool")
+	assertContains(t, got, "dockerfile: /srv/truffels/compose/ckpool/Dockerfile")
+}
+
+// The installed compose file and the reconciled template must declare the same
+// build, otherwise the first API boot after an install silently rewrites the
+// build definition (or, worse, drops it).
+func TestRender_CkpoolBuildMatchesInstaller(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	got, err := Render("ckpool", CkpoolParams{ImageTag: "truffels/ckpool:v1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"context: /srv/truffels/compose/ckpool",
+		"dockerfile: /srv/truffels/compose/ckpool/Dockerfile",
+	} {
+		if !strings.Contains(string(installer), line) {
+			t.Errorf("install.sh does not declare %q for ckpool", line)
+		}
+		assertContains(t, got, line)
+	}
 }
 
 func TestRender_Mempool(t *testing.T) {
