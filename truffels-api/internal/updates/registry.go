@@ -710,8 +710,29 @@ const SourceRefLabel = "org.truffels.source-ref"
 func ExtractCurrentVersionFromLabels(src *model.UpdateSource, imageName string, labels map[string]string) string {
 	switch src.Type {
 	case model.SourceGitHub, model.SourceBitbucket:
-		return labels[SourceRefLabel]
+		ref := labels[SourceRefLabel]
+		if isPlaceholderRef(ref) {
+			return ""
+		}
+		return ref
 	default:
 		return ExtractCurrentVersion(src, imageName)
+	}
+}
+
+// isPlaceholderRef reports whether a source-ref label says nothing about what
+// was built. ckstats' Dockerfile used to default the build arg to the literal
+// string "unknown", and the installer built without passing the arg — so the
+// image was labelled "unknown" and, being non-empty, was treated as a real
+// version all the way into rollback verification, where "unknown" == "unknown"
+// would have approved restoring an unidentifiable image. Images built that way
+// still exist on installed devices, so recognising the placeholder is what
+// heals them, not just fixing the Dockerfile.
+func isPlaceholderRef(ref string) bool {
+	switch strings.TrimSpace(ref) {
+	case "", "unknown", "none", "null", "latest":
+		return true
+	default:
+		return false
 	}
 }

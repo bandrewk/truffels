@@ -863,7 +863,20 @@ log "Building ckpool image..."
 cd "$COMPOSE_DIR/ckpool" && docker compose build --quiet
 
 log "Building ckstats image..."
-cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet
+# Stamp the commit we are actually building. ckstats' SOURCE_REF drives no
+# checkout — the source is the working copy cloned above — so without this the
+# image carries no ref and the update engine correctly refuses to claim it knows
+# what is running. Short to 12 chars: the engine compares against GitHub's
+# commit SHA truncated to the same length, and a 40-char hash would never match.
+CKSTATS_REF="$(git -C "$DATA_DIR/ckpoolstats" rev-parse --short=12 HEAD 2>/dev/null || true)"
+if [[ -n "$CKSTATS_REF" ]]; then
+    cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet --build-arg SOURCE_REF="$CKSTATS_REF"
+else
+    # An empty label is the acceptable fallback — the engine then offers a
+    # rebuild that stamps a real ref. A made-up one is not.
+    warn "Cannot determine the ckstats commit; building without a source ref (an update will be offered to stamp one)."
+    cd "$COMPOSE_DIR/ckstats" && docker compose build --quiet
+fi
 
 # --- Step 9: Start services in order ------------------------------------------
 log "Starting bitcoind..."

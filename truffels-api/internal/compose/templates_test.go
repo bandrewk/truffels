@@ -233,6 +233,57 @@ func TestInstaller_TruffelsAPIMountsRepoReadOnly(t *testing.T) {
 	assertContains(t, serviceBlock(t, string(installer), "agent"), "- $TRUFFELS_REPO_SRC:/repo:rw")
 }
 
+// ckstats' SOURCE_REF is a pure stamp — unlike ckpool's, it drives no
+// git clone --branch. A default of "unknown" therefore produced an image
+// labelled with the literal string "unknown", and the installer built it
+// without passing the arg at all. That is a fabricated version, and it
+// defeats the rule that an unprovable build must report an empty version.
+// Empty default plus an explicit ref from the installer, or nothing.
+func TestCkstatsDockerfile_DoesNotDefaultToAPlaceholderRef(t *testing.T) {
+	data, err := os.ReadFile("../../../dockerfiles/ckstats/Dockerfile")
+	if err != nil {
+		t.Skipf("dockerfile not readable from this checkout: %v", err)
+	}
+	df := string(data)
+	if !strings.Contains(df, "ARG SOURCE_REF=\n") {
+		t.Errorf("ckstats Dockerfile must default SOURCE_REF to empty; got:\n%s",
+			grepLines(df, "SOURCE_REF"))
+	}
+	for _, bad := range []string{"ARG SOURCE_REF=unknown", "ARG SOURCE_REF=none", "ARG SOURCE_REF=latest"} {
+		if strings.Contains(df, bad) {
+			t.Errorf("ckstats Dockerfile stamps a placeholder ref: %q", bad)
+		}
+	}
+	// The label itself must still be emitted, otherwise a build stamps nothing
+	// at all and no update can ever prove itself.
+	assertContains(t, df, "LABEL org.truffels.source-ref=$SOURCE_REF")
+}
+
+// A fresh install must stamp the commit it actually built, so a new device is
+// honest from the first check rather than merely "not wrong".
+func TestInstaller_BuildsCkstatsWithItsRealRef(t *testing.T) {
+	installer, err := os.ReadFile("../../../install.sh")
+	if err != nil {
+		t.Skipf("installer not readable from this checkout: %v", err)
+	}
+	sh := string(installer)
+	assertContains(t, sh, "--build-arg SOURCE_REF=")
+	// The engine compares against a 12-char short SHA (checkGitHub truncates to
+	// SHA[:12]). Stamping a full 40-char hash would mismatch forever.
+	assertContains(t, sh, "rev-parse --short=12 HEAD")
+}
+
+// grepLines returns the lines of s containing substr, for readable failures.
+func grepLines(s, substr string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, substr) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 // serviceBlock returns just the given service's block from a compose document.
 // Asserting against the whole document would let one service's mount satisfy
 // an assertion about another's — exactly the mistake that hid the missing api
