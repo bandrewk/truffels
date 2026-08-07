@@ -1,7 +1,9 @@
 package updates
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1113,6 +1115,8 @@ type needsBuildRecorder struct {
 	byNameCalls    int
 	tagFail        bool // /v1/image/tag 500s — nothing staged to restore
 	tags           []tagCall
+	removed        []string // images dropped via /v1/image/remove
+	unhealthy      bool     // /v1/inspect reports the containers unhealthy
 	buildArgs      map[string]string
 	checkoutDir    string
 	checkoutRef    string
@@ -1128,6 +1132,7 @@ func (r *needsBuildRecorder) snapshot() needsBuildRecorder {
 		byNameImage:    r.byNameImage,
 		byNameCalls:    r.byNameCalls,
 		tags:           append([]tagCall(nil), r.tags...),
+		removed:        append([]string(nil), r.removed...),
 		buildArgs:      r.buildArgs,
 		checkoutDir:    r.checkoutDir,
 		checkoutRef:    r.checkoutRef,
@@ -1212,15 +1217,31 @@ func newNeedsBuildAgent(rec *needsBuildRecorder) *httptest.Server {
 			rec.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
+		case "/v1/image/remove":
+			var req struct {
+				Image string `json:"image"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			rec.removed = append(rec.removed, req.Image)
+			rec.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		case "/v1/inspect":
 			var req struct {
 				Containers []string `json:"containers"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			rec.mu.Lock()
+			health := "healthy"
+			if rec.unhealthy {
+				health = "unhealthy"
+			}
+			rec.mu.Unlock()
 			var states []map[string]interface{}
 			for _, name := range req.Containers {
 				states = append(states, map[string]interface{}{
-					"name": name, "status": "running", "health": "healthy",
+					"name": name, "status": "running", "health": health,
 				})
 			}
 			_ = json.NewEncoder(w).Encode(states)
@@ -1493,6 +1514,136 @@ func TestApplyUpdate_NeedsBuild_StagesRollbackImageBeforeBuild(t *testing.T) {
 	}
 	if got.tags[0].Source != "truffels/ckpool:latest" || got.tags[0].Target != "truffels/ckpool:rollback" {
 		t.Errorf("staged %q -> %q, want the live tag onto :rollback", got.tags[0].Source, got.tags[0].Target)
+	}
+}
+
+// A failed staging must not leave the previous update's :rollback tag in place:
+// restoring that later would install a two-generations-old image and report a
+// successful rollback.
+func TestApplyUpdate_NeedsBuild_FailedStagingDropsStaleRollbackTag(t *testing.T) {
+	rec := &needsBuildRecorder{
+		tagFail:     true, // staging retag fails; :rollback still points at N-2
+		imageLabels: map[string]string{SourceRefLabel: "v1.2.0"},
+	}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	// Staging is best-effort — a failure there must not block the update.
+	if err := eng.ApplyUpdate("ckpool"); err != nil {
+		t.Fatalf("failed staging must not block the update: %v", err)
+	}
+
+	got := rec.snapshot()
+	found := false
+	for _, img := range got.removed {
+		if img == "truffels/ckpool:rollback" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("stale rollback tag was not dropped, removed = %v", got.removed)
+	}
+}
+
+// The same run end to end: staging fails, the service comes up unhealthy, and
+// the rollback has nothing valid to restore. It must say so — the old code
+// logged rolled_back while the failed build kept running.
+func TestApplyUpdate_NeedsBuild_StaleStagingRollbackFailsHonestly(t *testing.T) {
+	rec := &needsBuildRecorder{
+		tagFail:     true,
+		unhealthy:   true,
+		imageLabels: map[string]string{SourceRefLabel: "v1.2.0"},
+	}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	tmpl := ckpoolBuildTemplate(t.TempDir())
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckpool",
+		CurrentVersion: "v1.0.0",
+		LatestVersion:  "v1.2.0",
+		HasUpdate:      true,
+	})
+
+	err := eng.ApplyUpdate("ckpool")
+	if err == nil {
+		t.Fatal("expected an error when the service is unhealthy and cannot be rolled back")
+	}
+	if !strings.Contains(err.Error(), "rollback incomplete") {
+		t.Errorf("expected an honest 'rollback incomplete' error, got: %v", err)
+	}
+
+	logs, _ := st.GetUpdateLogs("ckpool", 5)
+	if len(logs) == 0 {
+		t.Fatal("expected an update log")
+	}
+	if logs[0].Status == model.UpdateRolledBack {
+		t.Error("log claims rolled_back although nothing was restored")
+	}
+	if logs[0].Status != model.UpdateFailed {
+		t.Errorf("log status = %v, want %v", logs[0].Status, model.UpdateFailed)
+	}
+
+	got := rec.snapshot()
+	found := false
+	for _, img := range got.removed {
+		if img == "truffels/ckpool:rollback" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("stale rollback tag was not dropped, removed = %v", got.removed)
+	}
+}
+
+// The :latest fallback is a misconfiguration, not a normal case — it must leave
+// a trace, otherwise a wrong live ref only surfaces when a rollback needs it.
+func TestLiveImageRef_FallbackIsLogged(t *testing.T) {
+	cases := []struct {
+		name    string
+		compose string // empty means: write no compose file at all
+		wantLog string
+	}{
+		{"interpolated tag", "services:\n  ckpool:\n    image: truffels/ckpool:${TAG}\n", "no plain truffels image line"},
+		{"trailing comment", "services:\n  ckpool:\n    image: truffels/ckpool:v1.0.0 # pinned\n", "no plain truffels image line"},
+		{"unreadable compose file", "", "cannot read compose file"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			dir := t.TempDir()
+			if tc.compose != "" {
+				_ = os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(tc.compose), 0644)
+			}
+
+			got := liveImageRef(ckpoolBuildTemplate(dir), "ckpool")
+			if got != "truffels/ckpool:latest" {
+				t.Errorf("live ref = %q, want the conventional fallback", got)
+			}
+			if !strings.Contains(buf.String(), tc.wantLog) {
+				t.Errorf("expected a warning containing %q, got: %s", tc.wantLog, buf.String())
+			}
+			if !strings.Contains(buf.String(), "ckpool") {
+				t.Errorf("warning does not name the service: %s", buf.String())
+			}
+		})
 	}
 }
 

@@ -767,18 +767,30 @@ func composeImageRe(serviceID string) *regexp.Regexp {
 // tag nothing runs: the same silent no-op this rollback path exists to end. So
 // read the compose file and fall back to the convention only when it says
 // nothing.
+// Every path to the fallback warns: each one is a misconfiguration that turns
+// staging and rollback into tag moves nothing runs, and it has to be visible
+// before a rollback needs the ref, not afterwards.
 func liveImageRef(tmpl model.ServiceTemplate, serviceID string) string {
 	fallback := "truffels/" + serviceID + ":latest"
 	if tmpl.ComposeDir == "" {
+		slog.Warn("no compose dir for service, assuming conventional image ref",
+			"service", serviceID, "image", fallback)
 		return fallback
 	}
-	data, err := os.ReadFile(tmpl.ComposeDir + "/docker-compose.yml")
+	path := tmpl.ComposeDir + "/docker-compose.yml"
+	data, err := os.ReadFile(path)
 	if err != nil {
+		slog.Warn("cannot read compose file, assuming conventional image ref",
+			"service", serviceID, "path", path, "image", fallback, "err", err)
 		return fallback
 	}
 	if m := composeImageRe(serviceID).FindSubmatch(data); m != nil {
 		return string(m[1])
 	}
+	// A trailing comment ("image: truffels/ckpool:v1.0.0 # pinned") or an
+	// interpolated tag ("image: truffels/ckpool:${TAG}") both miss the pattern.
+	slog.Warn("no plain truffels image line in compose file, assuming conventional image ref",
+		"service", serviceID, "path", path, "image", fallback)
 	return fallback
 }
 
@@ -809,11 +821,22 @@ func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, s
 	}
 
 	// Stage the running image for rollback before the build overwrites its tag.
-	// Best-effort: a first-time build has nothing to stage, and refusing to
-	// update over that would be worse than losing the rollback option.
+	// Staging itself is best-effort: a first-time build has nothing to stage,
+	// and refusing to update over that would be worse than losing the rollback
+	// option.
 	live := liveImageRef(tmpl, serviceID)
-	if err := e.compose.ImageTag(live, rollbackImageRef(serviceID)); err != nil {
+	rollbackRef := rollbackImageRef(serviceID)
+	if err := e.compose.ImageTag(live, rollbackRef); err != nil {
+		// Whatever :rollback still points at is now one generation too old —
+		// it was staged by the *previous* update. Restoring it later would
+		// install the wrong build and report a successful rollback, which is
+		// the class of lie this whole path exists to end. Drop the tag so a
+		// later rollback fails honestly instead. Removing a tag does not delete
+		// the image it shares with other tags.
 		slog.Warn("could not stage rollback image", "service", serviceID, "image", live, "err", err)
+		if rmErr := e.compose.RemoveImage(rollbackRef); rmErr != nil {
+			slog.Warn("could not drop the stale rollback tag", "service", serviceID, "image", rollbackRef, "err", rmErr)
+		}
 	}
 
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
