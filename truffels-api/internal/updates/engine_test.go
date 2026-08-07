@@ -3,6 +3,7 @@ package updates
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -1393,6 +1394,145 @@ func TestRunPreflight_UnknownCurrentVersionIsNamed(t *testing.T) {
 	}
 	if !strings.Contains(msg, "8f2e7c2f1a2b") {
 		t.Errorf("message = %q, want it to name the target version", msg)
+	}
+}
+
+// A build-arg default like ARG SOURCE_REF=unknown stamps the literal string
+// "unknown" into the label. That is not a ref — it is the absence of one,
+// wearing a name. Letting it through made CurrentVersion non-empty, which
+// switched off the honest path entirely: it reached update logs, the preflight
+// message, the UI and finally the rollback verification, where staged
+// "unknown" == prevVersion "unknown" would have approved restoring an image
+// nobody can identify.
+func TestExtractCurrentVersionFromLabels_PlaceholderIsNotARef(t *testing.T) {
+	src := &model.UpdateSource{Type: model.SourceGitHub, Repo: "mrv777/ckstats", NeedsBuild: true}
+	for _, labels := range []map[string]string{
+		nil,
+		{},
+		{SourceRefLabel: ""},
+		{SourceRefLabel: "unknown"},
+	} {
+		if got := ExtractCurrentVersionFromLabels(src, "truffels/ckstats:latest", labels); got != "" {
+			t.Errorf("labels %v: current version = %q, want empty", labels, got)
+		}
+	}
+	// A real ref still comes through untouched.
+	real := map[string]string{SourceRefLabel: "8f2e7c2f1a2b"}
+	if got := ExtractCurrentVersionFromLabels(src, "truffels/ckstats:latest", real); got != "8f2e7c2f1a2b" {
+		t.Errorf("current version = %q, want 8f2e7c2f1a2b", got)
+	}
+}
+
+// End to end through checkService: the placeholder must land in the same
+// honest state as a missing label, not be stored as a version.
+func TestCheckService_PlaceholderLabelIsTreatedAsUnknown(t *testing.T) {
+	agent := newMockAgent(mockAgentOpts{
+		imageLabels: map[string]string{SourceRefLabel: "unknown"},
+	})
+	defer agent.Close()
+
+	srv := newCommitServer("8f2e7c2f1a2b3c4d5e6f")
+	defer srv.Close()
+	original := httpClient
+	httpClient = newRedirectClient(srv)
+	defer func() { httpClient = original }()
+
+	tmpl := ckstatsBuildTemplate(t.TempDir(), model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	eng.checkService(tmpl)
+
+	check, _ := st.GetLatestUpdateCheck("ckstats")
+	if check == nil {
+		t.Fatal("expected an update check row for ckstats")
+	}
+	if check.CurrentVersion != "" {
+		t.Errorf("current version = %q, want empty: %q is a placeholder, not a ref", check.CurrentVersion, check.CurrentVersion)
+	}
+	if !check.HasUpdate {
+		t.Error("has_update = false; a placeholder label must still offer the rebuild")
+	}
+}
+
+// The UI hides the rollback button when the running version is unknown, but the
+// REST endpoint is reachable directly. Without a server-side guard the function
+// ran on ("" != prevVersion), and on success stored LatestVersion:"" with
+// HasUpdate:true — which the UI renders as an update with no target and whose
+// button then calls ApplyUpdate with an empty SOURCE_REF.
+func TestRollbackService_RefusesWhenCurrentVersionUnknown(t *testing.T) {
+	rec := &needsBuildRecorder{imageLabels: map[string]string{SourceRefLabel: "8f2e7c2f1a2b"}}
+	agent := newNeedsBuildAgent(rec)
+	defer agent.Close()
+
+	composeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(composeDir, "docker-compose.yml"), []byte(`services:
+  ckstats:
+    image: truffels/ckstats:latest
+`), 0644)
+
+	tmpl := ckstatsBuildTemplate(composeDir, model.RefSchemeCommit)
+	eng, st := newTestEngine(t, agent, []model.ServiceTemplate{tmpl})
+
+	// A completed update exists, so prevVersion resolves...
+	logID, _ := st.CreateUpdateLog(&model.UpdateLog{
+		ServiceID: "ckstats", FromVersion: "4bccedb01234", ToVersion: "8f2e7c2f1a2b",
+		Status: model.UpdatePending,
+	})
+	_ = st.UpdateLogStatus(logID, model.UpdateDone, "", "")
+	// ...but what runs now cannot be proven.
+	_ = st.UpsertUpdateCheck(&model.UpdateCheck{
+		ServiceID:      "ckstats",
+		CurrentVersion: "",
+		LatestVersion:  "8f2e7c2f1a2b",
+		HasUpdate:      true,
+	})
+
+	err := eng.RollbackService("ckstats")
+	if err == nil {
+		t.Fatal("expected a refusal: rolling back from an unknown version is a guess")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("error = %q, want it to name the unknown running version", err.Error())
+	}
+
+	// Nothing may have been done: no retag, no restart.
+	snap := rec.snapshot()
+	if len(snap.tags) != 0 {
+		t.Errorf("rollback retagged %v despite refusing", snap.tags)
+	}
+	if snap.upCalls != 0 {
+		t.Errorf("rollback restarted the service %d times despite refusing", snap.upCalls)
+	}
+
+	// And the stored row must not have become an update with no target.
+	check, _ := st.GetLatestUpdateCheck("ckstats")
+	if check.HasUpdate && check.LatestVersion == "" {
+		t.Error("stored an update with no target version")
+	}
+}
+
+// Messages that concatenate a version must not break off mid-sentence when the
+// version is the deliberate empty "we cannot prove this" state.
+func TestVersionLabel_NamesTheUnknownState(t *testing.T) {
+	if got := versionLabel("v1.2.0"); got != "v1.2.0" {
+		t.Errorf("versionLabel(%q) = %q, want it unchanged", "v1.2.0", got)
+	}
+	got := versionLabel("")
+	if got == "" {
+		t.Fatal("versionLabel(\"\") returned empty: the sentence would break off")
+	}
+	if !strings.Contains(got, "unidentified") && !strings.Contains(got, "unknown") {
+		t.Errorf("versionLabel(\"\") = %q, want it to name the unknown state", got)
+	}
+	// The three call sites that used to trail off.
+	for _, msg := range []string{
+		"start failed, rolled back to " + versionLabel(""),
+		"unhealthy after update, rolled back to " + versionLabel(""),
+		fmt.Sprintf("pre-update snapshot (%s → %s)", versionLabel(""), versionLabel("v1.2.0")),
+	} {
+		if strings.HasSuffix(msg, "to ") || strings.Contains(msg, "( →") {
+			t.Errorf("message breaks off mid-clause: %q", msg)
+		}
 	}
 }
 

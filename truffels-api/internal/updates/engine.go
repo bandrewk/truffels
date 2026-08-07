@@ -243,6 +243,18 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	}
 }
 
+// versionLabel renders a version for a human-readable message. An empty
+// version is a deliberate statement — checkService leaves it empty when the
+// running image carries no source ref — so name that state instead of letting
+// the sentence break off mid-clause ("rolled back to " with nothing after it,
+// or "pre-update snapshot ( → v1.2.0)").
+func versionLabel(v string) string {
+	if v == "" {
+		return "an unidentified build (no source ref)"
+	}
+	return v
+}
+
 // RunPreflight checks whether a service is safe to update and returns detailed results.
 func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) {
 	result := &model.PreflightResult{
@@ -507,7 +519,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		_ = e.store.CreateConfigRevision(&model.ConfigRevision{
 			ServiceID:        serviceID,
 			Actor:            "update_engine",
-			Diff:             fmt.Sprintf("pre-update snapshot (%s → %s)", check.CurrentVersion, check.LatestVersion),
+			Diff:             fmt.Sprintf("pre-update snapshot (%s → %s)", versionLabel(check.CurrentVersion), versionLabel(check.LatestVersion)),
 			ConfigSnapshot:   string(snapshot),
 			ValidationResult: "ok",
 		})
@@ -574,7 +586,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 			return &UpdateError{Msg: msg}
 		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "start failed: "+err.Error(), check.CurrentVersion)
-		e.alertUpdateFailed(serviceID, "start failed, rolled back to "+check.CurrentVersion)
+		e.alertUpdateFailed(serviceID, "start failed, rolled back to "+versionLabel(check.CurrentVersion))
 		return &UpdateError{Msg: "start failed, rolled back: " + err.Error()}
 	}
 
@@ -596,7 +608,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 			return &UpdateError{Msg: msg}
 		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "unhealthy after update", check.CurrentVersion)
-		e.alertUpdateFailed(serviceID, "unhealthy after update, rolled back to "+check.CurrentVersion)
+		e.alertUpdateFailed(serviceID, "unhealthy after update, rolled back to "+versionLabel(check.CurrentVersion))
 		return &UpdateError{Msg: "service unhealthy after update, rolled back"}
 	}
 
@@ -662,6 +674,15 @@ func (e *Engine) RollbackService(serviceID string) error {
 	currentVersion := ""
 	if check != nil {
 		currentVersion = check.CurrentVersion
+	}
+	// A rollback needs a known starting point on both ends. An empty
+	// CurrentVersion is checkService's deliberate "this build carries no source
+	// ref, so we cannot prove what runs" — restoring one unidentified image over
+	// another and reporting the version it supposedly went back to is exactly
+	// the lie the source-ref check exists to end. The UI hides the button in
+	// this state; this is the guard for everyone who calls the endpoint directly.
+	if currentVersion == "" {
+		return &UpdateError{Msg: "cannot roll back: the running version is unknown (the image carries no source ref) — rebuild first so it can be identified"}
 	}
 	if currentVersion == prevVersion {
 		return &UpdateError{Msg: "already at the previous version"}
@@ -777,7 +798,12 @@ func (e *Engine) RollbackService(serviceID string) error {
 		ServiceID:      serviceID,
 		CurrentVersion: prevVersion,
 		LatestVersion:  currentVersion,
-		HasUpdate:      true,
+		// Never advertise an update without a target: the UI would render
+		// "update available" with nothing to go to, and its button would call
+		// ApplyUpdate with an empty SOURCE_REF. The guard above already rules
+		// out an empty currentVersion; this keeps the invariant local to the
+		// write, where it can be read off the row itself.
+		HasUpdate: currentVersion != "" && currentVersion != prevVersion,
 	})
 
 	slog.Info("rollback complete", "service", serviceID, "from", currentVersion, "to", prevVersion)
