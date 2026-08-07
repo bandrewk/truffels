@@ -48,11 +48,26 @@ func write(t *testing.T, dir, name, content string) {
 	}
 }
 
+// registerResettable makes a temp repo eligible for prepareBuildSourceForCheckout
+// for the duration of one test.
+//
+// The behaviour tests below cannot use the real path — that is the user's live
+// ckstats tree, and running `reset --hard` against it is precisely the damage
+// this code guards. So the temp dir is added to the allowlist and removed again
+// on cleanup. The production list is unchanged outside the test, which
+// TestResettableRepoDirs_OnlyBuildSources verifies independently.
+func registerResettable(t *testing.T, dir string) {
+	t.Helper()
+	resettableRepoDirs[dir] = true
+	t.Cleanup(func() { delete(resettableRepoDirs, dir) })
+}
+
 // newSourceRepo builds a two-commit repo standing in for the ckstats upstream
 // checkout, and returns the repo path plus the first commit's hash.
 func newSourceRepo(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
+	registerResettable(t, dir)
 	git(t, dir, "init", "-q", "-b", "main")
 	git(t, dir, "config", "user.email", "t@example.invalid")
 	git(t, dir, "config", "user.name", "t")
@@ -187,6 +202,59 @@ func TestResettableRepoDirs_ExcludesTheUsersRepo(t *testing.T) {
 	}
 	if !isAllowedRepoDir("/repo") {
 		t.Fatal("baseline broken: /repo should still be a valid checkout target")
+	}
+}
+
+// The guard has to live inside prepareBuildSourceForCheckout, not only at its
+// call site in handleGitCheckout. The call site is correct today, but a
+// function that discards tracked changes must not be safe merely because its
+// single caller happens to be wired right — the cost of a future caller getting
+// it wrong is the user's uncommitted work in /repo.
+//
+// Proving "it returned an error" is not enough: it must refuse *before*
+// executing anything. So PATH is pointed at a fake `git` that records having
+// been invoked, and the test asserts that record never appears. A real git can
+// never run here, which is deliberate — the resettable path is the user's live
+// ckstats tree and an accidental `reset --hard` against it would be exactly the
+// damage this guard exists to prevent.
+func TestPrepareBuildSource_RefusesNonBuildSourceWithoutRunningGit(t *testing.T) {
+	shimDir := t.TempDir()
+	canary := filepath.Join(shimDir, "git-was-invoked")
+	shim := "#!/bin/sh\necho \"$@\" >> " + canary + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir)
+
+	// Control: the shim really is what `git` resolves to, so a missing canary
+	// below means "not executed", not "shim broken".
+	if err := exec.Command("git", "--version").Run(); err != nil {
+		t.Fatalf("shim not reachable on PATH: %v", err)
+	}
+	if _, err := os.Stat(canary); err != nil {
+		t.Fatalf("control failed: shim ran but left no canary: %v", err)
+	}
+	if err := os.Remove(canary); err != nil {
+		t.Fatal(err)
+	}
+
+	// /repo is the user's own checkout. Anything not on the resettable list
+	// must be refused identically.
+	for _, dir := range []string{"/repo", "/", "/srv/truffels/data", "/home/truffel/Project-Truffels", ""} {
+		out, err := prepareBuildSourceForCheckout(context.Background(), dir)
+		if err == nil {
+			t.Errorf("prepare accepted %q; it may only ever touch build source trees", dir)
+		}
+		if out != "" {
+			t.Errorf("prepare returned output for %q, so it did work before refusing: %q", dir, out)
+		}
+		if err != nil && !strings.Contains(err.Error(), dir) {
+			t.Errorf("error for %q does not name the directory: %v", dir, err)
+		}
+		if _, statErr := os.Stat(canary); statErr == nil {
+			body, _ := os.ReadFile(canary)
+			t.Fatalf("prepare executed git for %q before refusing: %s", dir, body)
+		}
 	}
 }
 

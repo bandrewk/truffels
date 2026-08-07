@@ -1743,6 +1743,17 @@ func isResettableRepoDir(dir string) bool {
 // checkout will fail anyway, and the operator deserves the cause rather than
 // the symptom.
 func prepareBuildSourceForCheckout(ctx context.Context, repoDir string) (string, error) {
+	// Re-check the allowlist here, not only at the call site. The caller in
+	// handleGitCheckout already gates on isResettableRepoDir, and that guard
+	// stays — but a function that discards tracked changes must not be safe
+	// merely because today's single caller is wired correctly. The cost of a
+	// future caller getting it wrong is the user's uncommitted work in /repo,
+	// which no update can recreate, so the check belongs where it cannot be
+	// bypassed. This returns before any git command is executed.
+	if !isResettableRepoDir(repoDir) {
+		return "", fmt.Errorf("refusing to reset %q: not a build source directory", repoDir)
+	}
+
 	steps := [][]string{
 		// Phantom mode changes: make them invisible rather than "fix" them.
 		{"config", "core.fileMode", "false"},
