@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+const (
+	// defaultTimeout bounds an ordinary agent call.
+	defaultTimeout = 6 * time.Minute
+	// buildTimeout covers image pulls and builds, which routinely outrun the
+	// default budget on a Pi.
+	buildTimeout = 20 * time.Minute
+)
+
 type ComposeClient struct {
 	agentURL   string
 	httpClient *http.Client
@@ -19,7 +27,7 @@ func NewComposeClient(agentURL string) *ComposeClient {
 	return &ComposeClient{
 		agentURL: agentURL,
 		httpClient: &http.Client{
-			Timeout: 6 * time.Minute,
+			Timeout: defaultTimeout,
 		},
 	}
 }
@@ -42,6 +50,18 @@ type agentResponse struct {
 	Output string `json:"output"`
 }
 
+// agentResult is the agent's other reply shape, used by the endpoints that
+// answer with a concrete payload field instead of the logs/output envelope.
+// These deliberately do not go through agentError: they surface only the error
+// line, which is what their callers have always shown.
+type agentResult struct {
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	Changed   bool   `json:"changed"`
+	Reclaimed string `json:"reclaimed"`
+	Content   string `json:"content"`
+}
+
 // agentError builds an error from a failed agent response. ar.Error alone is
 // often just an exit status ("git checkout failed: exit status 1" / "build
 // failed: exit status 1"); the actual diagnosis — which untracked files were
@@ -60,6 +80,136 @@ func agentError(op string, ar agentResponse) error {
 		msg += "\n" + out
 	}
 	return fmt.Errorf("%s: %s", op, msg)
+}
+
+// agentReq describes one call to the agent: where it goes, what it carries, and
+// the three knobs that a handful of endpoints need.
+type agentReq struct {
+	// path is appended to agentURL and may carry a query string.
+	path string
+	// payload is marshalled as the JSON request body. A nil payload makes the
+	// call a GET.
+	payload any
+	// extraOK is a second status code to accept besides 200. Only the detached
+	// compose up needs it: it answers 202 before the work has finished.
+	extraOK int
+	// timeout replaces the shared client's budget for this one call.
+	timeout time.Duration
+	// decodeOp overrides the operation name used when an accepted response
+	// fails to parse. Only the tuning endpoint needs it: its decode error has
+	// always read "agent tuning decode", not "agent tuning get decode".
+	decodeOp string
+}
+
+func (r agentReq) accepts(status int) bool {
+	return status == 200 || (r.extraOK != 0 && status == r.extraOK)
+}
+
+func (r agentReq) decodeOpFor(op string) string {
+	if r.decodeOp != "" {
+		return r.decodeOp
+	}
+	return op + " decode"
+}
+
+// send performs the request described by r. Transport failures are wrapped with
+// op and %w, so callers can still reach the underlying *url.Error. On success
+// the caller owns the response body.
+func (c *ComposeClient) send(op string, r agentReq) (*http.Response, error) {
+	client := c.httpClient
+	if r.timeout > 0 {
+		client = &http.Client{Timeout: r.timeout}
+	}
+
+	var (
+		resp *http.Response
+		err  error
+	)
+	if r.payload == nil {
+		resp, err = client.Get(c.agentURL + r.path)
+	} else {
+		body, _ := json.Marshal(r.payload)
+		resp, err = client.Post(c.agentURL+r.path, "application/json", bytes.NewReader(body))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	return resp, nil
+}
+
+// call sends r and returns the decoded agent envelope. A rejected status yields
+// an agentError, which keeps the agent's output in the message. The envelope is
+// returned in that case too — Logs and SystemJournal hand the partial text back
+// to their callers alongside the error. A body that will not parse is ignored:
+// only the status code decides.
+func (c *ComposeClient) call(op string, r agentReq) (agentResponse, error) {
+	resp, err := c.send(op, r)
+	if err != nil {
+		return agentResponse{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var ar agentResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ar)
+	if !r.accepts(resp.StatusCode) {
+		return ar, agentError(op, ar)
+	}
+	return ar, nil
+}
+
+// callInto sends r and decodes an accepted response into out. A rejected status
+// is reported through agentError, a body that will not parse with the decode
+// operation name.
+func (c *ComposeClient) callInto(op string, r agentReq, out any) error {
+	resp, err := c.send(op, r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !r.accepts(resp.StatusCode) {
+		var ar agentResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
+		return agentError(op, ar)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("%s: %w", r.decodeOpFor(op), err)
+	}
+	return nil
+}
+
+// callDecode sends r and decodes the body into out without consulting the
+// status code. The two host-info endpoints have always behaved this way: an
+// agent that answers with a parseable body is treated as a success even when it
+// reports a failure status.
+func (c *ComposeClient) callDecode(op string, r agentReq, out any) error {
+	resp, err := c.send(op, r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("%s: %w", r.decodeOpFor(op), err)
+	}
+	return nil
+}
+
+// callResult sends r and returns the agent's payload reply. Failures report only
+// res.Error — these endpoints do not carry an output field to append.
+func (c *ComposeClient) callResult(op string, r agentReq) (agentResult, error) {
+	resp, err := c.send(op, r)
+	if err != nil {
+		return agentResult{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var res agentResult
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if !r.accepts(resp.StatusCode) {
+		return agentResult{}, fmt.Errorf("%s: %s", op, res.Error)
+	}
+	return res, nil
 }
 
 type ImageInfo struct {
@@ -86,63 +236,41 @@ func (c *ComposeClient) Restart(serviceID string) error {
 }
 
 func (c *ComposeClient) Logs(serviceID string, tail int, since, container string) (string, error) {
-	body, _ := json.Marshal(agentLogsReq{ServiceID: serviceID, Tail: tail, Since: since, Container: container})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/logs", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("agent logs: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return ar.Logs, agentError("agent logs", ar)
-	}
-	return ar.Logs, nil
+	ar, err := c.call("agent logs", agentReq{
+		path:    "/v1/compose/logs",
+		payload: agentLogsReq{ServiceID: serviceID, Tail: tail, Since: since, Container: container},
+	})
+	// ar.Logs is returned on both paths: a failed call still hands back
+	// whatever the agent managed to collect before giving up.
+	return ar.Logs, err
 }
 
 // Pull pulls a Docker image via the agent. Returns the docker pull output.
 func (c *ComposeClient) Pull(image string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"image": image})
 	slog.Info("agent pull", "image", image)
 
-	longClient := &http.Client{Timeout: 20 * time.Minute}
-	resp, err := longClient.Post(c.agentURL+"/v1/image/pull", "application/json", bytes.NewReader(body))
+	// agentError keeps the tail of ar.Output. A failed pull says why in it —
+	// manifest unknown, no space left, auth required — and that text is what
+	// reaches the update log and the alert.
+	ar, err := c.call("agent pull", agentReq{
+		path:    "/v1/image/pull",
+		payload: map[string]string{"image": image},
+		timeout: buildTimeout,
+	})
 	if err != nil {
-		return "", fmt.Errorf("agent pull: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		// agentError keeps the tail of ar.Output. A failed pull says why in it
-		// — manifest unknown, no space left, auth required — and that text is
-		// what reaches the update log and the alert.
-		return "", agentError("agent pull", ar)
+		return "", err
 	}
 	return ar.Output, nil
 }
 
 // ImageInspect returns image info for a running container via the agent.
 func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
-	body, _ := json.Marshal(map[string]string{"container": container})
-
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/inspect", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("agent image inspect: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		var ar agentResponse
-		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, agentError("agent image inspect", ar)
-	}
-
 	var info ImageInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("agent image inspect decode: %w", err)
+	if err := c.callInto("agent image inspect", agentReq{
+		path:    "/v1/image/inspect",
+		payload: map[string]string{"container": container},
+	}, &info); err != nil {
+		return nil, err
 	}
 	return &info, nil
 }
@@ -152,23 +280,12 @@ func (c *ComposeClient) ImageInspect(container string) (*ImageInfo, error) {
 // absent (never started, or removed by a failed update), and the container-based
 // lookup then reports nothing at all.
 func (c *ComposeClient) ImageInspectByName(image string) (*ImageInfo, error) {
-	body, _ := json.Marshal(map[string]string{"image": image})
-
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/inspect-by-name", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("agent image inspect by name: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		var ar agentResponse
-		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, agentError("agent image inspect by name", ar)
-	}
-
 	var info ImageInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("agent image inspect by name decode: %w", err)
+	if err := c.callInto("agent image inspect by name", agentReq{
+		path:    "/v1/image/inspect-by-name",
+		payload: map[string]string{"image": image},
+	}, &info); err != nil {
+		return nil, err
 	}
 	return &info, nil
 }
@@ -176,58 +293,34 @@ func (c *ComposeClient) ImageInspectByName(image string) (*ImageInfo, error) {
 // ImageTag points target at the image currently behind source. Used to stage
 // and to restore the rollback generation of a custom-built service.
 func (c *ComposeClient) ImageTag(source, target string) error {
-	body, _ := json.Marshal(map[string]string{"source": source, "target": target})
 	slog.Info("agent image tag", "source", source, "target", target)
 
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/tag", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent image tag: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent image tag", ar)
-	}
-	return nil
+	_, err := c.call("agent image tag", agentReq{
+		path:    "/v1/image/tag",
+		payload: map[string]string{"source": source, "target": target},
+	})
+	return err
 }
 
 // Build runs docker compose build for a service via the agent.
 func (c *ComposeClient) Build(serviceID string) error {
-	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent build", "service", serviceID)
 
-	longClient := &http.Client{Timeout: 20 * time.Minute}
-	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent build: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent build", ar)
-	}
-	return nil
+	_, err := c.call("agent build", agentReq{
+		path:    "/v1/compose/build",
+		payload: agentServiceReq{ServiceID: serviceID},
+		timeout: buildTimeout,
+	})
+	return err
 }
 
 // SystemAction sends a shutdown or restart command to the agent.
 func (c *ComposeClient) SystemAction(action string) error {
-	body, _ := json.Marshal(map[string]string{"action": action})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/"+action, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent system %s: %w", action, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError(fmt.Sprintf("agent system %s", action), ar)
-	}
-	return nil
+	_, err := c.call("agent system "+action, agentReq{
+		path:    "/v1/system/" + action,
+		payload: map[string]string{"action": action},
+	})
+	return err
 }
 
 // BootEntry represents a journal boot entry.
@@ -299,14 +392,9 @@ type SystemInfo struct {
 
 // SystemInfoGet fetches host system info via the agent.
 func (c *ComposeClient) SystemInfoGet() (*SystemInfo, error) {
-	resp, err := c.httpClient.Get(c.agentURL + "/v1/system/info")
-	if err != nil {
-		return nil, fmt.Errorf("agent system info: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	var info SystemInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("agent system info decode: %w", err)
+	if err := c.callDecode("agent system info", agentReq{path: "/v1/system/info"}, &info); err != nil {
+		return nil, err
 	}
 	return &info, nil
 }
@@ -314,98 +402,63 @@ func (c *ComposeClient) SystemInfoGet() (*SystemInfo, error) {
 // HostDirSize asks the agent for the cached size of a data-dir path.
 // Returns (-1, false, nil) if the agent has not yet walked the path.
 func (c *ComposeClient) HostDirSize(path string) (int64, bool, error) {
-	resp, err := c.httpClient.Get(c.agentURL + "/v1/host/dir-size?path=" + url.QueryEscape(path))
-	if err != nil {
-		return 0, false, fmt.Errorf("agent dir-size: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		SizeBytes int64 `json:"size_bytes"`
 		Fresh     bool  `json:"fresh"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return 0, false, fmt.Errorf("agent dir-size decode: %w", err)
+	if err := c.callDecode("agent dir-size", agentReq{
+		path: "/v1/host/dir-size?path=" + url.QueryEscape(path),
+	}, &out); err != nil {
+		return 0, false, err
 	}
 	return out.SizeBytes, out.Fresh, nil
 }
 
 // SystemJournal fetches journalctl output via the agent.
 func (c *ComposeClient) SystemJournal(lines int, priority, unit, since string, boot int) (string, error) {
-	body, _ := json.Marshal(map[string]interface{}{
-		"lines": lines, "priority": priority, "unit": unit, "since": since, "boot": boot,
+	ar, err := c.call("agent journal", agentReq{
+		path: "/v1/system/journal",
+		payload: map[string]any{
+			"lines": lines, "priority": priority, "unit": unit, "since": since, "boot": boot,
+		},
 	})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/journal", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("agent journal: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return ar.Logs, agentError("agent journal", ar)
-	}
-	return ar.Logs, nil
+	// As with Logs, the partial text goes back to the caller either way.
+	return ar.Logs, err
 }
 
 // SystemTuningGet reads current host tuning values via the agent.
 func (c *ComposeClient) SystemTuningGet() (*SystemTuningInfo, error) {
-	resp, err := c.httpClient.Get(c.agentURL + "/v1/system/tuning")
-	if err != nil {
-		return nil, fmt.Errorf("agent tuning get: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		var ar agentResponse
-		_ = json.NewDecoder(resp.Body).Decode(&ar)
-		return nil, agentError("agent tuning get", ar)
-	}
-
 	var info SystemTuningInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("agent tuning decode: %w", err)
+	if err := c.callInto("agent tuning get", agentReq{
+		path:     "/v1/system/tuning",
+		decodeOp: "agent tuning decode",
+	}, &info); err != nil {
+		return nil, err
 	}
 	return &info, nil
 }
 
 // SystemTuningSet applies a tuning change via the agent.
 func (c *ComposeClient) SystemTuningSet(action, value string) error {
-	body, _ := json.Marshal(map[string]string{"action": action, "value": value})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/system/tuning", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent tuning set: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent tuning set", ar)
-	}
-	return nil
+	_, err := c.call("agent tuning set", agentReq{
+		path:    "/v1/system/tuning",
+		payload: map[string]string{"action": action, "value": value},
+	})
+	return err
 }
 
 // GitCheckout tells the agent to fetch and checkout a specific ref.
 // refScheme is "tag" or "commit"; empty means tag.
 func (c *ComposeClient) GitCheckout(repoDir, ref, refScheme string) error {
-	body, _ := json.Marshal(map[string]string{
-		"repo_dir": repoDir, "tag": ref, "ref_scheme": refScheme,
-	})
 	slog.Info("agent git checkout", "repo", repoDir, "ref", ref, "scheme", refScheme)
 
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/git/checkout", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent git checkout: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent git checkout", ar)
-	}
-	return nil
+	_, err := c.call("agent git checkout", agentReq{
+		path: "/v1/git/checkout",
+		payload: map[string]string{
+			"repo_dir": repoDir, "tag": ref, "ref_scheme": refScheme,
+		},
+	})
+	return err
 }
 
 // BuildWithArgs runs docker compose build with extra build args via the agent.
@@ -416,49 +469,35 @@ func (c *ComposeClient) BuildWithArgs(serviceID string, buildArgs map[string]str
 		BuildArgs map[string]string `json:"build_args,omitempty"`
 		Services  []string          `json:"services,omitempty"`
 	}
-	body, _ := json.Marshal(buildReq{ServiceID: serviceID, BuildArgs: buildArgs, Services: services})
 	slog.Info("agent build with args", "service", serviceID, "args", buildArgs, "services", services)
 
-	longClient := &http.Client{Timeout: 20 * time.Minute}
-	resp, err := longClient.Post(c.agentURL+"/v1/compose/build", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent build: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent build", ar)
-	}
-	return nil
+	// Shares Build's operation name, and therefore its error prefix.
+	_, err := c.call("agent build", agentReq{
+		path:    "/v1/compose/build",
+		payload: buildReq{ServiceID: serviceID, BuildArgs: buildArgs, Services: services},
+		timeout: buildTimeout,
+	})
+	return err
 }
 
 // ComposeUpDetached triggers a detached compose up via nsenter on the host.
 // This is used for self-updates where the agent container will be replaced.
 // Returns immediately with 202 Accepted.
 func (c *ComposeClient) ComposeUpDetached(serviceID string) error {
-	body, _ := json.Marshal(map[string]string{"service_id": serviceID})
 	slog.Info("agent compose up detached", "service", serviceID)
 
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/up-detached", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent compose up detached: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		return agentError("agent compose up detached", ar)
-	}
-	return nil
+	_, err := c.call("agent compose up detached", agentReq{
+		path:    "/v1/compose/up-detached",
+		payload: map[string]string{"service_id": serviceID},
+		extraOK: 202,
+	})
+	return err
 }
 
 // RewriteTags rewrites image tags in a compose file via the agent.
 // oldTag is optional — if empty, the agent matches any current tag (idempotent).
 func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, newTag string) error {
-	req := map[string]interface{}{
+	req := map[string]any{
 		"service_id": serviceID,
 		"images":     images,
 		"new_tag":    newTag,
@@ -466,238 +505,123 @@ func (c *ComposeClient) RewriteTags(serviceID string, images []string, oldTag, n
 	if oldTag != "" {
 		req["old_tag"] = oldTag
 	}
-	body, _ := json.Marshal(req)
 	slog.Info("agent rewrite tags", "service", serviceID, "old", oldTag, "new", newTag)
 
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/rewrite-tags", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent rewrite tags: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent rewrite tags", ar)
-	}
-	return nil
+	_, err := c.call("agent rewrite tags", agentReq{
+		path:    "/v1/compose/rewrite-tags",
+		payload: req,
+	})
+	return err
 }
 
 // RemoveImage removes a Docker image via the agent (best-effort).
 func (c *ComposeClient) RemoveImage(image string) error {
-	body, _ := json.Marshal(map[string]string{"image": image})
 	slog.Info("agent remove image", "image", image)
 
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/image/remove", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent remove image: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent remove image", ar)
-	}
-	return nil
+	_, err := c.call("agent remove image", agentReq{
+		path:    "/v1/image/remove",
+		payload: map[string]string{"image": image},
+	})
+	return err
 }
 
 // FsEnsureDir creates a directory under the agent's dataRoot with the requested
 // ownership and mode. Idempotent. Used by the compose reconciler to guarantee
 // bind-mount source paths exist before bringing a service up.
 func (c *ComposeClient) FsEnsureDir(path string, uid, gid int, mode string) error {
-	body, _ := json.Marshal(map[string]interface{}{
-		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	_, err := c.call("agent ensure-dir", agentReq{
+		path: "/v1/fs/ensure-dir",
+		payload: map[string]any{
+			"path": path, "uid": uid, "gid": gid, "mode": mode,
+		},
 	})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/fs/ensure-dir", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent ensure-dir: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent ensure-dir", ar)
-	}
-	return nil
+	return err
 }
 
 // FsClearDir empties a directory under the agent's dataRoot and recreates it
 // with the requested ownership/mode. The agent enforces a basename+depth
 // allowlist; callers must ensure the path is one we want to expose.
 func (c *ComposeClient) FsClearDir(path string, uid, gid int, mode string) error {
-	body, _ := json.Marshal(map[string]interface{}{
-		"path": path, "uid": uid, "gid": gid, "mode": mode,
+	_, err := c.call("agent clear-dir", agentReq{
+		path: "/v1/fs/clear-dir",
+		payload: map[string]any{
+			"path": path, "uid": uid, "gid": gid, "mode": mode,
+		},
 	})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/fs/clear-dir", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent clear-dir: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError("agent clear-dir", ar)
-	}
-	return nil
+	return err
 }
 
 // FileReconcile writes `content` to `path` via the agent's POST /v1/file/reconcile
 // endpoint. Used by the reconciler for config files (Caddyfile) that live outside
 // composeRoot. Returns (changed, error).
 func (c *ComposeClient) FileReconcile(path, content string) (bool, error) {
-	body, _ := json.Marshal(map[string]string{
-		"path":             path,
-		"expected_content": content,
+	res, err := c.callResult("agent file reconcile", agentReq{
+		path: "/v1/file/reconcile",
+		payload: map[string]string{
+			"path":             path,
+			"expected_content": content,
+		},
 	})
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/file/reconcile", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return false, fmt.Errorf("agent file reconcile: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var result struct {
-		Status  string `json:"status"`
-		Error   string `json:"error"`
-		Changed bool   `json:"changed"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return false, fmt.Errorf("agent file reconcile: %s", result.Error)
-	}
-	return result.Changed, nil
+	return res.Changed, err
+}
+
+// ReconcileFile compares expected content with a file under the compose root via
+// the agent. The path is relative to /srv/truffels/compose/ (e.g.
+// "ckstats/Dockerfile"). Returns true if the file was changed.
+//
+// Same endpoint, payload and error text as FileReconcile, which takes an
+// absolute path outside composeRoot; the two differ only in what the caller is
+// expected to pass.
+func (c *ComposeClient) ReconcileFile(relativePath, content string) (bool, error) {
+	return c.FileReconcile(relativePath, content)
 }
 
 // DockerPrune runs a full docker cleanup via the agent (builder + image + system prune).
 func (c *ComposeClient) DockerPrune() (string, error) {
-	longClient := &http.Client{Timeout: 6 * time.Minute}
-	resp, err := longClient.Post(c.agentURL+"/v1/docker/prune", "application/json", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return "", fmt.Errorf("agent docker prune: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		Status    string `json:"status"`
-		Error     string `json:"error"`
-		Reclaimed string `json:"reclaimed"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("agent docker prune: %s", result.Error)
-	}
-	return result.Reclaimed, nil
+	res, err := c.callResult("agent docker prune", agentReq{
+		path:    "/v1/docker/prune",
+		payload: map[string]any{},
+	})
+	return res.Reclaimed, err
 }
 
 // DockerPruneBuildCache runs only docker builder prune via the agent.
 func (c *ComposeClient) DockerPruneBuildCache() (string, error) {
-	longClient := &http.Client{Timeout: 6 * time.Minute}
-	resp, err := longClient.Post(c.agentURL+"/v1/docker/prune-buildcache", "application/json", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return "", fmt.Errorf("agent docker prune buildcache: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		Status    string `json:"status"`
-		Error     string `json:"error"`
-		Reclaimed string `json:"reclaimed"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("agent docker prune buildcache: %s", result.Error)
-	}
-	return result.Reclaimed, nil
+	res, err := c.callResult("agent docker prune buildcache", agentReq{
+		path:    "/v1/docker/prune-buildcache",
+		payload: map[string]any{},
+	})
+	return res.Reclaimed, err
 }
 
 // ComposeRead returns the content of a service's compose file via the agent.
 func (c *ComposeClient) ComposeRead(serviceID string) (string, error) {
-	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
-
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/read", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("agent compose read: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		Status  string `json:"status"`
-		Error   string `json:"error"`
-		Content string `json:"content"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("agent compose read: %s", result.Error)
-	}
-	return result.Content, nil
+	res, err := c.callResult("agent compose read", agentReq{
+		path:    "/v1/compose/read",
+		payload: agentServiceReq{ServiceID: serviceID},
+	})
+	return res.Content, err
 }
 
 // ComposeReconcile compares expected content with the compose file on disk via the agent.
 // Returns true if the file was changed.
 func (c *ComposeClient) ComposeReconcile(serviceID, expectedContent string) (bool, error) {
-	body, _ := json.Marshal(map[string]string{
-		"service_id":       serviceID,
-		"expected_content": expectedContent,
+	res, err := c.callResult("agent compose reconcile", agentReq{
+		path: "/v1/compose/reconcile",
+		payload: map[string]string{
+			"service_id":       serviceID,
+			"expected_content": expectedContent,
+		},
 	})
-
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/compose/reconcile", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return false, fmt.Errorf("agent compose reconcile: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		Status  string `json:"status"`
-		Error   string `json:"error"`
-		Changed bool   `json:"changed"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return false, fmt.Errorf("agent compose reconcile: %s", result.Error)
-	}
-	return result.Changed, nil
-}
-
-// ReconcileFile compares expected content with a file under the compose root via the agent.
-// The path is relative to /srv/truffels/compose/ (e.g. "ckstats/Dockerfile").
-// Returns true if the file was changed.
-func (c *ComposeClient) ReconcileFile(relativePath, content string) (bool, error) {
-	body, _ := json.Marshal(map[string]string{
-		"path":             relativePath,
-		"expected_content": content,
-	})
-
-	resp, err := c.httpClient.Post(c.agentURL+"/v1/file/reconcile", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return false, fmt.Errorf("agent file reconcile: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result struct {
-		Status  string `json:"status"`
-		Error   string `json:"error"`
-		Changed bool   `json:"changed"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
-	if resp.StatusCode != 200 {
-		return false, fmt.Errorf("agent file reconcile: %s", result.Error)
-	}
-	return result.Changed, nil
+	return res.Changed, err
 }
 
 func (c *ComposeClient) composeAction(path, serviceID string) error {
-	body, _ := json.Marshal(agentServiceReq{ServiceID: serviceID})
 	slog.Info("agent request", "path", path, "service", serviceID)
 
-	resp, err := c.httpClient.Post(c.agentURL+path, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("agent %s: %w", path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var ar agentResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ar)
-	if resp.StatusCode != 200 {
-		return agentError(fmt.Sprintf("agent %s", path), ar)
-	}
-	return nil
+	_, err := c.call("agent "+path, agentReq{
+		path:    path,
+		payload: agentServiceReq{ServiceID: serviceID},
+	})
+	return err
 }
