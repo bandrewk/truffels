@@ -257,6 +257,13 @@ func versionLabel(v string) string {
 	return v
 }
 
+// statfs is syscall.Statfs behind a package variable so the preflight disk-space
+// check can be exercised in both directions. It reads a fixed path under
+// /srv/truffels, which does not exist in a test container, so without the seam
+// only the "cannot check disk space" arm is ever reached. Production never
+// replaces it.
+var statfs = syscall.Statfs
+
 // RunPreflight checks whether a service is safe to update and returns detailed results.
 func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) {
 	result := &model.PreflightResult{
@@ -337,7 +344,7 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 
 	// 5. Disk space (require at least 2GB free)
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/srv/truffels", &stat); err != nil {
+	if err := statfs("/srv/truffels", &stat); err != nil {
 		result.Checks = append(result.Checks, model.PreflightCheck{
 			Name: "disk_space", Status: "fail", Message: "cannot check disk space: " + err.Error(), Blocking: true,
 		})

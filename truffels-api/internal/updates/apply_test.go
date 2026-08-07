@@ -31,6 +31,9 @@ type mockAgentOpts struct {
 	unhealthy   bool // if true, inspect returns unhealthy containers
 	imageInspectFail bool   // if true, /v1/image/inspect returns 500
 	tagFail          bool   // if true, /v1/image/tag returns 500 (no staged rollback image)
+	rewriteFail      bool   // if true, /v1/compose/rewrite-tags returns 500
+	gitCheckoutFail  bool   // if true, /v1/git/checkout returns 500
+	detachedFail     bool   // if true, /v1/compose/up-detached returns 500
 	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
 	imageLabels      map[string]string // labels returned by /v1/image/inspect (NeedsBuild verification)
 	tags             *tagRecorder      // records /v1/image/tag calls when set
@@ -126,7 +129,20 @@ func newMockAgent(opts mockAgentOpts) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
+		case "/v1/git/checkout":
+			if opts.gitCheckoutFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "git checkout failed"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		case "/v1/compose/rewrite-tags":
+			if opts.rewriteFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "write compose file: read-only file system"})
+				return
+			}
 			var req struct {
 				ServiceID string   `json:"service_id"`
 				Images    []string `json:"images"`
@@ -869,6 +885,11 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/git/checkout":
+			if opts.gitCheckoutFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "git checkout failed"})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case "/v1/compose/build":
@@ -882,6 +903,11 @@ func newSelfUpdateMockAgent(opts mockAgentOpts) *httptest.Server {
 		case "/v1/compose/up-detached":
 			if opts.detached != nil {
 				opts.detached.inc()
+			}
+			if opts.detachedFail {
+				w.WriteHeader(500)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "nsenter failed"})
+				return
 			}
 			w.WriteHeader(202)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
