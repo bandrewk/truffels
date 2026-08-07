@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -991,6 +992,84 @@ func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, s
 	return nil
 }
 
+// selfUpdateImage returns the image repository the compose service svc is built
+// into, taken from the template's declared image list rather than assembled
+// here. The build loop and the image list are two hand-maintained sequences for
+// the same three components; deriving the ref from a string built on the spot
+// would let them drift apart silently and verify an image nobody built. Matching
+// on the last path element ties them together and reports a miss instead.
+func selfUpdateImage(images []string, svc string) (string, bool) {
+	for _, img := range images {
+		name := img
+		if idx := strings.LastIndex(name, "/"); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if name == svc {
+			return img, true
+		}
+	}
+	return "", false
+}
+
+// verifySelfBuild proves that the image just built for one component of the
+// truffels stack really carries the version that was requested, and fails the
+// update if it does not.
+//
+// The build.args.VERSION block in the compose template is what carries the
+// version into the binary's ldflag and into the image's OCI version label — but
+// "we asked for it" is not "it happened". A template regression, a build arg
+// that never reaches the stage stamping the label, or a layer-cache hit on an
+// older build all yield an image labelled with the wrong version while the
+// build command itself reports success. That is the failure dev.24 closed for
+// ckpool and ckstats in applyNeedsBuild; this is the same check for the one
+// service that replaces the API, the agent and the web UI at once.
+//
+// It runs between build and the detached restart on purpose. Once
+// ComposeUpDetached fires, the wrong image is live, this API process is gone
+// mid-flight and the outcome is left to reconcileStuckUpdates — which can only
+// see whether containers came up healthy, not which version they hold. Nothing
+// is staged under a :rollback tag for the truffels stack either, so afterwards
+// there is nothing to undo it with. Refusing here leaves the old containers
+// running and untouched.
+func (e *Engine) verifySelfBuild(serviceID string, tmpl model.ServiceTemplate, svc, wantVersion string, logID int64) error {
+	fail := func(msg string) error {
+		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
+		e.alertUpdateFailed(serviceID, msg)
+		return &UpdateError{Msg: msg}
+	}
+
+	img, ok := selfUpdateImage(tmpl.UpdateSource.Images, svc)
+	if !ok {
+		return fail(fmt.Sprintf("cannot verify the %s build: the update source declares no image for it", svc))
+	}
+	// Step 2 rewrote the compose tags to the new version before the build, so
+	// the image that was just built already answers to the new tag.
+	ref := img + ":" + wantVersion
+
+	info, err := e.compose.ImageInspectByName(ref)
+	if err != nil {
+		return fail(fmt.Sprintf("cannot verify the %s build: %v", svc, err))
+	}
+	// Trimmed for the comparison, so a padded label cannot fail a build that is
+	// in fact correct — and so whitespace alone still counts as absent below.
+	built := strings.TrimSpace(info.Labels[VersionLabel])
+	switch {
+	case built == "":
+		// Two shapes end up here and both are disqualifying: an image built
+		// without the VERSION arg reaching the labelling stage, and no such
+		// image at all — the agent answers 200 with empty fields for a name it
+		// cannot resolve. An absent label is not a matching label; treating
+		// empty as "close enough" is precisely the hole this check exists to
+		// close.
+		return fail(fmt.Sprintf("%s carries no %s label, so the %s build cannot be shown to be %s", ref, VersionLabel, svc, wantVersion))
+	case built != wantVersion:
+		// Includes the "dev" the Dockerfiles default VERSION to, which is what
+		// a dropped build arg looks like from the outside.
+		return fail(fmt.Sprintf("%s was built as %q, not %q — refusing to restart into it", ref, built, wantVersion))
+	}
+	return nil
+}
+
 // applySelfUpdate handles the self-update flow for truffels services (agent/api/web).
 // Flow: git checkout tag → build with VERSION arg → rewrite compose tags → detached restart.
 func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, check *model.UpdateCheck, logID int64) error {
@@ -1032,11 +1111,9 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 			e.alertUpdateFailed(serviceID, "build failed ("+svc+"): "+err.Error())
 			return &UpdateError{Msg: "build failed (" + svc + "): " + err.Error()}
 		}
-		// The truffelsTemplate.build.args.VERSION block (added in dev.16)
-		// is the primary mechanism that gets VERSION into the binary's
-		// ldflag and the image's OCI version label. A post-build label
-		// verification would be defense-in-depth but requires a new
-		// agent-side endpoint to expose image labels — tracked for dev.17+.
+		if err := e.verifySelfBuild(serviceID, tmpl, svc, check.LatestVersion, logID); err != nil {
+			return err
+		}
 	}
 
 	// Step 4: Detached restart — agent calls docker compose up -d via nsenter
