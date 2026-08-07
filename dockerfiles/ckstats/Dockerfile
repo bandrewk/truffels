@@ -2,7 +2,14 @@
 FROM node:22-slim AS builder
 
 ENV CI=true
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm 10, not @latest. Upstream declares engines.pnpm ">=10.0.0" and keeps its
+# settings in package.json under "pnpm" (overrides, onlyBuiltDependencies).
+# pnpm 11 stopped reading that field — it moved to pnpm-workspace.yaml — so the
+# approvals for sharp and unrs-resolver were silently dropped and the install
+# died with ERR_PNPM_IGNORED_BUILDS. Nothing here changed; pnpm 11 was released.
+# The major is pinned rather than an exact version because ">=10.0.0" is the
+# contract upstream states, and the settings layout is stable within a major.
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 WORKDIR /app
 COPY ckpoolstats/package.json ckpoolstats/pnpm-lock.yaml ckpoolstats/pnpm-workspace.yaml* ./
@@ -57,7 +64,14 @@ RUN pnpm build
 FROM node:22-slim
 
 ENV CI=true
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm 10, not @latest. Upstream declares engines.pnpm ">=10.0.0" and keeps its
+# settings in package.json under "pnpm" (overrides, onlyBuiltDependencies).
+# pnpm 11 stopped reading that field — it moved to pnpm-workspace.yaml — so the
+# approvals for sharp and unrs-resolver were silently dropped and the install
+# died with ERR_PNPM_IGNORED_BUILDS. Nothing here changed; pnpm 11 was released.
+# The major is pinned rather than an exact version because ">=10.0.0" is the
+# contract upstream states, and the settings layout is stable within a major.
+RUN corepack enable && corepack prepare pnpm@10 --activate
 # retry() wraps apt-get in 4 attempts with 10/30/60s backoff so a transient
 # flake on deb.debian.org doesn't kill the whole build. Total worst-case sleep
 # budget: 100s before giving up.
