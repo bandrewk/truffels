@@ -68,6 +68,48 @@ var allowedImagePrefixes = []string{
 	"caddy:", "postgres:", "mariadb:",
 }
 
+// Image references reach docker as a single argv element — exec.Command takes
+// an argv and no path here goes through a shell — so a metacharacter cannot
+// start a second command today. The charset check is what keeps that true if
+// the execution path ever changes, and it is the reasoning isAllowedImageRef
+// has carried since it was written. The same reasoning now covers the same kind
+// of input on the other two endpoints.
+//
+// Two alphabets, not one, and the difference is load-bearing:
+//
+//   - managedImageRefChars covers upstream references. Every upstream image in
+//     this project is digest-pinned — install.sh writes
+//     "mariadb:lts@sha256:8164f18…" — so '@' and hex must pass or every
+//     pull-based service stops updating.
+//   - localImageRefChars covers the images this appliance builds itself. Those
+//     are only ever "truffels/<repo>:<tag>"; nothing in truffels-api ever
+//     constructs a digest for one (composeImageRe does not even match a ref
+//     carrying '@'). Handing them the upstream alphabet would widen
+//     isAllowedImageRef with no caller asking for it.
+//
+// So the loop is shared and the alphabet is not. A single merged set could only
+// be the union, and the union is the looser of the two.
+//
+// Charset only — deliberately not a reference parser. A parser normalises, and
+// this file's whole premise is that nothing here normalises before deciding.
+// It would also reject shapes that are real: pruneOldImages builds
+// "<image>:<version>", and for the digest-tracked mempool-db that yields
+// "mariadb:sha256:b1c7…" — two colons, no '@', not a well-formed reference, and
+// today answered with a best-effort 200 rather than a 403.
+const (
+	localImageRefChars   = "abcdefghijklmnopqrstuvwxyz0123456789/:._-"
+	managedImageRefChars = localImageRefChars + "@"
+)
+
+func hasOnlyChars(s, allowed string) bool {
+	for _, c := range s {
+		if !strings.ContainsRune(allowed, c) {
+			return false
+		}
+	}
+	return true
+}
+
 // isAllowedManagedImage gates both /v1/image/pull and /v1/image/remove.
 //
 // One predicate for both on purpose. They take the same kind of input — a
@@ -81,6 +123,9 @@ var allowedImagePrefixes = []string{
 // Distinct from isAllowedImageRef below: that one covers the *locally built*
 // images only, and is stricter for reasons documented there.
 func isAllowedManagedImage(ref string) bool {
+	if !hasOnlyChars(ref, managedImageRefChars) {
+		return false
+	}
 	for _, prefix := range allowedImagePrefixes {
 		if strings.HasPrefix(ref, prefix) {
 			return true
@@ -98,13 +143,7 @@ func isAllowedImageRef(ref string) bool {
 	if !strings.HasPrefix(ref, "truffels/") {
 		return false
 	}
-	for _, c := range ref {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') &&
-			c != '/' && c != ':' && c != '.' && c != '-' && c != '_' {
-			return false
-		}
-	}
-	return true
+	return hasOnlyChars(ref, localImageRefChars)
 }
 
 // --- Journal queries ---

@@ -1640,6 +1640,85 @@ func TestHandleImageRemove_AllowedPrefixes(t *testing.T) {
 	}
 }
 
+func TestHandleImageRemove_AllowsEveryRefProductionReallyRemoves(t *testing.T) {
+	// The prefix allowlist gained a charset check. These are the shapes the
+	// pruner and the update engine really hand to /v1/image/remove; a charset
+	// that rejects one of them leaves old images on a 1.8 TB disk forever.
+	refs := append([]string{
+		// updates.Engine.pruneOldImages builds "<image>:<version>", and for a
+		// digest-tracked service (mempool-db) the version *is* a digest, so the
+		// ref carries two colons and no '@'. Odd, but real.
+		"mariadb:sha256:b1c7bf836e64ed9406a8984af29509f40089d55cea14b32f12c4726a1f17104b",
+		// rollbackImageRef and the compose fallback.
+		"truffels/ckpool:rollback",
+		"truffels/ckstats:rollback",
+		"truffels/ckstats:latest",
+	}, pullRefsInProduction...)
+
+	for _, img := range refs {
+		reqBody, _ := json.Marshal(map[string]string{"image": img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+		handleImageRemove(w, r)
+		if w.Code == 403 {
+			t.Errorf("removal of %q was refused: %s", img, w.Body.String())
+		}
+	}
+}
+
+// The gap this closes: the prefix list said nothing about the characters after
+// the prefix, so "mempool/x; rm -rf /" reached `docker rmi` as an argument.
+// Not exploitable — exec.Command takes an argv, there is no shell — but
+// isAllowedImageRef has refused exactly these bytes since it was written, and
+// the same input type deserves the same answer.
+func TestIsAllowedManagedImage_Charset(t *testing.T) {
+	for _, ref := range []string{
+		"mempool/x; rm -rf /", "mempool/backend:latest; id",
+		"mariadb:lts $(id)", "caddy:2`id`", "postgres:16&&id",
+		"truffels/api:v1|id", "mempool/backend:v3\nid",
+		"mempool/back end:v3", "caddy:*", "mariadb:lts'", `mariadb:lts"`,
+		"mariadb:lts\\", "truffels/api:v1>x", "postgres:16<x",
+		"Mempool/backend:v3", "mempool/BACKEND:v3",
+	} {
+		if isAllowedManagedImage(ref) {
+			t.Errorf("ref %q must be rejected", ref)
+		}
+	}
+
+	for _, ref := range append([]string{
+		"mariadb:sha256:b1c7bf836e64ed9406a8984af29509f40089d55cea14b32f12c4726a1f17104b",
+		"truffels/ckpool:rollback", "truffels/ckstats:latest",
+	}, pullRefsInProduction...) {
+		if !isAllowedManagedImage(ref) {
+			t.Errorf("ref %q is a real production reference and must be allowed", ref)
+		}
+	}
+}
+
+func TestHandleImageRemove_RefusesShellMetacharacters(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": "mempool/x; rm -rf /"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImagePull_RefusesShellMetacharacters(t *testing.T) {
+	reqBody, _ := json.Marshal(imagePullRequest{Image: "mempool/x; rm -rf /"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+	handleImagePull(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // --- formatSize ---
 
 func TestFormatSize(t *testing.T) {
