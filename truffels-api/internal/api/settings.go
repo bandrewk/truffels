@@ -11,25 +11,25 @@ import (
 
 // settingsDefaults are the default values for all configurable settings.
 var settingsDefaults = map[string]string{
-	"restart_loop_count":      "5",
-	"restart_loop_window_min": "10",
-	"restart_loop_max_retries": "10",
-	"dep_handling_mode":       "flag_only",
-	"temp_warning":            "75",
-	"temp_critical":           "80",
-	"admission_disk_min_gb":          "10",
-	"admission_temp_max":             "80",
-	"update_check_interval_hours":    "24",
-	"update_check_enabled":           "true",
-	"update_channel":                 "stable",
-	"services_show_memory":           "false",
-	"services_show_ports":            "true",
-	"update_keep_old_images":         "false",
-	"trend_alert_enabled":            "true",
-	"trend_alert_horizon_hours":      "6",
-	"trend_alert_lookback_hours":     "6",
-	"trend_alert_min_data_hours":     "2",
-	"allow_downgrade":                "false",
+	"restart_loop_count":                      "5",
+	"restart_loop_window_min":                 "10",
+	"restart_loop_max_retries":                "10",
+	"dep_handling_mode":                       "flag_only",
+	"temp_warning":                            "75",
+	"temp_critical":                           "80",
+	"admission_disk_min_gb":                   "10",
+	"admission_temp_max":                      "80",
+	"update_check_interval_hours":             "24",
+	"update_check_enabled":                    "true",
+	"update_channel":                          "stable",
+	"services_show_memory":                    "false",
+	"services_show_ports":                     "true",
+	"update_keep_old_images":                  "false",
+	"trend_alert_enabled":                     "true",
+	"trend_alert_horizon_hours":               "6",
+	"trend_alert_lookback_hours":              "6",
+	"trend_alert_min_data_hours":              "2",
+	"allow_downgrade":                         "false",
 	"dir_size_warning_mb":                     "700",
 	"dir_size_critical_mb":                    "900",
 	"dir_size_autoreclaim_enabled":            "true",
@@ -37,52 +37,52 @@ var settingsDefaults = map[string]string{
 }
 
 type settingsResponse struct {
-	RestartLoopCount      int     `json:"restart_loop_count"`
-	RestartLoopWindowMin  int     `json:"restart_loop_window_min"`
-	RestartLoopMaxRetries int     `json:"restart_loop_max_retries"`
-	DepHandlingMode       string  `json:"dep_handling_mode"`
-	TempWarning           float64 `json:"temp_warning"`
-	TempCritical          float64 `json:"temp_critical"`
-	AdmissionDiskMinGB        float64 `json:"admission_disk_min_gb"`
-	AdmissionTempMax          float64 `json:"admission_temp_max"`
-	UpdateCheckIntervalHours int     `json:"update_check_interval_hours"`
-	UpdateCheckEnabled       bool    `json:"update_check_enabled"`
-	UpdateChannel            string  `json:"update_channel"`
-	ServicesShowMemory       bool    `json:"services_show_memory"`
-	ServicesShowPorts         bool    `json:"services_show_ports"`
-	UpdateKeepOldImages      bool    `json:"update_keep_old_images"`
-	TrendAlertEnabled        bool    `json:"trend_alert_enabled"`
-	TrendAlertHorizonHours   int     `json:"trend_alert_horizon_hours"`
-	TrendAlertLookbackHours  int     `json:"trend_alert_lookback_hours"`
-	TrendAlertMinDataHours   int     `json:"trend_alert_min_data_hours"`
-	AllowDowngrade           bool    `json:"allow_downgrade"`
-	DirSizeWarningMB                   int  `json:"dir_size_warning_mb"`
-	DirSizeCriticalMB                  int  `json:"dir_size_critical_mb"`
-	DirSizeAutoreclaimEnabled          bool `json:"dir_size_autoreclaim_enabled"`
-	DirSizeAutoreclaimMinIntervalHours int  `json:"dir_size_autoreclaim_min_interval_hours"`
+	RestartLoopCount                   int     `json:"restart_loop_count"`
+	RestartLoopWindowMin               int     `json:"restart_loop_window_min"`
+	RestartLoopMaxRetries              int     `json:"restart_loop_max_retries"`
+	DepHandlingMode                    string  `json:"dep_handling_mode"`
+	TempWarning                        float64 `json:"temp_warning"`
+	TempCritical                       float64 `json:"temp_critical"`
+	AdmissionDiskMinGB                 float64 `json:"admission_disk_min_gb"`
+	AdmissionTempMax                   float64 `json:"admission_temp_max"`
+	UpdateCheckIntervalHours           int     `json:"update_check_interval_hours"`
+	UpdateCheckEnabled                 bool    `json:"update_check_enabled"`
+	UpdateChannel                      string  `json:"update_channel"`
+	ServicesShowMemory                 bool    `json:"services_show_memory"`
+	ServicesShowPorts                  bool    `json:"services_show_ports"`
+	UpdateKeepOldImages                bool    `json:"update_keep_old_images"`
+	TrendAlertEnabled                  bool    `json:"trend_alert_enabled"`
+	TrendAlertHorizonHours             int     `json:"trend_alert_horizon_hours"`
+	TrendAlertLookbackHours            int     `json:"trend_alert_lookback_hours"`
+	TrendAlertMinDataHours             int     `json:"trend_alert_min_data_hours"`
+	AllowDowngrade                     bool    `json:"allow_downgrade"`
+	DirSizeWarningMB                   int     `json:"dir_size_warning_mb"`
+	DirSizeCriticalMB                  int     `json:"dir_size_critical_mb"`
+	DirSizeAutoreclaimEnabled          bool    `json:"dir_size_autoreclaim_enabled"`
+	DirSizeAutoreclaimMinIntervalHours int     `json:"dir_size_autoreclaim_min_interval_hours"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	resp := settingsResponse{
-		RestartLoopCount:      s.getSettingInt("restart_loop_count", 5),
-		RestartLoopWindowMin:  s.getSettingInt("restart_loop_window_min", 10),
-		RestartLoopMaxRetries: s.getSettingInt("restart_loop_max_retries", 10),
-		DepHandlingMode:       s.getSettingStr("dep_handling_mode", "flag_only"),
-		TempWarning:           s.getSettingFloat("temp_warning", 75),
-		TempCritical:          s.getSettingFloat("temp_critical", 80),
-		AdmissionDiskMinGB:        s.getSettingFloat("admission_disk_min_gb", 10),
-		AdmissionTempMax:          s.getSettingFloat("admission_temp_max", 80),
-		UpdateCheckIntervalHours: s.getSettingInt("update_check_interval_hours", 24),
-		UpdateCheckEnabled:       s.getSettingStr("update_check_enabled", "true") == "true",
-		UpdateChannel:            s.getSettingStr("update_channel", "stable"),
-		ServicesShowMemory:       s.getSettingStr("services_show_memory", "false") == "true",
-		ServicesShowPorts:         s.getSettingStr("services_show_ports", "true") == "true",
-		UpdateKeepOldImages:      s.getSettingStr("update_keep_old_images", "false") == "true",
-		TrendAlertEnabled:        s.getSettingStr("trend_alert_enabled", "true") == "true",
-		TrendAlertHorizonHours:   s.getSettingInt("trend_alert_horizon_hours", 6),
-		TrendAlertLookbackHours:  s.getSettingInt("trend_alert_lookback_hours", 6),
-		TrendAlertMinDataHours:   s.getSettingInt("trend_alert_min_data_hours", 2),
-		AllowDowngrade:           s.getSettingStr("allow_downgrade", "false") == "true",
+		RestartLoopCount:                   s.getSettingInt("restart_loop_count", 5),
+		RestartLoopWindowMin:               s.getSettingInt("restart_loop_window_min", 10),
+		RestartLoopMaxRetries:              s.getSettingInt("restart_loop_max_retries", 10),
+		DepHandlingMode:                    s.getSettingStr("dep_handling_mode", "flag_only"),
+		TempWarning:                        s.getSettingFloat("temp_warning", 75),
+		TempCritical:                       s.getSettingFloat("temp_critical", 80),
+		AdmissionDiskMinGB:                 s.getSettingFloat("admission_disk_min_gb", 10),
+		AdmissionTempMax:                   s.getSettingFloat("admission_temp_max", 80),
+		UpdateCheckIntervalHours:           s.getSettingInt("update_check_interval_hours", 24),
+		UpdateCheckEnabled:                 s.getSettingStr("update_check_enabled", "true") == "true",
+		UpdateChannel:                      s.getSettingStr("update_channel", "stable"),
+		ServicesShowMemory:                 s.getSettingStr("services_show_memory", "false") == "true",
+		ServicesShowPorts:                  s.getSettingStr("services_show_ports", "true") == "true",
+		UpdateKeepOldImages:                s.getSettingStr("update_keep_old_images", "false") == "true",
+		TrendAlertEnabled:                  s.getSettingStr("trend_alert_enabled", "true") == "true",
+		TrendAlertHorizonHours:             s.getSettingInt("trend_alert_horizon_hours", 6),
+		TrendAlertLookbackHours:            s.getSettingInt("trend_alert_lookback_hours", 6),
+		TrendAlertMinDataHours:             s.getSettingInt("trend_alert_min_data_hours", 2),
+		AllowDowngrade:                     s.getSettingStr("allow_downgrade", "false") == "true",
 		DirSizeWarningMB:                   s.getSettingInt("dir_size_warning_mb", 700),
 		DirSizeCriticalMB:                  s.getSettingInt("dir_size_critical_mb", 900),
 		DirSizeAutoreclaimEnabled:          s.getSettingStr("dir_size_autoreclaim_enabled", "true") == "true",

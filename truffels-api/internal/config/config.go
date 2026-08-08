@@ -3,15 +3,15 @@ package config
 import "os"
 
 type Config struct {
-	Listen       string
-	DBPath       string
-	ComposeRoot  string
-	ConfigRoot   string
-	SecretsRoot  string
-	HostProc     string
-	HostSys      string
-	DataRoot     string
-	GitHubRepo   string // owner/repo for self-update checks (e.g. "bandrewk/truffels")
+	Listen      string
+	DBPath      string
+	ComposeRoot string
+	ConfigRoot  string
+	SecretsRoot string
+	HostProc    string
+	HostSys     string
+	DataRoot    string
+	GitHubRepo  string // owner/repo for self-update checks (e.g. "bandrewk/truffels")
 }
 
 func Load() *Config {

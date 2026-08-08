@@ -18,14 +18,14 @@ import (
 )
 
 type Engine struct {
-	store    *store.Store
-	registry *service.Registry
-	compose  *docker.ComposeClient
-	stopCh   chan struct{}
-	triggerCh chan struct{}
-	mu       sync.Mutex
-	updating map[string]bool // services currently being updated
-	healthWait time.Duration  // wait before health check (default 30s)
+	store      *store.Store
+	registry   *service.Registry
+	compose    *docker.ComposeClient
+	stopCh     chan struct{}
+	triggerCh  chan struct{}
+	mu         sync.Mutex
+	updating   map[string]bool // services currently being updated
+	healthWait time.Duration   // wait before health check (default 30s)
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *docker.ComposeClient) *Engine {

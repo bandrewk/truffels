@@ -18,15 +18,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 type dashboardResponse struct {
-	Host     model.HostMetrics     `json:"host"`
-	Services []dashboardService    `json:"services"`
-	Alerts   dashboardAlerts       `json:"alerts"`
+	Host     model.HostMetrics  `json:"host"`
+	Services []dashboardService `json:"services"`
+	Alerts   dashboardAlerts    `json:"alerts"`
 }
 
 type dashboardService struct {
-	ID          string               `json:"id"`
-	DisplayName string               `json:"display_name"`
-	State       model.ServiceState   `json:"state"`
+	ID          string                 `json:"id"`
+	DisplayName string                 `json:"display_name"`
+	State       model.ServiceState     `json:"state"`
 	Containers  []model.ContainerState `json:"containers"`
 }
 

@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	backupDir    = "/srv/truffels/backups"
-	maxBackups   = 5
+	backupDir  = "/srv/truffels/backups"
+	maxBackups = 5
 )
 
 func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {

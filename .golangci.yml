@@ -1,0 +1,12 @@
+# golangci-lint runs its default set unless told otherwise, and gofmt is not in
+# it. That is why 21 files had drifted out of gofmt shape without anyone
+# noticing — the linter was green the whole time.
+#
+# This adds gofmt to the defaults rather than replacing them: errcheck, gosimple,
+# govet, ineffassign, staticcheck and unused stay on.
+#
+# Found in both module directories because golangci-lint searches upwards from
+# its working directory, and CI sets working-directory per module.
+linters:
+  enable:
+    - gofmt

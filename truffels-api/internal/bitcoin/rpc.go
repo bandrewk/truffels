@@ -96,21 +96,21 @@ type BlockchainInfo struct {
 }
 
 type NetworkInfo struct {
-	Version        int    `json:"version"`
-	SubVersion     string `json:"subversion"`
-	ProtocolVersion int   `json:"protocolversion"`
-	Connections    int    `json:"connections"`
-	ConnectionsIn  int    `json:"connections_in"`
-	ConnectionsOut int    `json:"connections_out"`
+	Version         int    `json:"version"`
+	SubVersion      string `json:"subversion"`
+	ProtocolVersion int    `json:"protocolversion"`
+	Connections     int    `json:"connections"`
+	ConnectionsIn   int    `json:"connections_in"`
+	ConnectionsOut  int    `json:"connections_out"`
 }
 
 type MempoolInfo struct {
-	Size           int     `json:"size"`
-	Bytes          int     `json:"bytes"`
-	Usage          int     `json:"usage"`
-	TotalFee       float64 `json:"total_fee"`
-	MempoolMinFee  float64 `json:"mempoolminfee"`
-	MinRelayTxFee  float64 `json:"minrelaytxfee"`
+	Size          int     `json:"size"`
+	Bytes         int     `json:"bytes"`
+	Usage         int     `json:"usage"`
+	TotalFee      float64 `json:"total_fee"`
+	MempoolMinFee float64 `json:"mempoolminfee"`
+	MinRelayTxFee float64 `json:"minrelaytxfee"`
 }
 
 func (c *Client) GetBlockchainInfo() (*BlockchainInfo, error) {

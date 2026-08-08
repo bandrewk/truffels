@@ -275,8 +275,8 @@ func TestServiceAction_Stop_Success(t *testing.T) {
 	agentState := &mockAgentState{
 		containerStates: map[string]model.ContainerState{
 			// electrs (dependent of bitcoind) is stopped — safe to stop bitcoind
-			"truffels-electrs":  {Name: "truffels-electrs", Status: "exited", Health: ""},
-			"truffels-ckpool":   {Name: "truffels-ckpool", Status: "exited", Health: ""},
+			"truffels-electrs": {Name: "truffels-electrs", Status: "exited", Health: ""},
+			"truffels-ckpool":  {Name: "truffels-ckpool", Status: "exited", Health: ""},
 			// mempool containers also stopped
 			"truffels-mempool-backend":  {Name: "truffels-mempool-backend", Status: "exited", Health: ""},
 			"truffels-mempool-frontend": {Name: "truffels-mempool-frontend", Status: "exited", Health: ""},
@@ -1820,8 +1820,8 @@ func TestSystemTuningGet_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var body struct {
-		PersistentJournal bool `json:"persistent_journal"`
-		Swappiness        int  `json:"swappiness"`
+		PersistentJournal bool   `json:"persistent_journal"`
+		Swappiness        int    `json:"swappiness"`
 		JournalDiskUsage  string `json:"journal_disk_usage"`
 		Boots             []struct {
 			Index int    `json:"index"`

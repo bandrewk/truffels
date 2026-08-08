@@ -1614,7 +1614,9 @@ func TestPruneOldImages_KeepsCurrentAndN1(t *testing.T) {
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/image/remove":
-			var req struct{ Image string `json:"image"` }
+			var req struct {
+				Image string `json:"image"`
+			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			removedImages = append(removedImages, req.Image)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -1666,7 +1668,9 @@ func TestPruneOldImages_RespectsSetting(t *testing.T) {
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/image/remove":
-			var req struct{ Image string `json:"image"` }
+			var req struct {
+				Image string `json:"image"`
+			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			removedImages = append(removedImages, req.Image)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,35 +21,35 @@ import (
 
 // Allowlisted service IDs and their compose directory names.
 var allowedServices = map[string]string{
-	"bitcoind":        "bitcoin",
-	"electrs":         "electrs",
-	"ckpool":          "ckpool",
-	"mempool":         "mempool",
-	"ckstats":         "ckstats",
-	"proxy":           "proxy",
-	"mempool-db":      "mempool",
-	"ckstats-db":      "ckstats",
-	"truffels":        "truffels",
-	"truffels-agent":  "truffels",
-	"truffels-api":    "truffels",
-	"truffels-web":    "truffels",
+	"bitcoind":       "bitcoin",
+	"electrs":        "electrs",
+	"ckpool":         "ckpool",
+	"mempool":        "mempool",
+	"ckstats":        "ckstats",
+	"proxy":          "proxy",
+	"mempool-db":     "mempool",
+	"ckstats-db":     "ckstats",
+	"truffels":       "truffels",
+	"truffels-agent": "truffels",
+	"truffels-api":   "truffels",
+	"truffels-web":   "truffels",
 }
 
 // Allowlisted container names for inspection.
 var allowedContainers = map[string]bool{
-	"truffels-bitcoind":          true,
-	"truffels-electrs":           true,
-	"truffels-ckpool":            true,
-	"truffels-mempool-backend":   true,
-	"truffels-mempool-frontend":  true,
-	"truffels-mempool-db":        true,
-	"truffels-ckstats":           true,
-	"truffels-ckstats-cron":      true,
-	"truffels-ckstats-db":        true,
-	"truffels-proxy":             true,
-	"truffels-agent":             true,
-	"truffels-api":               true,
-	"truffels-web":               true,
+	"truffels-bitcoind":         true,
+	"truffels-electrs":          true,
+	"truffels-ckpool":           true,
+	"truffels-mempool-backend":  true,
+	"truffels-mempool-frontend": true,
+	"truffels-mempool-db":       true,
+	"truffels-ckstats":          true,
+	"truffels-ckstats-cron":     true,
+	"truffels-ckstats-db":       true,
+	"truffels-proxy":            true,
+	"truffels-agent":            true,
+	"truffels-api":              true,
+	"truffels-web":              true,
 }
 
 var composeRoot string
@@ -692,14 +692,14 @@ func handleImageTag(w http.ResponseWriter, r *http.Request) {
 // --- Container Stats ---
 
 type containerStats struct {
-	Name           string  `json:"name"`
-	CPUPercent     float64 `json:"cpu_percent"`
-	MemUsageMB     float64 `json:"mem_usage_mb"`
-	MemLimitMB     float64 `json:"mem_limit_mb"`
-	NetRxBytes     int64   `json:"net_rx_bytes"`
-	NetTxBytes     int64   `json:"net_tx_bytes"`
-	BlockReadBytes  int64  `json:"block_read_bytes"`
-	BlockWriteBytes int64  `json:"block_write_bytes"`
+	Name            string  `json:"name"`
+	CPUPercent      float64 `json:"cpu_percent"`
+	MemUsageMB      float64 `json:"mem_usage_mb"`
+	MemLimitMB      float64 `json:"mem_limit_mb"`
+	NetRxBytes      int64   `json:"net_rx_bytes"`
+	NetTxBytes      int64   `json:"net_tx_bytes"`
+	BlockReadBytes  int64   `json:"block_read_bytes"`
+	BlockWriteBytes int64   `json:"block_write_bytes"`
 }
 
 type dockerStatsJSON struct {
@@ -2405,17 +2405,17 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 
 // serviceContainers maps service IDs to their container names for fallback log retrieval.
 var serviceContainers = map[string][]string{
-	"bitcoind":        {"truffels-bitcoind"},
-	"electrs":         {"truffels-electrs"},
-	"ckpool":          {"truffels-ckpool"},
-	"mempool":         {"truffels-mempool-backend", "truffels-mempool-frontend"},
-	"ckstats":         {"truffels-ckstats", "truffels-ckstats-cron"},
-	"proxy":           {"truffels-proxy"},
-	"mempool-db":      {"truffels-mempool-db"},
-	"ckstats-db":      {"truffels-ckstats-db"},
-	"truffels-agent":  {"truffels-agent"},
-	"truffels-api":    {"truffels-api"},
-	"truffels-web":    {"truffels-web"},
+	"bitcoind":       {"truffels-bitcoind"},
+	"electrs":        {"truffels-electrs"},
+	"ckpool":         {"truffels-ckpool"},
+	"mempool":        {"truffels-mempool-backend", "truffels-mempool-frontend"},
+	"ckstats":        {"truffels-ckstats", "truffels-ckstats-cron"},
+	"proxy":          {"truffels-proxy"},
+	"mempool-db":     {"truffels-mempool-db"},
+	"ckstats-db":     {"truffels-ckstats-db"},
+	"truffels-agent": {"truffels-agent"},
+	"truffels-api":   {"truffels-api"},
+	"truffels-web":   {"truffels-web"},
 }
 
 // fallbackContainerLogs uses `docker logs` directly when `docker compose logs` returns empty.

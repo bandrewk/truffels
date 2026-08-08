@@ -24,16 +24,16 @@ import (
 // downHandler is called for /v1/compose/down requests.
 // inspectHandler is called for /v1/inspect requests.
 type mockAgentOpts struct {
-	pullFail    bool
-	upFail      bool
-	downFail    bool
-	buildFail   bool
-	unhealthy   bool // if true, inspect returns unhealthy containers
-	imageInspectFail bool   // if true, /v1/image/inspect returns 500
-	tagFail          bool   // if true, /v1/image/tag returns 500 (no staged rollback image)
-	rewriteFail      bool   // if true, /v1/compose/rewrite-tags returns 500
-	gitCheckoutFail  bool   // if true, /v1/git/checkout returns 500
-	detachedFail     bool   // if true, /v1/compose/up-detached returns 500
+	pullFail         bool
+	upFail           bool
+	downFail         bool
+	buildFail        bool
+	unhealthy        bool              // if true, inspect returns unhealthy containers
+	imageInspectFail bool              // if true, /v1/image/inspect returns 500
+	tagFail          bool              // if true, /v1/image/tag returns 500 (no staged rollback image)
+	rewriteFail      bool              // if true, /v1/compose/rewrite-tags returns 500
+	gitCheckoutFail  bool              // if true, /v1/git/checkout returns 500
+	detachedFail     bool              // if true, /v1/compose/up-detached returns 500
 	composeDirs      map[string]string // service_id -> compose dir path for rewrite-tags
 	imageLabels      map[string]string // labels returned by /v1/image/inspect (NeedsBuild verification)
 	tags             *tagRecorder      // records /v1/image/tag calls when set
