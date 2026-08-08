@@ -383,20 +383,17 @@ func (e *Engine) recoverInterruptedReclaims() {
 			w.humanLabel, w.serviceID)
 
 		detail := "restart issued after an interrupted reclaim"
-		switch {
-		case e.compose == nil:
+		if e.compose == nil {
 			detail = "no compose client available to restart the service after an interrupted reclaim"
 			slog.Error("auto-reclaim recovery: no compose client", "service", w.serviceID)
-		default:
-			if err := e.compose.Up(w.serviceID); err != nil {
-				detail = "restart after an interrupted reclaim failed: " + err.Error()
-				slog.Error("auto-reclaim recovery: restart failed", "service", w.serviceID, "err", err)
-				e.upsert("auto_reclaim_interrupted", w.serviceID, model.SeverityCritical,
-					"An automatic %s reclaim was interrupted by a restart of truffels-api and the recovery restart failed: %s — start %s manually from Services.",
-					w.humanLabel, err.Error(), w.serviceID)
-			} else {
-				slog.Info("auto-reclaim recovery: service restarted", "service", w.serviceID)
-			}
+		} else if err := e.compose.Up(w.serviceID); err != nil {
+			detail = "restart after an interrupted reclaim failed: " + err.Error()
+			slog.Error("auto-reclaim recovery: restart failed", "service", w.serviceID, "err", err)
+			e.upsert("auto_reclaim_interrupted", w.serviceID, model.SeverityCritical,
+				"An automatic %s reclaim was interrupted by a restart of truffels-api and the recovery restart failed: %s — start %s manually from Services.",
+				w.humanLabel, err.Error(), w.serviceID)
+		} else {
+			slog.Info("auto-reclaim recovery: service restarted", "service", w.serviceID)
 		}
 
 		// Terminal row either way: the sequence is closed, and one recovery

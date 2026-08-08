@@ -1,4 +1,4 @@
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download || (sleep 10 && go mod download) || (sleep 30 && go mod download) || (sleep 60 && go mod download)
