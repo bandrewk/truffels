@@ -1776,13 +1776,17 @@ func TestHandleDockerPrune_ReturnsJSON(t *testing.T) {
 	if ct != "application/json" {
 		t.Fatalf("expected application/json, got %q", ct)
 	}
-	// docker commands will fail in CI but should still return JSON
+	// Written to hold with and without a docker CLI. Where docker is missing
+	// all three prunes fail and the answer is an error — it used to be
+	// {"status":"ok"}, which is what this assertion no longer accepts. The
+	// exact-outcome cases live in exec_test.go, where the exit status is
+	// chosen rather than inherited from the container.
 	var body map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if body["status"] != "ok" {
-		t.Fatalf("expected status ok, got %q", body["status"])
+	if body["status"] != "ok" && body["error"] == "" {
+		t.Fatalf("expected status ok or an error field, got %v", body)
 	}
 }
 

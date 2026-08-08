@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Characterization tests for the handlers whose only untested part was the
@@ -343,5 +344,166 @@ func TestHandleGitCheckout_ChecksOutCommitUnderCommitScheme(t *testing.T) {
 	}
 	if got := strings.TrimSpace(git(t, work, "rev-parse", "HEAD")); got != first {
 		t.Errorf("HEAD = %s, want %s", got, first)
+	}
+}
+
+// --- handleDockerPrune ---
+
+// fakeDocker puts a stub `docker` on PATH for the duration of one test. The
+// suite runs without a docker CLI, so every prune fails and only the
+// everything-failed path was ever exercised; the partial and the fully
+// successful runs — the ones that decide what the caller is told — need a
+// command whose exit status the test chooses.
+//
+// script is the body of a /bin/sh script and receives the docker argv, so it
+// can branch on the subcommand ("$1" is builder/image/system).
+func fakeDocker(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	// Control: a missing stub would look exactly like the real docker being
+	// absent, which is the state every other assertion here is contrasted with.
+	if got, err := exec.LookPath("docker"); err != nil || got != filepath.Join(dir, "docker") {
+		t.Fatalf("stub docker not on PATH: %q, %v", got, err)
+	}
+}
+
+// withStorageCache installs a live cache so the handler's refresh runs. In the
+// binary it is set in main(); in tests it is nil, so the invalidate/set pair at
+// the end of the handler was never executed.
+func withStorageCache(t *testing.T) *dockerStorageCache {
+	t.Helper()
+	prev := storageCache
+	storageCache = newDockerStorageCache(5 * time.Minute)
+	t.Cleanup(func() { storageCache = prev })
+	return storageCache
+}
+
+func decodeJSON(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
+	t.Helper()
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	return resp
+}
+
+func postPrune(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	handleDockerPrune(w, httptest.NewRequest("POST", "/v1/docker/prune", bytes.NewReader([]byte("{}"))))
+	return w
+}
+
+// The all-succeeded path, which is what the endpoint is for: every "reclaimed"
+// line from all three runs is joined into the one field the API reads back.
+func TestHandleDockerPrune_ReportsWhatTheThreeRunsReclaimed(t *testing.T) {
+	fakeDocker(t, `echo "Total reclaimed space: 1.5GB"`)
+	cache := withStorageCache(t)
+
+	w := postPrune(t)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeJSON(t, w)
+	if resp["status"] != "ok" {
+		t.Errorf("status = %q, want ok", resp["status"])
+	}
+	if got := resp["reclaimed"]; strings.Count(got, "Total reclaimed space: 1.5GB") != 3 {
+		t.Errorf("reclaimed = %q, want one line per prune run", got)
+	}
+	// The refresh is the reason /system/info is right on the next request
+	// rather than up to five minutes later.
+	if _, fresh := cache.get(); !fresh {
+		t.Error("storage cache was not refreshed; /system/info would keep serving the pre-prune numbers")
+	}
+}
+
+// No line mentioning "reclaimed" — an older docker, or a run that printed
+// nothing — still answers with the placeholder rather than an empty field.
+func TestHandleDockerPrune_ReclaimedIsUnknownWhenNothingSaysSo(t *testing.T) {
+	fakeDocker(t, `echo "deleted: sha256:abc"`)
+
+	w := postPrune(t)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := decodeJSON(t, w)["reclaimed"]; got != "unknown" {
+		t.Errorf("reclaimed = %q, want \"unknown\"", got)
+	}
+}
+
+// Best-effort is about not aborting the run, not about hiding it. When every
+// one of the three failed, nothing was reclaimed and nothing was cleaned up,
+// and answering 200 {"status":"ok"} told the operator the opposite: the Settings
+// page printed "Pruned: unknown" and the audit row recorded a prune that never
+// happened. A docker socket the agent has lost, a daemon that is down, a
+// `docker` that is not on PATH all land here.
+func TestHandleDockerPrune_EveryRunFailingIsNotOK(t *testing.T) {
+	fakeDocker(t, `echo "Cannot connect to the Docker daemon" >&2; exit 1`)
+
+	w := postPrune(t)
+
+	if w.Code != 500 {
+		t.Fatalf("expected 500 when no prune ran, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeJSON(t, w)
+	if resp["status"] == "ok" {
+		t.Error(`response still claims "ok" after all three prunes failed`)
+	}
+	// Naming them is the point: "prune failed" alone does not distinguish a
+	// dead daemon from one subcommand a docker version dropped.
+	for _, name := range []string{"builder prune", "image prune", "system prune"} {
+		if !strings.Contains(resp["error"], name) {
+			t.Errorf("error %q does not name the failed %q run", resp["error"], name)
+		}
+	}
+}
+
+// A partial failure keeps its 200 — the runs that did work reclaimed real
+// space and the caller should see it — but the answer has to say that one
+// stage did not run. Same shape handleImageRemove already uses: status ok plus
+// a warning field, so a caller reading only "status" is no worse off than
+// before and one reading the body learns the truth.
+func TestHandleDockerPrune_PartialFailureIsNamedInTheResponse(t *testing.T) {
+	fakeDocker(t, `if [ "$1" = "image" ]; then echo "image prune is not supported" >&2; exit 1; fi
+echo "Total reclaimed space: 2.1GB"`)
+
+	w := postPrune(t)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 when two of three prunes worked, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := decodeJSON(t, w)
+	if resp["status"] != "ok" {
+		t.Errorf("status = %q, want ok — two runs did reclaim space", resp["status"])
+	}
+	if !strings.Contains(resp["reclaimed"], "2.1GB") {
+		t.Errorf("reclaimed = %q, want what the surviving runs reported", resp["reclaimed"])
+	}
+	if !strings.Contains(resp["warning"], "image prune") {
+		t.Errorf("warning = %q, want it to name the prune that failed", resp["warning"])
+	}
+	for _, name := range []string{"builder prune", "system prune"} {
+		if strings.Contains(resp["warning"], name) {
+			t.Errorf("warning = %q names %q, which succeeded", resp["warning"], name)
+		}
+	}
+}
+
+// The unchanged case, asserted directly: a fully successful prune must not
+// grow a warning field, or every UI that shows one shows it always.
+func TestHandleDockerPrune_SuccessCarriesNoWarning(t *testing.T) {
+	fakeDocker(t, `echo "Total reclaimed space: 1.5GB"`)
+
+	w := postPrune(t)
+
+	if _, ok := decodeJSON(t, w)["warning"]; ok {
+		t.Error("a prune where nothing failed must not report a warning")
 	}
 }
