@@ -2255,6 +2255,76 @@ func TestValidateUnderRoot_AllowsNestedUnderExistingRoot(t *testing.T) {
 	}
 }
 
+// The root was used as a raw prefix, so a caller passing a trailing slash built
+// root+"/" as a double slash and every path under it was rejected. No caller
+// does that today; that is the callers being careful, not a property this
+// function had.
+func TestValidateUnderRoot_NormalisesTheRoot(t *testing.T) {
+	base := t.TempDir()
+	target := base + "/mempool/cache"
+
+	for _, root := range []string{base + "/", base + "//", base + "/."} {
+		cleaned, err := validateUnderRoot(target, root)
+		if err != nil {
+			t.Errorf("root %q rejected a path under it: %v", root, err)
+			continue
+		}
+		if cleaned != target {
+			t.Errorf("root %q: cleaned = %q, want %q", root, cleaned, target)
+		}
+	}
+}
+
+// A root that is not an absolute directory is not a boundary, and every value
+// here used to be accepted as one: "" and "." make root+"/" match relative
+// paths, and "/" would have to allow the entire filesystem to be consistent.
+// The one caller that can pass an empty root (handleFileReconcile, when
+// TRUFFELS_CONFIG_ROOT is unset) already refuses first; this is the backstop.
+func TestValidateUnderRoot_RejectsUnusableRoots(t *testing.T) {
+	for _, root := range []string{"", ".", "/", "//", "relative/dir", "./x"} {
+		if _, err := validateUnderRoot("/srv/truffels/data/mempool/cache", root); err == nil {
+			t.Errorf("root %q was accepted; it does not bound anything", root)
+		}
+	}
+}
+
+// The production roots with the paths the API really sends. None of them exist
+// inside the test container, which is also true of the agent container for
+// parts of the tree — the walk to the nearest existing ancestor has to keep
+// answering for them.
+func TestValidateUnderRoot_AcceptsProductionPaths(t *testing.T) {
+	cases := []struct{ path, root string }{
+		{"/srv/truffels/data/mempool/cache", "/srv/truffels/data"},
+		{"/srv/truffels/data/ckstats/postgres", "/srv/truffels/data"},
+		{"/srv/truffels/data/bitcoin/blockchain", "/srv/truffels/data"},
+		{"/srv/truffels/compose/truffels/docker-compose.yml", "/srv/truffels/compose"},
+		{"/srv/truffels/compose/mempool/docker-compose.yml", "/srv/truffels/compose"},
+		{"/srv/truffels/config/bitcoin/bitcoin.conf", "/srv/truffels/config"},
+		{"/srv/truffels/config/proxy/Caddyfile", "/srv/truffels/config"},
+	}
+	for _, c := range cases {
+		cleaned, err := validateUnderRoot(c.path, c.root)
+		if err != nil {
+			t.Errorf("validateUnderRoot(%q, %q) = %v, want accept", c.path, c.root, err)
+		}
+		if cleaned != c.path {
+			t.Errorf("cleaned = %q, want %q", cleaned, c.path)
+		}
+	}
+}
+
+func TestValidateUnderRoot_StillRejectsEscapes(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{
+		"", "/etc/passwd", root, root + "/../etc", root + "/x/../../etc",
+		filepath.Dir(root), "/",
+	} {
+		if _, err := validateUnderRoot(p, root); err == nil {
+			t.Errorf("path %q under root %q was accepted", p, root)
+		}
+	}
+}
+
 // --- dirSizeCache ---
 
 func TestDirSizeCache_HitMiss(t *testing.T) {

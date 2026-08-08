@@ -272,9 +272,43 @@ func isValidCommitHash(s string) bool {
 // escapes. Returns ("", error) otherwise. The path's parent must exist for
 // EvalSymlinks to resolve cleanly; if the parent doesn't exist yet, the check
 // walks upward until it finds an existing ancestor and validates that one.
+//
+// KNOWN LIMIT — this is not a defence against a racing attacker.
+//
+// The symlink check resolves the nearest ancestor that exists *at the time of
+// the call*. Every component created afterwards is unexamined, and so is any
+// component swapped for a symlink between this returning and the caller's
+// os.MkdirAll / os.WriteFile / os.RemoveAll running. That is a plain
+// time-of-check/time-of-use gap and it cannot be closed from here: closing it
+// means the file operations themselves must not traverse a symlink — openat2
+// with RESOLVE_BENEATH, or an fd-anchored walk — which is a rewrite of every
+// caller, not a change to this function.
+//
+// It is stated rather than papered over because the callers' safety arguments
+// have to be able to lean on what this actually promises. What it does promise:
+// no relative escape, and no symlink escape via a component that already
+// existed. What it does not: atomicity with the operation that follows. The
+// exposure is bounded elsewhere — /srv/truffels is root-owned, the endpoints
+// take service-shaped inputs, and clear-dir carries its own basename and depth
+// checks — not by this.
 func validateUnderRoot(p, root string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("empty path")
+	}
+	// Normalise and check the root before using it as a prefix. It is a
+	// parameter like any other, and nothing verified it: a root with a trailing
+	// slash made root+"/" a double slash that no cleaned path can match, so
+	// every request under it was silently refused, and an empty root made the
+	// prefix "/", which matches every absolute path there is — the boundary
+	// inverted, in both directions, from a caller's typo. "/" is refused for the
+	// same reason as "": a root containing the whole filesystem bounds nothing.
+	//
+	// Today's callers pass clean absolute values (composeRoot, configRoot,
+	// dataRoot and repoDir), so this changes no live behaviour. That was luck,
+	// and luck is not a check.
+	root = filepath.Clean(root)
+	if !filepath.IsAbs(root) || root == "/" {
+		return "", fmt.Errorf("invalid root %q", root)
 	}
 	cleaned := filepath.Clean(p)
 	if !strings.HasPrefix(cleaned, root+"/") {
