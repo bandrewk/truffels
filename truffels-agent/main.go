@@ -1752,11 +1752,21 @@ func removeUntrackedCollisionsForCheckout(ctx context.Context, repoDir, ref stri
 		if err != nil {
 			return log.String(), fmt.Errorf("refusing to remove %q in %q: %w", rel, repoDir, err)
 		}
-		// os.Remove, never os.RemoveAll: ls-files --others lists files, so every
-		// candidate is a file. If one is somehow a non-empty directory, os.Remove
+		root, name, err := anchorUnderRoot(full, repoDir)
+		if err != nil {
+			return log.String(), fmt.Errorf("refusing to remove %q in %q: %w", rel, repoDir, err)
+		}
+		// Root.Remove, never RemoveAll: ls-files --others lists files, so every
+		// candidate is a file. If one is somehow a non-empty directory, Remove
 		// fails and this aborts — which is the correct outcome. A recursive
 		// delete here would turn one wrong path into an unbounded one.
-		if err := os.Remove(full); err != nil {
+		//
+		// The names come from git and the paths were checked above, but the
+		// removal still goes through the anchor: git listed them at one moment
+		// and we delete at another, and this runs as root.
+		err = root.Remove(name)
+		_ = root.Close()
+		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
@@ -2105,6 +2115,9 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fullPath = filepath.Clean(fullPath)
 	}
+	// Whichever root accepts the path is the one the operations below anchor in,
+	// so it has to be carried out of the check rather than recomputed after it.
+	chosenRoot := composeRoot
 	if _, err := validateUnderRoot(fullPath, composeRoot); err != nil {
 		// Fall back to configRoot only if it's non-empty — an empty root would
 		// match everything (HasPrefix(anything, "/") is true).
@@ -2118,11 +2131,19 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		chosenRoot = configRoot
 	}
 
 	slog.Info("file reconcile", "path", fullPath)
 
-	data, err := os.ReadFile(fullPath)
+	root, name, err := anchorUnderRoot(fullPath, chosenRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+	defer func() { _ = root.Close() }()
+
+	data, err := root.ReadFile(name)
 	if err != nil && !os.IsNotExist(err) {
 		writeJSON(w, 500, map[string]string{"error": "read file: " + err.Error()})
 		return
@@ -2134,12 +2155,14 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "create dir: " + err.Error()})
-		return
+	if dir := filepath.Dir(name); dir != "." {
+		if err := root.MkdirAll(dir, 0755); err != nil {
+			writeJSON(w, 500, map[string]string{"error": "create dir: " + err.Error()})
+			return
+		}
 	}
 
-	if err := os.WriteFile(fullPath, []byte(req.ExpectedContent), 0644); err != nil {
+	if err := root.WriteFile(name, []byte(req.ExpectedContent), 0644); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "write file: " + err.Error()})
 		return
 	}
@@ -2178,20 +2201,27 @@ func handleEnsureDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	root, name, err := anchorUnderRoot(cleaned, dataRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+	defer func() { _ = root.Close() }()
+
 	existed := true
-	if _, err := os.Stat(cleaned); os.IsNotExist(err) {
+	if _, err := root.Stat(name); os.IsNotExist(err) {
 		existed = false
 	}
 
-	if err := os.MkdirAll(cleaned, mode); err != nil {
+	if err := root.MkdirAll(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "mkdir: " + err.Error()})
 		return
 	}
-	if err := os.Chown(cleaned, req.UID, req.GID); err != nil {
+	if err := root.Chown(name, req.UID, req.GID); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chown: " + err.Error()})
 		return
 	}
-	if err := os.Chmod(cleaned, mode); err != nil {
+	if err := root.Chmod(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
 		return
 	}
@@ -2256,19 +2286,31 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("clear-dir", "path", cleaned, "uid", req.UID, "gid", req.GID)
 
-	if err := os.RemoveAll(cleaned); err != nil {
+	// Anchored, because this is the one endpoint that deletes recursively as
+	// root, and the tree it deletes in is mounted read-write into several
+	// containers. Through the root every component is resolved against dataRoot
+	// by the kernel, so a symlink planted after the checks above cannot redirect
+	// the RemoveAll — there is no longer an interval to plant it in.
+	root, name, err := anchorUnderRoot(cleaned, dataRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.RemoveAll(name); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "remove: " + err.Error()})
 		return
 	}
-	if err := os.MkdirAll(cleaned, mode); err != nil {
+	if err := root.MkdirAll(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "mkdir: " + err.Error()})
 		return
 	}
-	if err := os.Chown(cleaned, req.UID, req.GID); err != nil {
+	if err := root.Chown(name, req.UID, req.GID); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chown: " + err.Error()})
 		return
 	}
-	if err := os.Chmod(cleaned, mode); err != nil {
+	if err := root.Chmod(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
 		return
 	}

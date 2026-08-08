@@ -300,24 +300,17 @@ func isValidCommitHash(s string) bool {
 // EvalSymlinks to resolve cleanly; if the parent doesn't exist yet, the check
 // walks upward until it finds an existing ancestor and validates that one.
 //
-// KNOWN LIMIT — this is not a defence against a racing attacker.
+// This is the first of two layers and deliberately not the load-bearing one.
+// It answers cheaply and with a message a caller can act on — "path outside
+// root", "symlink redirects outside root" — which an anchored open cannot,
+// because to the kernel an escape and a missing file look much alike.
 //
-// The symlink check resolves the nearest ancestor that exists *at the time of
-// the call*. Every component created afterwards is unexamined, and so is any
-// component swapped for a symlink between this returning and the caller's
-// os.MkdirAll / os.WriteFile / os.RemoveAll running. That is a plain
-// time-of-check/time-of-use gap and it cannot be closed from here: closing it
-// means the file operations themselves must not traverse a symlink — openat2
-// with RESOLVE_BENEATH, or an fd-anchored walk — which is a rewrite of every
-// caller, not a change to this function.
-//
-// It is stated rather than papered over because the callers' safety arguments
-// have to be able to lean on what this actually promises. What it does promise:
-// no relative escape, and no symlink escape via a component that already
-// existed. What it does not: atomicity with the operation that follows. The
-// exposure is bounded elsewhere — /srv/truffels is root-owned, the endpoints
-// take service-shaped inputs, and clear-dir carries its own basename and depth
-// checks — not by this.
+// What it promises: no relative escape, and no symlink escape through a
+// component that existed when it ran. What it cannot promise is atomicity with
+// whatever the caller does next; a component swapped for a symlink in between
+// would not be seen. That gap is closed by the second layer rather than here —
+// see anchorUnderRoot, and note that every caller of this function performs its
+// file operations through that anchor.
 func validateUnderRoot(p, root string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("empty path")
@@ -363,4 +356,40 @@ func validateUnderRoot(p, root string) (string, error) {
 		}
 	}
 	return cleaned, nil
+}
+
+// anchorUnderRoot opens root as an os.Root and returns it alongside the name of
+// cleaned relative to it. Every file operation this process performs on a
+// caller-supplied path goes through the returned root.
+//
+// This is the layer that actually holds. validateUnderRoot checks a path and
+// then hands it back as a string, and a string carries none of that checking
+// with it: between the check and the os.RemoveAll a component can become a
+// symlink pointing anywhere, and the operation follows it. os.Root closes that
+// by making the check and the use the same act — the kernel resolves each
+// component against the anchored directory and refuses one that leaves it, so
+// there is no interval in which anything can be swapped.
+//
+// It matters most for clear-dir, which runs RemoveAll as root against a tree
+// several containers mount read-write.
+//
+// Root methods take paths relative to the anchor, which is why the name comes
+// back with the root: passing the absolute path would resolve against the
+// anchor and land somewhere else entirely.
+func anchorUnderRoot(cleaned, root string) (*os.Root, string, error) {
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, cleaned)
+	if err != nil {
+		return nil, "", fmt.Errorf("path outside root")
+	}
+	// filepath.Rel is happy to return an escaping path; that it did means the
+	// caller handed us something validateUnderRoot should already have refused.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, "", fmt.Errorf("path outside root")
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, "", err
+	}
+	return r, rel, nil
 }
