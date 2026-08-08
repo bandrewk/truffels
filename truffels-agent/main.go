@@ -1694,7 +1694,13 @@ func removeUntrackedCollisionsForCheckout(ctx context.Context, repoDir, ref stri
 		return "", nil
 	}
 
-	inTarget, err := gitPathList(ctx, repoDir, "ls-tree", "-r", "--name-only", "-z", ref)
+	// The same terminator as the checkout below it, for the same reason and in
+	// the same position: ls-tree reads <tree-ish> [<path>...], so "--" states
+	// that the ref is the tree and the path list is empty. Unlike the checkout
+	// this changes no outcome — ls-tree resolves its first positional as a
+	// tree-ish either way — but it is the other git call site taking a variable
+	// ref, and the two should not have to be reasoned about differently.
+	inTarget, err := gitPathList(ctx, repoDir, "ls-tree", "-r", "--name-only", "-z", ref, "--")
 	if err != nil {
 		return "", err
 	}
@@ -1822,8 +1828,26 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Checkout tag
-	checkoutOut, err := runCapture(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag)
+	// Checkout tag.
+	//
+	// The trailing "--" terminates the revision and declares that no pathspec
+	// follows. `git checkout <arg>` accepts a revision OR a path in that
+	// position, and resolves a path when no such revision exists: a request for
+	// a ref that happens to name a tracked file was answered by restoring that
+	// file — exit 0, HEAD unmoved, and this handler replying {"status":"ok"} to
+	// an update engine that then builds and labels an image from the wrong
+	// commit. With the terminator that request fails, which is the honest
+	// answer. TestHandleGitCheckout_RefusesARefThatOnlyNamesAFile pins it.
+	//
+	// It goes AFTER the ref, not before. `git checkout -- <arg>` means the
+	// opposite — <arg> is a pathspec — and would break every checkout this
+	// endpoint performs.
+	//
+	// It is not protection against option injection: `git checkout --foo --`
+	// still parses --foo as an option. That remains the job of isValidTag and
+	// isValidCommitHash, which reject a leading dash, and this does not license
+	// loosening them.
+	checkoutOut, err := runCapture(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag, "--")
 	if err != nil {
 		writeJSON(w, 500, map[string]string{
 			"error":  "git checkout failed: " + err.Error(),

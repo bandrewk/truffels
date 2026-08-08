@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -251,5 +253,95 @@ func TestHandleGitCheckout_ChecksOutTagFromLocalRemote(t *testing.T) {
 	tagged := strings.TrimSpace(git(t, upstream, "rev-parse", "v0.0.1^{commit}"))
 	if head != tagged {
 		t.Errorf("HEAD = %s, want the tagged commit %s", head, tagged)
+	}
+}
+
+// A ref and a pathspec are not the same kind of argument, and `git checkout`
+// accepts both in the same position. Without the `--` terminator, a request for
+// a ref that does not exist but happens to name a tracked *file* is answered by
+// restoring that file — exit status 0, HEAD unmoved, and this endpoint replying
+// {"status":"ok"}. The update engine takes that at its word and builds, labels
+// and ships an image from the wrong commit.
+//
+// The validators do not help here: "v0.0.9" passes isValidTag. Nothing about
+// this is exotic; it is the ordinary meaning of the argv git was given.
+func TestHandleGitCheckout_RefusesARefThatOnlyNamesAFile(t *testing.T) {
+	upstream := t.TempDir()
+	git(t, upstream, "init", "-q", "-b", "main")
+	git(t, upstream, "config", "user.email", "t@example.invalid")
+	git(t, upstream, "config", "user.name", "t")
+	write(t, upstream, "README.md", "one\n")
+	// A tracked file whose name is a valid tag, and no tag of that name.
+	write(t, upstream, "v0.0.9", "committed\n")
+	git(t, upstream, "add", "README.md", "v0.0.9")
+	git(t, upstream, "commit", "-q", "-m", "first")
+
+	work := t.TempDir()
+	git(t, work, "clone", "-q", upstream, work)
+	allowRepoDir(t, work)
+	head := strings.TrimSpace(git(t, work, "rev-parse", "HEAD"))
+
+	// Local content that a path-checkout would silently discard.
+	write(t, work, "v0.0.9", "local\n")
+
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: work, Tag: "v0.0.9"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 500 {
+		t.Fatalf("expected 500 for a ref that does not exist, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.HasPrefix(resp["error"], "git checkout failed: ") {
+		t.Errorf("error = %q, want the 'git checkout failed: ' prefix", resp["error"])
+	}
+	if got := strings.TrimSpace(git(t, work, "rev-parse", "HEAD")); got != head {
+		t.Errorf("HEAD moved to %s; a refused checkout must change nothing", got)
+	}
+	content, err := os.ReadFile(filepath.Join(work, "v0.0.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "local\n" {
+		t.Errorf("v0.0.9 = %q; the refused checkout overwrote it as a pathspec", content)
+	}
+}
+
+// The commit-hash scheme end to end, with a real 40-char object name. The `--`
+// terminator has to leave this working too — it is the ref form every ckstats
+// update uses.
+func TestHandleGitCheckout_ChecksOutCommitUnderCommitScheme(t *testing.T) {
+	upstream := t.TempDir()
+	git(t, upstream, "init", "-q", "-b", "main")
+	git(t, upstream, "config", "user.email", "t@example.invalid")
+	git(t, upstream, "config", "user.name", "t")
+	write(t, upstream, "README.md", "one\n")
+	git(t, upstream, "add", "README.md")
+	git(t, upstream, "commit", "-q", "-m", "first")
+	first := strings.TrimSpace(git(t, upstream, "rev-parse", "HEAD"))
+	write(t, upstream, "README.md", "two\n")
+	git(t, upstream, "add", "README.md")
+	git(t, upstream, "commit", "-q", "-m", "second")
+
+	work := t.TempDir()
+	git(t, work, "clone", "-q", upstream, work)
+	allowRepoDir(t, work)
+
+	body, _ := json.Marshal(gitCheckoutRequest{RepoDir: work, Tag: first, RefScheme: "commit"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/git/checkout", bytes.NewReader(body))
+
+	handleGitCheckout(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := strings.TrimSpace(git(t, work, "rev-parse", "HEAD")); got != first {
+		t.Errorf("HEAD = %s, want %s", got, first)
 	}
 }
