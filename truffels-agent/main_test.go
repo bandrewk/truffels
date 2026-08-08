@@ -622,12 +622,13 @@ func TestHandleStats_ReturnsJSONArray(t *testing.T) {
 		t.Fatalf("expected application/json, got %q", ct)
 	}
 
-	if w.Code == 200 {
+	switch w.Code {
+	case 200:
 		var stats []containerStats
 		if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
 			t.Fatalf("expected valid JSON array, got error: %v", err)
 		}
-	} else if w.Code == 500 {
+	case 500:
 		// Expected when docker is not available — verify error is valid JSON
 		var body map[string]string
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
@@ -636,7 +637,7 @@ func TestHandleStats_ReturnsJSONArray(t *testing.T) {
 		if body["error"] == "" {
 			t.Fatal("expected 'error' field in 500 response")
 		}
-	} else {
+	default:
 		t.Fatalf("expected 200 or 500, got %d", w.Code)
 	}
 }
