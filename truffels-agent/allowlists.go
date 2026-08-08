@@ -59,12 +59,25 @@ var allowedContainers = map[string]bool{
 
 // --- Container images ---
 
-// allowedImagePrefixes names the image namespaces this appliance manages: the
-// images it builds itself plus the upstream images of the services it runs.
-// btcpayserver/ is Bitcoin Core and getumbrel/ is electrs — both are live, and
-// neither is a leftover.
+// localImageNamespace is the namespace of the images this appliance builds
+// itself. It is the one namespace whose repositories we know, so it is the one
+// namespace that is never matched as a prefix — see isAllowedManagedImage and
+// allowedLocalImageRepos.
+const localImageNamespace = "truffels/"
+
+// allowedImagePrefixes names the *upstream* namespaces this appliance manages:
+// the images of the services it runs but does not build. btcpayserver/ is
+// Bitcoin Core and getumbrel/ is electrs — both are live, and neither is a
+// leftover.
+//
+// A prefix is the right shape here and the wrong shape for our own namespace.
+// We do not know mempool's or btcpayserver's repositories and have no business
+// pinning them: upstream renames one and that service stops updating. Our own
+// five we do know, and "truffels/" as a prefix accepts any repository an
+// attacker cares to name — so localImageNamespace is deliberately absent from
+// this list and decided by allowedLocalImageRepos instead.
 var allowedImagePrefixes = []string{
-	"truffels/", "mempool/", "btcpayserver/", "getumbrel/",
+	"mempool/", "btcpayserver/", "getumbrel/",
 	"caddy:", "postgres:", "mariadb:",
 }
 
@@ -120,11 +133,25 @@ func hasOnlyChars(s, allowed string) bool {
 // `docker rmi`, not a milder one. Splitting the two checks is how /v1/image/pull
 // came to have none at all.
 //
-// Distinct from isAllowedImageRef below: that one covers the *locally built*
-// images only, and is stricter for reasons documented there.
+// Inside localImageNamespace this defers to isAllowedImageRef outright rather
+// than matching the prefix. The two gates must not disagree about our own
+// images — one that may be retagged is one that may be deleted, and the reverse
+// — and "truffels/" as a prefix is a namespace an attacker names freely, so the
+// looser gate would simply be the way in. Delegating makes the agreement
+// structural instead of two lists that have to be kept in step.
+//
+// It also applies the narrower alphabet there, which is correct and not an
+// accident: nothing in truffels-api ever builds a digest for an image this
+// appliance built itself (see localImageRefChars), so no real reference in this
+// namespace carries an '@'. Only the upstream namespaces, whose repositories we
+// do not enumerate, are matched by prefix — allowedImagePrefixes no longer
+// carries "truffels/" at all, so there is no second, looser path into it.
 func isAllowedManagedImage(ref string) bool {
 	if !hasOnlyChars(ref, managedImageRefChars) {
 		return false
+	}
+	if strings.HasPrefix(ref, localImageNamespace) {
+		return isAllowedImageRef(ref)
 	}
 	for _, prefix := range allowedImagePrefixes {
 		if strings.HasPrefix(ref, prefix) {

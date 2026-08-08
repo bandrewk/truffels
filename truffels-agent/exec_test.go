@@ -53,10 +53,15 @@ func TestInspectContainer_ReportsNotFoundWhenTheCommandFails(t *testing.T) {
 // --- handleImagePull ---
 
 func TestHandleImagePull_SurfacesCommandFailure(t *testing.T) {
-	// A repository that cannot resolve, so the pull fails whether or not a
-	// docker CLI is present.
+	// A tag that cannot resolve, so the pull fails whether or not a docker CLI
+	// is present.
+	//
+	// The repository has to be a real one now that /v1/image/pull enumerates
+	// ours the same way /v1/image/tag does — the guard, not the failing pull,
+	// would otherwise be what this test observes. Same move handleImageTag's
+	// characterization test already had to make: nonexistence lives in the tag.
 	body, _ := json.Marshal(map[string]string{
-		"image": "truffels/agent-test-nonexistent:v0.0.0",
+		"image": "truffels/ckpool:agent-test-nonexistent",
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(body))
