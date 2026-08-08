@@ -750,6 +750,50 @@ func TestDockerPrune_AuditLog(t *testing.T) {
 	}
 }
 
+// A prune where one of the agent's three runs failed is still a 200 — the other
+// two freed real space — but both surfaces the operator actually reads must say
+// so. Without this the response says "Total reclaimed space: 100MB" and the
+// audit row records an unqualified cleanup, while image prune never ran.
+func TestDockerPrune_PartialFailureIsVisibleInResponseAndAudit(t *testing.T) {
+	agentState := &mockAgentState{pruneWarning: "prune incomplete: image prune: exit status 1"}
+	srv, st, _ := newTestServerWithAgent(t, agentState)
+
+	req := authedReq(t, srv, "POST", "/api/truffels/system/docker-prune",
+		`{"password":"testpassword"}`)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.Contains(body["reclaimed"], "100MB") {
+		t.Errorf("reclaimed = %q, want what the surviving runs freed", body["reclaimed"])
+	}
+	if !strings.Contains(body["reclaimed"], "image prune") {
+		t.Errorf("reclaimed = %q, want the failed stage named", body["reclaimed"])
+	}
+
+	entries, err := st.GetAuditLog(50)
+	if err != nil {
+		t.Fatalf("get audit log: %v", err)
+	}
+	var detail string
+	for _, e := range entries {
+		if e.Action == "docker_prune" {
+			detail = e.Detail
+			break
+		}
+	}
+	if detail == "" {
+		t.Fatal("expected docker_prune audit entry")
+	}
+	if !strings.Contains(detail, "image prune") {
+		t.Errorf("audit detail = %q; a partial prune must not be recorded as a clean one", detail)
+	}
+}
+
 // --- Docker Build Cache Prune ---
 
 func TestDockerPruneBuildCache_WrongPassword(t *testing.T) {

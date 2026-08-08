@@ -1005,6 +1005,66 @@ func TestCharacterize_DockerPrune_TransportFailure(t *testing.T) {
 	assertContains(t, err, "agent docker prune: ")
 }
 
+// The agent runs three prunes and keeps going when one fails, so a run can be
+// partly successful: 200, real space reclaimed, and one stage that did not run.
+// It reports that as a warning field alongside the reclaimed total.
+//
+// This string is the whole surface — it becomes the audit row's detail and the
+// text the Settings page prints. Dropping the warning here would move the lie
+// one layer up instead of removing it: the operator reads "2.1GB reclaimed" and
+// has no way to learn that image prune never ran.
+func TestCharacterize_DockerPrune_PartialFailureReachesTheReturnedString(t *testing.T) {
+	c, _ := newFakeAgent(t, 200, map[string]any{
+		"status":    "ok",
+		"reclaimed": "Total reclaimed space: 2.1GB",
+		"warning":   "prune incomplete: image prune: exit status 1",
+	})
+
+	reclaimed, err := c.DockerPrune()
+	if err != nil {
+		t.Fatalf("a partial prune is not a failed call: %v", err)
+	}
+	if !strings.Contains(reclaimed, "2.1GB") {
+		t.Errorf("reclaimed = %q, want what the surviving runs freed", reclaimed)
+	}
+	if !strings.Contains(reclaimed, "image prune") {
+		t.Errorf("reclaimed = %q, want the stage that did not run to be named", reclaimed)
+	}
+}
+
+// A prune where nothing failed must read exactly as it always did — no
+// separator, no empty warning clause. TestCharacterize_DockerPrune_Success pins
+// the string; this pins the absent-field case explicitly, since the agent omits
+// the key rather than sending an empty one.
+func TestCharacterize_DockerPrune_NoWarningLeavesTheStringAlone(t *testing.T) {
+	c, _ := newFakeAgent(t, 200, map[string]any{"status": "ok", "reclaimed": "4.2GB", "warning": ""})
+
+	reclaimed, err := c.DockerPrune()
+	if err != nil {
+		t.Fatalf("docker prune: %v", err)
+	}
+	if reclaimed != "4.2GB" {
+		t.Errorf("reclaimed = %q, want the untouched agent value", reclaimed)
+	}
+}
+
+// An agent that reports a warning but no reclaimed total must not produce a
+// string that opens with the separator. Defensive: today's agent always fills
+// reclaimed, with "unknown" if no line said otherwise.
+func TestCharacterize_DockerPrune_WarningWithoutReclaimedStandsAlone(t *testing.T) {
+	c, _ := newFakeAgent(t, 200, map[string]any{
+		"status": "ok", "warning": "prune incomplete: image prune: exit status 1",
+	})
+
+	reclaimed, err := c.DockerPrune()
+	if err != nil {
+		t.Fatalf("docker prune: %v", err)
+	}
+	if reclaimed != "prune incomplete: image prune: exit status 1" {
+		t.Errorf("reclaimed = %q, want the warning on its own", reclaimed)
+	}
+}
+
 func TestCharacterize_DockerPruneBuildCache_Success(t *testing.T) {
 	c, rec := newFakeAgent(t, 200, map[string]any{"status": "ok", "reclaimed": "1.1GB"})
 	reclaimed, err := c.DockerPruneBuildCache()

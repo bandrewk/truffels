@@ -27,6 +27,7 @@ import (
 type mockAgentState struct {
 	containerStates map[string]model.ContainerState // keyed by container name
 	composeErr      string                          // if set, compose actions return this error
+	pruneWarning    string                          // if set, /v1/docker/prune answers 200 with this warning
 	lastAction      string
 	lastServiceID   string
 	lastContainer   string
@@ -110,7 +111,13 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 		case r.URL.Path == "/v1/docker/prune" && r.Method == "POST":
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 100MB"})
+			// The agent runs three prunes best-effort. A partial run still
+			// answers 200 and names the stage that failed in a warning field.
+			resp := map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 100MB"}
+			if state.pruneWarning != "" {
+				resp["warning"] = state.pruneWarning
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.URL.Path == "/v1/docker/prune-buildcache" && r.Method == "POST":
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reclaimed": "Total reclaimed space: 50MB"})

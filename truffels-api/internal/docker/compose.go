@@ -60,6 +60,13 @@ type agentResult struct {
 	Changed   bool   `json:"changed"`
 	Reclaimed string `json:"reclaimed"`
 	Content   string `json:"content"`
+	// Warning accompanies a 200 that only partly succeeded. The agent uses it
+	// where the work is made of several independent steps and some of them ran:
+	// refusing the whole call would throw away real results, and answering a
+	// bare "ok" would claim results that do not exist. Anything that decodes it
+	// has to pass it on, or the partial failure is lost exactly where the
+	// operator would have read it.
+	Warning string `json:"warning"`
 }
 
 // agentError builds an error from a failed agent response. ar.Error alone is
@@ -586,15 +593,38 @@ func (c *ComposeClient) ReconcileFile(relativePath, content string) (bool, error
 }
 
 // DockerPrune runs a full docker cleanup via the agent (builder + image + system prune).
+//
+// Three prunes run behind that one call and the agent keeps going when one
+// fails, so the result has a third state between success and error: some space
+// reclaimed, one stage that never ran. It arrives as a 200 carrying both a
+// reclaimed total and a warning, and both belong in the returned string —
+// that string is the audit row's detail and the line the Settings page prints,
+// and it is the only place the operator can learn the cleanup was incomplete.
+// Reporting the total on its own would keep the agent honest and lie here
+// instead.
 func (c *ComposeClient) DockerPrune() (string, error) {
 	res, err := c.callResult("agent docker prune", agentReq{
 		path:    "/v1/docker/prune",
 		payload: map[string]any{},
 	})
-	return res.Reclaimed, err
+	if err != nil {
+		return "", err
+	}
+	if res.Warning == "" {
+		return res.Reclaimed, nil
+	}
+	if res.Reclaimed == "" {
+		return res.Warning, nil
+	}
+	return res.Reclaimed + " — " + res.Warning, nil
 }
 
 // DockerPruneBuildCache runs only docker builder prune via the agent.
+//
+// No warning to fold in: this endpoint runs the single `docker builder prune`
+// and answers 200 or 500 on its exit status. There is no partial outcome to
+// report, which is why it does not need what DockerPrune does — not an
+// oversight. If it ever grows a second step, it grows this too.
 func (c *ComposeClient) DockerPruneBuildCache() (string, error) {
 	res, err := c.callResult("agent docker prune buildcache", agentReq{
 		path:    "/v1/docker/prune-buildcache",
