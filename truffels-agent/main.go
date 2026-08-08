@@ -308,14 +308,12 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 		if req.Since != "" {
 			shellCmd = fmt.Sprintf("docker logs --tail %d --since %s %s 2>&1 | tail -c 65536", req.Tail, req.Since, req.Container)
 		}
-		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
+		out, err := runStdout(ctx, "sh", "-c", shellCmd)
+		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		cleaned := stripANSI(out.String())
+		cleaned := stripANSI(out)
 		writeJSON(w, 200, map[string]string{"logs": cleaned})
 		return
 	}
@@ -329,12 +327,8 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 	if req.Since != "" {
 		args = append(args, "--since", req.Since)
 	}
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	cleaned := stripANSI(out.String())
+	out, err := runCapture(ctx, "docker", args...)
+	cleaned := stripANSI(out)
 
 	// If compose logs returned empty, fall back to docker logs for each container.
 	// This handles services like ckpool whose \r-heavy output breaks --tail.
@@ -373,15 +367,13 @@ func inspectContainer(name string) containerState {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .}}", name)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	out, err := runStdout(ctx, "docker", "inspect", "--format", "{{json .}}", name)
+	if err != nil {
 		return containerState{Name: name, Status: "not_found", Health: "unknown"}
 	}
 
 	var ir inspectResult
-	if err := json.Unmarshal(out.Bytes(), &ir); err != nil {
+	if err := json.Unmarshal([]byte(out), &ir); err != nil {
 		slog.Error("parse inspect", "container", name, "err", err)
 		return containerState{Name: name, Status: "unknown", Health: "unknown"}
 	}
@@ -420,15 +412,12 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "pull", req.Image)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out.String()})
+	out, err := runCapture(ctx, "docker", "pull", req.Image)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out})
 		return
 	}
-	writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": out})
 }
 
 // allowedImagePrefixes controls which images can be removed via /v1/image/remove.
@@ -467,13 +456,9 @@ func handleImageRemove(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "rmi", req.Image)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	errMsg, err := runCapture(ctx, "docker", "rmi", req.Image)
+	if err != nil {
 		// Best-effort: log warning but return OK for "in use" or "not found" errors
-		errMsg := out.String()
 		slog.Warn("image remove failed (best-effort)", "image", req.Image, "err", errMsg)
 		writeJSON(w, 200, map[string]string{"status": "ok", "warning": errMsg})
 		return
@@ -486,37 +471,24 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	// Each prune is best-effort: a failure is logged and the next one still
+	// runs, and whatever it printed still counts towards the reclaimed total.
+	prunes := []struct {
+		name string
+		args []string
+	}{
+		{"builder prune", []string{"builder", "prune", "-a", "-f"}},
+		{"image prune", []string{"image", "prune", "-a", "-f"}},
+		{"system prune", []string{"system", "prune", "-f"}},
+	}
 	var totalReclaimed bytes.Buffer
-
-	// Builder prune
-	cmd := exec.CommandContext(ctx, "docker", "builder", "prune", "-a", "-f")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		slog.Warn("builder prune failed", "err", err)
+	for _, p := range prunes {
+		out, err := runCapture(ctx, "docker", p.args...)
+		if err != nil {
+			slog.Warn(p.name+" failed", "err", err)
+		}
+		totalReclaimed.WriteString(out)
 	}
-	totalReclaimed.WriteString(out.String())
-
-	// Image prune
-	out.Reset()
-	cmd = exec.CommandContext(ctx, "docker", "image", "prune", "-a", "-f")
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		slog.Warn("image prune failed", "err", err)
-	}
-	totalReclaimed.WriteString(out.String())
-
-	// System prune
-	out.Reset()
-	cmd = exec.CommandContext(ctx, "docker", "system", "prune", "-f")
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		slog.Warn("system prune failed", "err", err)
-	}
-	totalReclaimed.WriteString(out.String())
 
 	// Extract reclaimed sizes from output
 	reclaimed := "unknown"
@@ -546,17 +518,14 @@ func handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "builder", "prune", "-a", "-f")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	out, err := runCapture(ctx, "docker", "builder", "prune", "-a", "-f")
+	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "builder prune failed: " + err.Error()})
 		return
 	}
 
 	reclaimed := "unknown"
-	for _, line := range strings.Split(out.String(), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "reclaimed") {
 			reclaimed = strings.TrimSpace(line)
 			break
@@ -599,15 +568,13 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Get image name from container
-	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format",
+	imageOut, err := runStdout(ctx, "docker", "inspect", "--format",
 		"{{.Config.Image}}", req.Container)
-	var imageOut bytes.Buffer
-	cmd.Stdout = &imageOut
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "cannot inspect container: " + err.Error()})
 		return
 	}
-	imageName := strings.TrimSpace(imageOut.String())
+	imageName := strings.TrimSpace(imageOut)
 
 	writeJSON(w, 200, inspectImageByName(ctx, imageName))
 }
@@ -617,14 +584,11 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 // than as a failure, which is what the digest/tag lookups have always done.
 func inspectImageByName(ctx context.Context, imageName string) imageInspectResponse {
 	// Get image digest
-	cmd2 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+	digestOut, err := runCapture(ctx, "docker", "inspect", "--format",
 		"{{index .RepoDigests 0}}", imageName)
-	var digestOut bytes.Buffer
-	cmd2.Stdout = &digestOut
-	cmd2.Stderr = &digestOut
 	digest := ""
-	if err := cmd2.Run(); err == nil {
-		digest = strings.TrimSpace(digestOut.String())
+	if err == nil {
+		digest = strings.TrimSpace(digestOut)
 		// Extract just the digest part after @
 		if idx := strings.Index(digest, "@"); idx >= 0 {
 			digest = digest[idx+1:]
@@ -632,23 +596,19 @@ func inspectImageByName(ctx context.Context, imageName string) imageInspectRespo
 	}
 
 	// Get tags
-	cmd3 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+	tagsOut, err := runStdout(ctx, "docker", "inspect", "--format",
 		"{{json .RepoTags}}", imageName)
-	var tagsOut bytes.Buffer
-	cmd3.Stdout = &tagsOut
 	var tags []string
-	if cmd3.Run() == nil {
-		_ = json.Unmarshal(bytes.TrimSpace(tagsOut.Bytes()), &tags)
+	if err == nil {
+		_ = json.Unmarshal([]byte(strings.TrimSpace(tagsOut)), &tags)
 	}
 
 	// Get labels — carries org.truffels.source-ref, the ref the image was built from.
-	cmd4 := exec.CommandContext(ctx, "docker", "inspect", "--format",
+	labelsOut, err := runStdout(ctx, "docker", "inspect", "--format",
 		"{{json .Config.Labels}}", imageName)
-	var labelsOut bytes.Buffer
-	cmd4.Stdout = &labelsOut
 	labels := map[string]string{}
-	if cmd4.Run() == nil {
-		_ = json.Unmarshal(bytes.TrimSpace(labelsOut.Bytes()), &labels)
+	if err == nil {
+		_ = json.Unmarshal([]byte(strings.TrimSpace(labelsOut)), &labels)
 	}
 
 	return imageInspectResponse{
@@ -720,12 +680,9 @@ func handleImageTag(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "tag", req.Source, req.Target)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "docker tag failed: " + err.Error(), "output": out.String()})
+	out, err := runCapture(ctx, "docker", "tag", req.Source, req.Target)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "docker tag failed: " + err.Error(), "output": out})
 		return
 	}
 	slog.Info("image tagged", "source", req.Source, "target", req.Target)
@@ -764,18 +721,15 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	args := append([]string{"stats", "--no-stream", "--format", "{{json .}}"}, names...)
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &bytes.Buffer{}
-	if err := cmd.Run(); err != nil {
+	out, err := runStdout(ctx, "docker", args...)
+	if err != nil {
 		slog.Error("docker stats", "err", err)
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
 
 	var results []containerStats
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
@@ -899,17 +853,13 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 	var lastErr error
 	var lastOutput string
 	for attempt := 1; attempt <= composeBuildMaxAttempts; attempt++ {
-		var out bytes.Buffer
-		cmd := exec.CommandContext(ctx, "nsenter", nsArgs...)
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		err := cmd.Run()
+		out, err := runCapture(ctx, "nsenter", nsArgs...)
 		if err == nil {
-			writeJSON(w, 200, map[string]string{"status": "ok", "output": out.String()})
+			writeJSON(w, 200, map[string]string{"status": "ok", "output": out})
 			return
 		}
 		lastErr = err
-		lastOutput = out.String()
+		lastOutput = out
 		slog.Warn("compose build failed", "service", req.ServiceID, "attempt", attempt, "max", composeBuildMaxAttempts, "error", err.Error())
 		if attempt < composeBuildMaxAttempts {
 			select {
@@ -943,6 +893,33 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, req *serviceReque
 	}
 	slog.Info("agent action", "action", strings.TrimPrefix(r.URL.Path, "/v1/compose/"), "service", req.ServiceID)
 	return true
+}
+
+// runCapture runs a command under ctx and returns its combined stdout+stderr
+// alongside the run error. The combined stream is what nearly every caller
+// reports back as "output": for docker and git the reason a command failed is
+// in what it printed, not in its exit status, so the two are always wanted
+// together.
+func runCapture(ctx context.Context, name string, args ...string) (string, error) {
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	return out.String(), err
+}
+
+// runStdout is runCapture for the commands whose stderr must stay out of the
+// result: the log fetches, which already fold stderr into stdout inside the
+// shell, and the `docker inspect --format` lookups, whose output is parsed as
+// JSON and would be corrupted by a warning landing in the same buffer. stderr
+// is discarded, exactly as it was when these call sites set only cmd.Stdout.
+func runStdout(ctx context.Context, name string, args ...string) (string, error) {
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = &out
+	err := cmd.Run()
+	return out.String(), err
 }
 
 func runCompose(composeDir string, args ...string) error {
@@ -1036,22 +1013,14 @@ func handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 
 	// nsrun enters mount namespace (filesystem access)
 	nsrun := func(args ...string) string {
-		a := append([]string{"-t", "1", "-m", "--"}, args...)
-		cmd := exec.CommandContext(ctx, "nsenter", a...)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		_ = cmd.Run()
-		return strings.TrimSpace(out.String())
+		out, _ := runStdout(ctx, "nsenter", append([]string{"-t", "1", "-m", "--"}, args...)...)
+		return strings.TrimSpace(out)
 	}
 
 	// nsrunAll enters mount + UTS + network namespaces
 	nsrunAll := func(args ...string) string {
-		a := append([]string{"-t", "1", "-m", "-u", "-n", "--"}, args...)
-		cmd := exec.CommandContext(ctx, "nsenter", a...)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		_ = cmd.Run()
-		return strings.TrimSpace(out.String())
+		out, _ := runStdout(ctx, "nsenter", append([]string{"-t", "1", "-m", "-u", "-n", "--"}, args...)...)
+		return strings.TrimSpace(out)
 	}
 
 	// Hostname (needs UTS namespace)
@@ -1325,14 +1294,12 @@ func walkDockerStorageForever(c *dockerStorageCache) {
 func fetchDockerStorage() []dockerStorageItem {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "system", "df", "--format", "{{json .}}")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	out, err := runStdout(ctx, "docker", "system", "df", "--format", "{{json .}}")
+	if err != nil {
 		return nil
 	}
 	var items []dockerStorageItem
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1518,21 +1485,17 @@ func handleSystemJournal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "nsenter", args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	out, err := runCapture(ctx, "nsenter", args...)
+	if err != nil {
 		// journalctl exits 1 when boot not found — return empty logs, not an error
-		text := out.String()
-		if strings.Contains(text, "no persistent journal") || strings.Contains(text, "No boot ID matched") || strings.Contains(text, "No journal boot entry found") {
+		if strings.Contains(out, "no persistent journal") || strings.Contains(out, "No boot ID matched") || strings.Contains(out, "No journal boot entry found") {
 			writeJSON(w, 200, map[string]string{"logs": ""})
 			return
 		}
-		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": text})
+		writeJSON(w, 500, map[string]string{"error": err.Error(), "logs": out})
 		return
 	}
-	writeJSON(w, 200, map[string]string{"logs": out.String()})
+	writeJSON(w, 200, map[string]string{"logs": out})
 }
 
 type bootEntry struct {
@@ -1554,25 +1517,19 @@ func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Check if persistent journal is configured via drop-in
-	cmd1 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+	_, testErr := runStdout(ctx, "nsenter", "-t", "1", "-m", "--",
 		"test", "-f", "/etc/systemd/journald.conf.d/truffels.conf")
-	persistent := cmd1.Run() == nil
+	persistent := testErr == nil
 
 	// Read swappiness
-	cmd2 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+	swapOut, _ := runStdout(ctx, "nsenter", "-t", "1", "-m", "--",
 		"cat", "/proc/sys/vm/swappiness")
-	var swapOut bytes.Buffer
-	cmd2.Stdout = &swapOut
-	_ = cmd2.Run()
-	swappiness, _ := strconv.Atoi(strings.TrimSpace(swapOut.String()))
+	swappiness, _ := strconv.Atoi(strings.TrimSpace(swapOut))
 
 	// Journal disk usage
-	cmd3 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+	usageOut, _ := runStdout(ctx, "nsenter", "-t", "1", "-m", "--",
 		"journalctl", "--disk-usage")
-	var usageOut bytes.Buffer
-	cmd3.Stdout = &usageOut
-	_ = cmd3.Run()
-	usage := strings.TrimSpace(usageOut.String())
+	usage := strings.TrimSpace(usageOut)
 	// Extract just the size part, e.g. "Archived and active journals take up 8.0M in the file system."
 	if idx := strings.Index(usage, "take up "); idx >= 0 {
 		rest := usage[idx+8:]
@@ -1582,13 +1539,10 @@ func handleSystemTuningGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// List available boots
-	cmd4 := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
+	bootsOut, _ := runStdout(ctx, "nsenter", "-t", "1", "-m", "--",
 		"journalctl", "--list-boots", "--no-pager")
-	var bootsOut bytes.Buffer
-	cmd4.Stdout = &bootsOut
-	_ = cmd4.Run()
 	var boots []bootEntry
-	for _, line := range strings.Split(bootsOut.String(), "\n") {
+	for _, line := range strings.Split(bootsOut, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "IDX") {
 			continue
@@ -1638,18 +1592,16 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Value == "true" {
 			// Create persistent journal dir, set Storage=persistent via drop-in, restart journald
-			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
-				"sh", "-c", "mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && mkdir -p /etc/systemd/journald.conf.d && printf '[Journal]\\nStorage=persistent\\n' > /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+			if out, err := runCapture(ctx, "nsenter", "-t", "1", "-m", "--",
+				"sh", "-c", "mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && mkdir -p /etc/systemd/journald.conf.d && printf '[Journal]\\nStorage=persistent\\n' > /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald"); err != nil {
+				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out})
 				return
 			}
 		} else {
 			// Remove persistent journal dir + drop-in config, restart journald
-			cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--",
-				"sh", "-c", "rm -rf /var/log/journal && rm -f /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+			if out, err := runCapture(ctx, "nsenter", "-t", "1", "-m", "--",
+				"sh", "-c", "rm -rf /var/log/journal && rm -f /etc/systemd/journald.conf.d/truffels.conf && systemctl restart systemd-journald"); err != nil {
+				writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out})
 				return
 			}
 		}
@@ -1664,9 +1616,8 @@ func handleSystemTuningSet(w http.ResponseWriter, r *http.Request) {
 		script := fmt.Sprintf(
 			"sysctl -w vm.swappiness=%d && mkdir -p /etc/sysctl.d && echo 'vm.swappiness=%d' > /etc/sysctl.d/90-truffels.conf",
 			val, val)
-		cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "--", "sh", "-c", script)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error(), "output": string(out)})
+		if out, err := runCapture(ctx, "nsenter", "-t", "1", "-m", "--", "sh", "-c", script); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error(), "output": out})
 			return
 		}
 
@@ -1763,12 +1714,8 @@ func prepareBuildSourceForCheckout(ctx context.Context, repoDir string) (string,
 	var log bytes.Buffer
 	for _, args := range steps {
 		full := append([]string{"-c", "safe.directory=*", "-C", repoDir}, args...)
-		cmd := exec.CommandContext(ctx, "git", full...)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		err := cmd.Run()
-		log.WriteString(out.String())
+		out, err := runCapture(ctx, "git", full...)
+		log.WriteString(out)
 		if err != nil {
 			return log.String(), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 		}
@@ -1959,12 +1906,9 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch tags (safe.directory needed: agent runs as root, repo owned by uid 1000)
-	fetchCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags", "--force")
-	var fetchOut bytes.Buffer
-	fetchCmd.Stdout = &fetchOut
-	fetchCmd.Stderr = &fetchOut
-	if err := fetchCmd.Run(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "git fetch failed: " + err.Error(), "output": fetchOut.String()})
+	fetchOut, err := runCapture(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "fetch", "--tags", "--force")
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "git fetch failed: " + err.Error(), "output": fetchOut})
 		return
 	}
 
@@ -1979,26 +1923,23 @@ func handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, 500, map[string]string{
 				"error":  "git prepare failed: " + err.Error(),
-				"output": prepOut + fetchOut.String() + out,
+				"output": prepOut + fetchOut + out,
 			})
 			return
 		}
 	}
 
 	// Checkout tag
-	checkoutCmd := exec.CommandContext(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag)
-	var checkoutOut bytes.Buffer
-	checkoutCmd.Stdout = &checkoutOut
-	checkoutCmd.Stderr = &checkoutOut
-	if err := checkoutCmd.Run(); err != nil {
+	checkoutOut, err := runCapture(ctx, "git", "-c", "safe.directory=*", "-C", req.RepoDir, "checkout", req.Tag)
+	if err != nil {
 		writeJSON(w, 500, map[string]string{
 			"error":  "git checkout failed: " + err.Error(),
-			"output": prepOut + fetchOut.String() + collisionOut + checkoutOut.String(),
+			"output": prepOut + fetchOut + collisionOut + checkoutOut,
 		})
 		return
 	}
 
-	writeJSON(w, 200, map[string]string{"status": "ok", "output": prepOut + fetchOut.String() + collisionOut + checkoutOut.String()})
+	writeJSON(w, 200, map[string]string{"status": "ok", "output": prepOut + fetchOut + collisionOut + checkoutOut})
 }
 
 func isValidTag(tag string) bool {
@@ -2494,13 +2435,11 @@ func fallbackContainerLogs(ctx context.Context, serviceID string, tail int, sinc
 		if since != "" {
 			shellCmd = fmt.Sprintf("docker logs --since %s %s 2>&1 | tail -c 65536", since, name)
 		}
-		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
+		out, err := runStdout(ctx, "sh", "-c", shellCmd)
+		if err != nil {
 			continue
 		}
-		cleaned := stripANSI(out.String())
+		cleaned := stripANSI(out)
 		// Split on \n, take last N lines
 		lines := strings.Split(strings.TrimRight(cleaned, "\n"), "\n")
 		if len(lines) > tail {
