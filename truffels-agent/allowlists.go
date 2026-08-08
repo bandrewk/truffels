@@ -59,28 +59,130 @@ var allowedContainers = map[string]bool{
 
 // --- Container images ---
 
-// allowedImagePrefixes controls which images can be removed via /v1/image/remove.
+// allowedImagePrefixes names the image namespaces this appliance manages: the
+// images it builds itself plus the upstream images of the services it runs.
+// btcpayserver/ is Bitcoin Core and getumbrel/ is electrs — both are live, and
+// neither is a leftover.
 var allowedImagePrefixes = []string{
 	"truffels/", "mempool/", "btcpayserver/", "getumbrel/",
 	"caddy:", "postgres:", "mariadb:",
 }
 
-// isAllowedImageRef restricts image operations to images this appliance builds
-// itself. Anything else — upstream images, anything with shell metacharacters —
-// is refused; the agent runs as root against the docker socket. Exact charset
-// check, no normalising: a cleaned or lowercased ref would let something that
-// should fail slip through.
-func isAllowedImageRef(ref string) bool {
-	if !strings.HasPrefix(ref, "truffels/") {
-		return false
-	}
-	for _, c := range ref {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') &&
-			c != '/' && c != ':' && c != '.' && c != '-' && c != '_' {
+// Image references reach docker as a single argv element — exec.Command takes
+// an argv and no path here goes through a shell — so a metacharacter cannot
+// start a second command today. The charset check is what keeps that true if
+// the execution path ever changes, and it is the reasoning isAllowedImageRef
+// has carried since it was written. The same reasoning now covers the same kind
+// of input on the other two endpoints.
+//
+// Two alphabets, not one, and the difference is load-bearing:
+//
+//   - managedImageRefChars covers upstream references. Every upstream image in
+//     this project is digest-pinned — install.sh writes
+//     "mariadb:lts@sha256:8164f18…" — so '@' and hex must pass or every
+//     pull-based service stops updating.
+//   - localImageRefChars covers the images this appliance builds itself. Those
+//     are only ever "truffels/<repo>:<tag>"; nothing in truffels-api ever
+//     constructs a digest for one (composeImageRe does not even match a ref
+//     carrying '@'). Handing them the upstream alphabet would widen
+//     isAllowedImageRef with no caller asking for it.
+//
+// So the loop is shared and the alphabet is not. A single merged set could only
+// be the union, and the union is the looser of the two.
+//
+// Charset only — deliberately not a reference parser. A parser normalises, and
+// this file's whole premise is that nothing here normalises before deciding.
+// It would also reject shapes that are real: pruneOldImages builds
+// "<image>:<version>", and for the digest-tracked mempool-db that yields
+// "mariadb:sha256:b1c7…" — two colons, no '@', not a well-formed reference, and
+// today answered with a best-effort 200 rather than a 403.
+const (
+	localImageRefChars   = "abcdefghijklmnopqrstuvwxyz0123456789/:._-"
+	managedImageRefChars = localImageRefChars + "@"
+)
+
+func hasOnlyChars(s, allowed string) bool {
+	for _, c := range s {
+		if !strings.ContainsRune(allowed, c) {
 			return false
 		}
 	}
 	return true
+}
+
+// isAllowedManagedImage gates both /v1/image/pull and /v1/image/remove.
+//
+// One predicate for both on purpose. They take the same kind of input — a
+// reference to an image on this appliance — and hand it to the same root-level
+// docker CLI; the only difference is the verb. An image this box may not delete
+// is an image it has no reason to fetch, and a `docker pull` of an attacker's
+// choosing on a machine holding a Bitcoin node is a worse outcome than a stray
+// `docker rmi`, not a milder one. Splitting the two checks is how /v1/image/pull
+// came to have none at all.
+//
+// Distinct from isAllowedImageRef below: that one covers the *locally built*
+// images only, and is stricter for reasons documented there.
+func isAllowedManagedImage(ref string) bool {
+	if !hasOnlyChars(ref, managedImageRefChars) {
+		return false
+	}
+	for _, prefix := range allowedImagePrefixes {
+		if strings.HasPrefix(ref, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowedLocalImageRepos are the image repositories this appliance builds
+// itself. Five, and they are enumerated rather than matched by the "truffels/"
+// prefix, because the prefix is a namespace an attacker may name freely: with
+// it alone, /v1/image/tag would happily move any tag onto truffels/anything and
+// /v1/image/inspect-by-name would report on it.
+//
+// NOT derivable from allowedServices, and it must not be generated from it. The
+// service is "truffels-agent"; the image it runs is "truffels/agent". The
+// service "ckstats" runs both the truffels-ckstats and truffels-ckstats-cron
+// containers off the single truffels/ckstats image, so there is no
+// truffels/ckstats-cron. And the "truffels" service has no image of its own at
+// all — it is the stack of the three below.
+//
+// The five: agent, api and web are the self-update targets, built and tagged
+// truffels/<name>:<release>. ckpool and ckstats are the NeedsBuild services,
+// built from vendored sources and tagged with a version, a commit hash, :latest
+// or :rollback. Verified against `docker images` on the device.
+//
+// Adding one means a sixth image exists. Check that before adding it.
+var allowedLocalImageRepos = map[string]bool{
+	"truffels/agent":   true,
+	"truffels/api":     true,
+	"truffels/web":     true,
+	"truffels/ckpool":  true,
+	"truffels/ckstats": true,
+}
+
+// isAllowedImageRef restricts image operations to images this appliance builds
+// itself. Anything else — upstream images, an unknown repository in our own
+// namespace, anything with shell metacharacters — is refused; the agent runs as
+// root against the docker socket. Exact charset check and an exact repository
+// match, no normalising: a cleaned or lowercased ref would let something that
+// should fail slip through.
+//
+// The tag is split off at the last ':' and then deliberately not inspected
+// beyond the charset. Tags legitimately take four unrelated shapes here
+// (:v0.3.1-dev.29, :v1.0.0, :latest, :rollback, and a bare commit hash for
+// ckstats), and a pattern covering all of them would say nothing a charset
+// check does not already say. A ref with no tag keeps passing, exactly as
+// before: the repository is what this decides on.
+func isAllowedImageRef(ref string) bool {
+	if !hasOnlyChars(ref, localImageRefChars) {
+		return false
+	}
+	repo := ref
+	if idx := strings.LastIndex(repo, ":"); idx >= 0 {
+		repo = repo[:idx]
+	}
+	return allowedLocalImageRepos[repo]
 }
 
 // --- Journal queries ---
@@ -170,9 +272,43 @@ func isValidCommitHash(s string) bool {
 // escapes. Returns ("", error) otherwise. The path's parent must exist for
 // EvalSymlinks to resolve cleanly; if the parent doesn't exist yet, the check
 // walks upward until it finds an existing ancestor and validates that one.
+//
+// KNOWN LIMIT — this is not a defence against a racing attacker.
+//
+// The symlink check resolves the nearest ancestor that exists *at the time of
+// the call*. Every component created afterwards is unexamined, and so is any
+// component swapped for a symlink between this returning and the caller's
+// os.MkdirAll / os.WriteFile / os.RemoveAll running. That is a plain
+// time-of-check/time-of-use gap and it cannot be closed from here: closing it
+// means the file operations themselves must not traverse a symlink — openat2
+// with RESOLVE_BENEATH, or an fd-anchored walk — which is a rewrite of every
+// caller, not a change to this function.
+//
+// It is stated rather than papered over because the callers' safety arguments
+// have to be able to lean on what this actually promises. What it does promise:
+// no relative escape, and no symlink escape via a component that already
+// existed. What it does not: atomicity with the operation that follows. The
+// exposure is bounded elsewhere — /srv/truffels is root-owned, the endpoints
+// take service-shaped inputs, and clear-dir carries its own basename and depth
+// checks — not by this.
 func validateUnderRoot(p, root string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("empty path")
+	}
+	// Normalise and check the root before using it as a prefix. It is a
+	// parameter like any other, and nothing verified it: a root with a trailing
+	// slash made root+"/" a double slash that no cleaned path can match, so
+	// every request under it was silently refused, and an empty root made the
+	// prefix "/", which matches every absolute path there is — the boundary
+	// inverted, in both directions, from a caller's typo. "/" is refused for the
+	// same reason as "": a root containing the whole filesystem bounds nothing.
+	//
+	// Today's callers pass clean absolute values (composeRoot, configRoot,
+	// dataRoot and repoDir), so this changes no live behaviour. That was luck,
+	// and luck is not a check.
+	root = filepath.Clean(root)
+	if !filepath.IsAbs(root) || root == "/" {
+		return "", fmt.Errorf("invalid root %q", root)
 	}
 	cleaned := filepath.Clean(p)
 	if !strings.HasPrefix(cleaned, root+"/") {

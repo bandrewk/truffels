@@ -500,6 +500,83 @@ func TestHandleImagePull_EmptyImage(t *testing.T) {
 	}
 }
 
+// pullRefsInProduction is every image reference that really reaches
+// /v1/image/pull on this appliance. Fetching an image is not less privileged
+// than deleting one, so the endpoint now applies the same allowlist as
+// /v1/image/remove — and this list is the proof that the tightening does not
+// abandon a single service.
+//
+// The values are not invented. They come from:
+//   - install.sh, which pins bitcoind and electrs by digest;
+//   - the live compose files under /srv/truffels/compose;
+//   - updates.Engine, which builds pull refs as <image>:<version> from the
+//     registry's Images (btcpayserver/bitcoin, getumbrel/electrs,
+//     mempool/backend, mempool/frontend, mariadb, postgres, caddy,
+//     truffels/{agent,api,web}) — see engine.go applyUpdate/rollback;
+//   - api.services "pull-restart", which pulls the running image ref with the
+//     digest stripped.
+//
+// A change that turns any of these into a 403 stops updates for that service.
+var pullRefsInProduction = []string{
+	// install.sh pins — digest-carrying, and the reason no charset filter here
+	// may reject '@' or hex.
+	"btcpayserver/bitcoin:30.2@sha256:cff45bbc8e166bb3403675baea73cf597c7373f20a87a76101e3d849f766d61e",
+	"getumbrel/electrs:v0.11.0@sha256:0a2c6f573abfd8d724651c6ba1c1f3a9c740219c1cf0f4468043c3342170d8a5",
+	"mariadb:lts@sha256:8164f184d16c30e2f159e30518113667b796306dff0fe558876ab1ff521a682f",
+	"postgres:16.13-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416",
+	"caddy:2.11.2-alpine@sha256:fce4f15aad23222c0ac78a1220adf63bae7b94355d5ea28eee53910624acedfa",
+	"mempool/backend:v3.2.1@sha256:d3531090e3bdd9a3dd38151349c5027768c3b7132438db267df8d8f026e15e61",
+	"mempool/frontend:v3.2.1@sha256:dd126cf383bd425ad46710925697c6a7925675a535c1026c206f2c092231e106",
+	// The refs the live compose files name today.
+	"btcpayserver/bitcoin:31.0",
+	"getumbrel/electrs:v0.11.1",
+	"mempool/backend:v3.3.1",
+	"mempool/frontend:v3.3.1",
+	"caddy:2.11.4-alpine",
+	"postgres:16.14-alpine",
+	"mariadb:lts",
+	"truffels/agent:v0.3.1-dev.29",
+	"truffels/api:v0.3.1-dev.29",
+	"truffels/web:v0.3.1-dev.29",
+}
+
+func TestHandleImagePull_AllowsEveryRefProductionReallyPulls(t *testing.T) {
+	for _, img := range pullRefsInProduction {
+		reqBody, _ := json.Marshal(imagePullRequest{Image: img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+		handleImagePull(w, r)
+
+		// docker is absent in the test container, so the pull itself fails with
+		// 500. What must never happen is the guard refusing the ref.
+		if w.Code == 403 {
+			t.Errorf("pull of %q was refused; that stops updates for this service: %s", img, w.Body.String())
+		}
+	}
+}
+
+func TestHandleImagePull_RefusesImagesOutsideTheAllowlist(t *testing.T) {
+	// Same inputs /v1/image/remove refuses. An image this appliance may not
+	// delete is an image it has no reason to fetch either.
+	for _, img := range []string{"nginx:latest", "alpine:3", "evil/miner:latest", "bitcoin/bitcoin:29.0"} {
+		reqBody, _ := json.Marshal(imagePullRequest{Image: img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+		handleImagePull(w, r)
+
+		if w.Code != 403 {
+			t.Errorf("expected 403 for %q, got %d: %s", img, w.Code, w.Body.String())
+		}
+		var body map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if body["error"] != "image not allowed" {
+			t.Errorf("error for %q = %q, want the same text /v1/image/remove uses", img, body["error"])
+		}
+	}
+}
+
 // --- handleImageInspect ---
 
 func TestHandleImageInspect_DeniedContainer(t *testing.T) {
@@ -1563,6 +1640,85 @@ func TestHandleImageRemove_AllowedPrefixes(t *testing.T) {
 	}
 }
 
+func TestHandleImageRemove_AllowsEveryRefProductionReallyRemoves(t *testing.T) {
+	// The prefix allowlist gained a charset check. These are the shapes the
+	// pruner and the update engine really hand to /v1/image/remove; a charset
+	// that rejects one of them leaves old images on a 1.8 TB disk forever.
+	refs := append([]string{
+		// updates.Engine.pruneOldImages builds "<image>:<version>", and for a
+		// digest-tracked service (mempool-db) the version *is* a digest, so the
+		// ref carries two colons and no '@'. Odd, but real.
+		"mariadb:sha256:b1c7bf836e64ed9406a8984af29509f40089d55cea14b32f12c4726a1f17104b",
+		// rollbackImageRef and the compose fallback.
+		"truffels/ckpool:rollback",
+		"truffels/ckstats:rollback",
+		"truffels/ckstats:latest",
+	}, pullRefsInProduction...)
+
+	for _, img := range refs {
+		reqBody, _ := json.Marshal(map[string]string{"image": img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+		handleImageRemove(w, r)
+		if w.Code == 403 {
+			t.Errorf("removal of %q was refused: %s", img, w.Body.String())
+		}
+	}
+}
+
+// The gap this closes: the prefix list said nothing about the characters after
+// the prefix, so "mempool/x; rm -rf /" reached `docker rmi` as an argument.
+// Not exploitable — exec.Command takes an argv, there is no shell — but
+// isAllowedImageRef has refused exactly these bytes since it was written, and
+// the same input type deserves the same answer.
+func TestIsAllowedManagedImage_Charset(t *testing.T) {
+	for _, ref := range []string{
+		"mempool/x; rm -rf /", "mempool/backend:latest; id",
+		"mariadb:lts $(id)", "caddy:2`id`", "postgres:16&&id",
+		"truffels/api:v1|id", "mempool/backend:v3\nid",
+		"mempool/back end:v3", "caddy:*", "mariadb:lts'", `mariadb:lts"`,
+		"mariadb:lts\\", "truffels/api:v1>x", "postgres:16<x",
+		"Mempool/backend:v3", "mempool/BACKEND:v3",
+	} {
+		if isAllowedManagedImage(ref) {
+			t.Errorf("ref %q must be rejected", ref)
+		}
+	}
+
+	for _, ref := range append([]string{
+		"mariadb:sha256:b1c7bf836e64ed9406a8984af29509f40089d55cea14b32f12c4726a1f17104b",
+		"truffels/ckpool:rollback", "truffels/ckstats:latest",
+	}, pullRefsInProduction...) {
+		if !isAllowedManagedImage(ref) {
+			t.Errorf("ref %q is a real production reference and must be allowed", ref)
+		}
+	}
+}
+
+func TestHandleImageRemove_RefusesShellMetacharacters(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": "mempool/x; rm -rf /"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImagePull_RefusesShellMetacharacters(t *testing.T) {
+	reqBody, _ := json.Marshal(imagePullRequest{Image: "mempool/x; rm -rf /"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+	handleImagePull(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // --- formatSize ---
 
 func TestFormatSize(t *testing.T) {
@@ -2099,6 +2255,76 @@ func TestValidateUnderRoot_AllowsNestedUnderExistingRoot(t *testing.T) {
 	}
 }
 
+// The root was used as a raw prefix, so a caller passing a trailing slash built
+// root+"/" as a double slash and every path under it was rejected. No caller
+// does that today; that is the callers being careful, not a property this
+// function had.
+func TestValidateUnderRoot_NormalisesTheRoot(t *testing.T) {
+	base := t.TempDir()
+	target := base + "/mempool/cache"
+
+	for _, root := range []string{base + "/", base + "//", base + "/."} {
+		cleaned, err := validateUnderRoot(target, root)
+		if err != nil {
+			t.Errorf("root %q rejected a path under it: %v", root, err)
+			continue
+		}
+		if cleaned != target {
+			t.Errorf("root %q: cleaned = %q, want %q", root, cleaned, target)
+		}
+	}
+}
+
+// A root that is not an absolute directory is not a boundary, and every value
+// here used to be accepted as one: "" and "." make root+"/" match relative
+// paths, and "/" would have to allow the entire filesystem to be consistent.
+// The one caller that can pass an empty root (handleFileReconcile, when
+// TRUFFELS_CONFIG_ROOT is unset) already refuses first; this is the backstop.
+func TestValidateUnderRoot_RejectsUnusableRoots(t *testing.T) {
+	for _, root := range []string{"", ".", "/", "//", "relative/dir", "./x"} {
+		if _, err := validateUnderRoot("/srv/truffels/data/mempool/cache", root); err == nil {
+			t.Errorf("root %q was accepted; it does not bound anything", root)
+		}
+	}
+}
+
+// The production roots with the paths the API really sends. None of them exist
+// inside the test container, which is also true of the agent container for
+// parts of the tree — the walk to the nearest existing ancestor has to keep
+// answering for them.
+func TestValidateUnderRoot_AcceptsProductionPaths(t *testing.T) {
+	cases := []struct{ path, root string }{
+		{"/srv/truffels/data/mempool/cache", "/srv/truffels/data"},
+		{"/srv/truffels/data/ckstats/postgres", "/srv/truffels/data"},
+		{"/srv/truffels/data/bitcoin/blockchain", "/srv/truffels/data"},
+		{"/srv/truffels/compose/truffels/docker-compose.yml", "/srv/truffels/compose"},
+		{"/srv/truffels/compose/mempool/docker-compose.yml", "/srv/truffels/compose"},
+		{"/srv/truffels/config/bitcoin/bitcoin.conf", "/srv/truffels/config"},
+		{"/srv/truffels/config/proxy/Caddyfile", "/srv/truffels/config"},
+	}
+	for _, c := range cases {
+		cleaned, err := validateUnderRoot(c.path, c.root)
+		if err != nil {
+			t.Errorf("validateUnderRoot(%q, %q) = %v, want accept", c.path, c.root, err)
+		}
+		if cleaned != c.path {
+			t.Errorf("cleaned = %q, want %q", cleaned, c.path)
+		}
+	}
+}
+
+func TestValidateUnderRoot_StillRejectsEscapes(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{
+		"", "/etc/passwd", root, root + "/../etc", root + "/x/../../etc",
+		filepath.Dir(root), "/",
+	} {
+		if _, err := validateUnderRoot(p, root); err == nil {
+			t.Errorf("path %q under root %q was accepted", p, root)
+		}
+	}
+}
+
 // --- dirSizeCache ---
 
 func TestDirSizeCache_HitMiss(t *testing.T) {
@@ -2298,10 +2524,78 @@ func TestImageTagRejectsForeignImages(t *testing.T) {
 	}
 }
 
+// localRefsInProduction is every "truffels/…" reference the API really sends to
+// /v1/image/inspect-by-name and /v1/image/tag. Like pullRefsInProduction, the
+// values are read off the system rather than invented:
+//
+//   - truffels/{agent,api,web}:<version> — updates.selfUpdateImage and
+//     verifySelfBuild during a self-update; the live compose files name
+//     v0.3.1-dev.29 today.
+//   - truffels/{ckpool,ckstats}:<tag> — updates.composeImageRef, read out of
+//     the compose file (truffels/ckpool:v1.0.0, truffels/ckstats:latest), plus
+//     its conventional :latest fallback.
+//   - truffels/{ckpool,ckstats}:rollback — updates.rollbackImageRef, the single
+//     staged generation. Both exist on the device right now.
+//   - a bare commit hash as a tag: ckstats builds from a git commit, and
+//     RewriteTags moves the compose ref onto it.
+var localRefsInProduction = []string{
+	"truffels/agent:v0.3.1-dev.29",
+	"truffels/api:v0.3.1-dev.29",
+	"truffels/web:v0.3.1-dev.29",
+	"truffels/agent:v1.0.0",
+	"truffels/api:rollback",
+	"truffels/ckpool:v1.0.0",
+	"truffels/ckpool:rollback",
+	"truffels/ckpool:latest",
+	"truffels/ckstats:latest",
+	"truffels/ckstats:rollback",
+	"truffels/ckstats:8f2e7c2f8403",
+}
+
+// The prefix "truffels/" alone let the agent inspect and retag any repository
+// in the namespace. Exactly five exist, and they are not derivable from
+// allowedServices: the service is "truffels-agent", the image is
+// "truffels/agent".
+func TestIsAllowedImageRef_OnlyRealRepositories(t *testing.T) {
+	for _, ref := range localRefsInProduction {
+		if !isAllowedImageRef(ref) {
+			t.Errorf("ref %q is used in production and must be allowed", ref)
+		}
+	}
+
+	denied := map[string]string{
+		// No such image and no such service: the ckstats-cron *container* runs
+		// the truffels/ckstats image. `docker images` on the device lists five
+		// truffels repositories and this is not one of them.
+		"truffels/ckstats-cron:rollback": "container name, not an image repository",
+		// rollbackImageRef would produce this for the truffels stack, but
+		// ApplyUpdateToVersion routes github_release sources to applySelfUpdate
+		// and RollbackService refuses them before the ref is built. Nothing
+		// stages it, so nothing may act on it.
+		"truffels/truffels:rollback": "never staged",
+		// Service IDs that name no image of ours.
+		"truffels/bitcoind:latest": "upstream service, not built here",
+		"truffels/mempool:latest":  "upstream service, not built here",
+		"truffels/proxy:latest":    "upstream service, not built here",
+		// Near-misses on the real names.
+		"truffels/agent-x:v1": "not a repository",
+		"truffels/ap:v1":      "not a repository",
+		"truffels/apix:v1":    "not a repository",
+		"truffels/:latest":    "empty repository",
+		"truffels/evil:v1":    "attacker-chosen repository",
+		"truffels/agent/x:v1": "extra path segment",
+	}
+	for ref, why := range denied {
+		if isAllowedImageRef(ref) {
+			t.Errorf("ref %q must be rejected (%s)", ref, why)
+		}
+	}
+}
+
 func TestIsAllowedImageRef_Charset(t *testing.T) {
 	allowed := []string{
 		"truffels/ckpool:v1.0.0", "truffels/ckstats:latest",
-		"truffels/ckstats-cron:rollback", "truffels/api:v0.3.1-dev.23",
+		"truffels/api:v0.3.1-dev.23",
 		"truffels/web:sha256_abc",
 	}
 	for _, ref := range allowed {
