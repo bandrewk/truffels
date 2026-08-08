@@ -3,15 +3,15 @@ package templates
 import "truffels-api/internal/model"
 
 var Mempool = model.ServiceTemplate{
-	ID:             "mempool",
-	DisplayName:    "mempool.space",
-	Description:    "Bitcoin block explorer and mempool visualizer",
-	ContainerNames: []string{"truffels-mempool-backend", "truffels-mempool-frontend"},
-	Dependencies:   []string{"bitcoind", "electrs", "mempool-db"},
-	MemoryLimit:    "3328M",
+	ID:               "mempool",
+	DisplayName:      "mempool.space",
+	Description:      "Bitcoin block explorer and mempool visualizer",
+	ContainerNames:   []string{"truffels-mempool-backend", "truffels-mempool-frontend"},
+	Dependencies:     []string{"bitcoind", "electrs", "mempool-db"},
+	MemoryLimit:      "3328M",
 	ConfigPath:       "",
 	RequiresUnpruned: true,
-	Port:           "80 (via proxy)",
+	Port:             "80 (via proxy)",
 	UpdateSource: &model.UpdateSource{
 		Type:   model.SourceDockerHub,
 		Images: []string{"mempool/backend", "mempool/frontend"},
@@ -24,10 +24,10 @@ var Mempool = model.ServiceTemplate{
 	},
 	DataDirs: []model.DataDir{
 		{
-			Path:        "/srv/truffels/data/mempool/cache",
-			Label:       "Mempool cache",
-			Description: "RBF + mempool state cache. Safe to clear — rebuilt from electrs on next start. The mempool backend will be briefly stopped during clear.",
-			Clearable:   true,
+			Path:         "/srv/truffels/data/mempool/cache",
+			Label:        "Mempool cache",
+			Description:  "RBF + mempool state cache. Safe to clear — rebuilt from electrs on next start. The mempool backend will be briefly stopped during clear.",
+			Clearable:    true,
 			RequiresStop: true,
 		},
 		{

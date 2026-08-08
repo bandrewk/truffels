@@ -17,11 +17,11 @@ const (
 type SourceType string
 
 const (
-	SourceDockerHub       SourceType = "dockerhub"
-	SourceDockerDigest    SourceType = "docker_digest"
-	SourceGitHub          SourceType = "github"
-	SourceBitbucket       SourceType = "bitbucket"
-	SourceGitHubRelease   SourceType = "github_release"
+	SourceDockerHub     SourceType = "dockerhub"
+	SourceDockerDigest  SourceType = "docker_digest"
+	SourceGitHub        SourceType = "github"
+	SourceBitbucket     SourceType = "bitbucket"
+	SourceGitHubRelease SourceType = "github_release"
 )
 
 // UpdateSource defines where a service gets its updates from.
@@ -32,8 +32,8 @@ type UpdateSource struct {
 	Branch     string     `json:"branch,omitempty"`     // github/bitbucket: "main" or "master"
 	NeedsBuild bool       `json:"needs_build"`          // true for custom-built images (ckpool, ckstats)
 	TagFilter  string     `json:"tag_filter,omitempty"` // dockerhub: only consider tags matching this prefix (e.g. "2.9-alpine", "16-alpine")
-	RefScheme  string     `json:"ref_scheme,omitempty"`  // "tag" | "commit"; leer = "commit"
-	RepoDir    string     `json:"repo_dir,omitempty"`    // Arbeitskopie auf Platte, wenn das Dockerfile nicht selbst klont
+	RefScheme  string     `json:"ref_scheme,omitempty"` // "tag" | "commit"; leer = "commit"
+	RepoDir    string     `json:"repo_dir,omitempty"`   // Arbeitskopie auf Platte, wenn das Dockerfile nicht selbst klont
 }
 
 // RefScheme bestimmt, was die Discovery für einen NeedsBuild-Service anbietet.
@@ -46,13 +46,13 @@ const (
 
 // UpdateCheck represents the latest known version info for a service.
 type UpdateCheck struct {
-	ID             int64      `json:"id"`
-	ServiceID      string     `json:"service_id"`
-	CurrentVersion string     `json:"current_version"`  // current tag or commit hash
-	LatestVersion  string     `json:"latest_version"`   // latest tag or commit hash
-	HasUpdate      bool       `json:"has_update"`
-	CheckedAt      time.Time  `json:"checked_at"`
-	Error          string     `json:"error,omitempty"`
+	ID             int64     `json:"id"`
+	ServiceID      string    `json:"service_id"`
+	CurrentVersion string    `json:"current_version"` // current tag or commit hash
+	LatestVersion  string    `json:"latest_version"`  // latest tag or commit hash
+	HasUpdate      bool      `json:"has_update"`
+	CheckedAt      time.Time `json:"checked_at"`
+	Error          string    `json:"error,omitempty"`
 }
 
 // PreflightResult holds the outcome of pre-update checks for a service.
@@ -67,7 +67,7 @@ type PreflightResult struct {
 // PreflightCheck is a single pass/fail/warn check within a preflight result.
 type PreflightCheck struct {
 	Name     string `json:"name"`
-	Status   string `json:"status"`   // "pass", "fail", "warn"
+	Status   string `json:"status"` // "pass", "fail", "warn"
 	Message  string `json:"message"`
 	Blocking bool   `json:"blocking"`
 }

@@ -640,8 +640,8 @@ func matchTagFilter(tag, filter string) bool {
 		return tag == filter
 	}
 
-	prefix := filter[:idx]  // e.g. "2" or "16"
-	suffix := filter[idx:]  // e.g. "-alpine"
+	prefix := filter[:idx] // e.g. "2" or "16"
+	suffix := filter[idx:] // e.g. "-alpine"
 
 	if !strings.HasPrefix(tag, prefix) {
 		return false

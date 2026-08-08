@@ -10,15 +10,15 @@ import (
 func baseInput() reclaimInput {
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	return reclaimInput{
-		SizeBytes:       950 * 1024 * 1024,
-		CriticalBytes:   900 * 1024 * 1024,
-		Enabled:         true,
-		MinInterval:     24 * time.Hour,
-		LastReclaim:     now.Add(-48 * time.Hour),
-		HasLastReclaim:  true,
-		Now:             now,
-		ServiceRunning:  true,
-		TargetClearable: true,
+		SizeBytes:          950 * 1024 * 1024,
+		CriticalBytes:      900 * 1024 * 1024,
+		Enabled:            true,
+		MinInterval:        24 * time.Hour,
+		LastReclaim:        now.Add(-48 * time.Hour),
+		HasLastReclaim:     true,
+		Now:                now,
+		ServiceRunning:     true,
+		TargetClearable:    true,
 		TargetRequiresStop: true,
 	}
 }

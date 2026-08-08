@@ -786,8 +786,8 @@ func TestHandleSystemInfo_EmitsTopLevelServiceDataPath(t *testing.T) {
 		gotPaths[sd.Path] = true
 	}
 	mustHave := []string{
-		filepath.Join(tmpRoot, "ckpool"),              // 1-level template path
-		filepath.Join(tmpRoot, "truffels"),            // 1-level + no child dirs
+		filepath.Join(tmpRoot, "ckpool"),                // 1-level template path
+		filepath.Join(tmpRoot, "truffels"),              // 1-level + no child dirs
 		filepath.Join(tmpRoot, "bitcoin", "blockchain"), // 2-level template path
 	}
 	for _, p := range mustHave {
@@ -1048,15 +1048,15 @@ func TestIsValidCommitHash(t *testing.T) {
 	}
 
 	invalid := []string{
-		"",                                          // leer
-		"4bcced",                                    // 6 Zeichen, zu kurz
+		"",       // leer
+		"4bcced", // 6 Zeichen, zu kurz
 		"4bccedb1234567890abcdef1234567890abcdef12", // 41 Zeichen, zu lang
-		"4BCCEDB",                                   // Großbuchstaben
-		"v1.2.0",                                    // Tag, kein Hash
-		"4bccedb; rm -rf /",                         // Shell-Metazeichen
-		"../../../etc/passwd",                       // Pfad-Traversal
-		"4bccedb\n--upload-pack=evil",               // Newline-Injection
-		"-4bccedb",                                  // führender Bindestrich, sieht wie ein Flag aus
+		"4BCCEDB",                     // Großbuchstaben
+		"v1.2.0",                      // Tag, kein Hash
+		"4bccedb; rm -rf /",           // Shell-Metazeichen
+		"../../../etc/passwd",         // Pfad-Traversal
+		"4bccedb\n--upload-pack=evil", // Newline-Injection
+		"-4bccedb",                    // führender Bindestrich, sieht wie ein Flag aus
 	}
 	for _, s := range invalid {
 		if isValidCommitHash(s) {

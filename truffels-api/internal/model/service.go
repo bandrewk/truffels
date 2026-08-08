@@ -8,21 +8,21 @@ const (
 	StateRunning  ServiceState = "running"
 	StateStopped  ServiceState = "stopped"
 	StateDegraded ServiceState = "degraded"
-	StateUnknown   ServiceState = "unknown"
-	StateDisabled  ServiceState = "disabled"
+	StateUnknown  ServiceState = "unknown"
+	StateDisabled ServiceState = "disabled"
 )
 
 type ServiceTemplate struct {
-	ID             string   `json:"id"`
-	DisplayName    string   `json:"display_name"`
-	Description    string   `json:"description"`
-	ComposeDir     string   `json:"-"`
-	ContainerNames []string `json:"container_names"`
-	Dependencies   []string `json:"dependencies"`
-	MemoryLimit    string   `json:"memory_limit"`
-	ConfigPath     string   `json:"-"`
-	Port           string        `json:"port,omitempty"`
-	ReadOnly       bool          `json:"read_only,omitempty"`
+	ID               string        `json:"id"`
+	DisplayName      string        `json:"display_name"`
+	Description      string        `json:"description"`
+	ComposeDir       string        `json:"-"`
+	ContainerNames   []string      `json:"container_names"`
+	Dependencies     []string      `json:"dependencies"`
+	MemoryLimit      string        `json:"memory_limit"`
+	ConfigPath       string        `json:"-"`
+	Port             string        `json:"port,omitempty"`
+	ReadOnly         bool          `json:"read_only,omitempty"`
 	FloatingTag      bool          `json:"floating_tag,omitempty"`
 	RequiresUnpruned bool          `json:"requires_unpruned,omitempty"`
 	RequiresSynced   bool          `json:"requires_synced,omitempty"`
@@ -54,7 +54,7 @@ type EnsureDir struct {
 type DataDir struct {
 	Path         string `json:"path"`
 	Label        string `json:"label"`
-	Description  string `json:"description"`            // shown as warning text in Clear confirmation
+	Description  string `json:"description"` // shown as warning text in Clear confirmation
 	Clearable    bool   `json:"clearable"`
 	RequiresStop bool   `json:"requires_stop,omitempty"` // service must be stopped before clear
 }

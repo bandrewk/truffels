@@ -86,9 +86,9 @@ type MonitoringResponse struct {
 // DirSizeSeries is the time series for one watched data dir, used by the
 // monitoring chart that warns about runaway caches (mempool rbfcache.json).
 type DirSizeSeries struct {
-	Label  string           `json:"label"`
-	Path   string           `json:"path"`
-	Points []DirSizePoint   `json:"points"`
+	Label  string         `json:"label"`
+	Path   string         `json:"path"`
+	Points []DirSizePoint `json:"points"`
 }
 
 type DirSizePoint struct {

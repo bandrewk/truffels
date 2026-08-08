@@ -459,7 +459,6 @@ networks:
     external: true
 `
 
-
 const truffelsTemplate = `# Project Truffels — Control Plane (agent + api + web)
 # Managed by truffels. Do not edit manually.
 

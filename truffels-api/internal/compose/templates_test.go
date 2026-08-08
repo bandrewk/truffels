@@ -125,7 +125,7 @@ func TestRender_Mempool(t *testing.T) {
 func TestRender_Ckstats(t *testing.T) {
 	got, err := Render("ckstats", CkstatsParams{
 		CkstatsImageTag: "truffels/ckstats:latest",
-		DBImageTag:       "postgres:16.13-alpine",
+		DBImageTag:      "postgres:16.13-alpine",
 	})
 	if err != nil {
 		t.Fatal(err)
