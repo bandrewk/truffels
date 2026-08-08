@@ -14,6 +14,20 @@ const caddyfileTemplate = `{
 }
 
 :80 {
+	# Access log. The proxy is the only component that ever sees a real client
+	# address: everything behind it — the web container's nginx, the API — logs
+	# 172.21.0.x, which is this proxy. Without this block that address exists
+	# nowhere, and "did that device reach us at all" is unanswerable. It was
+	# unanswerable in dev.29, when a phone could not load the UI and the only way
+	# to look was firewall counters and inference.
+	#
+	# stdout so it lands in docker logs alongside every other service; JSON
+	# because that is already the format Caddy's own error lines use.
+	log {
+		output stdout
+		format json
+	}
+
 	# Shared security headers (non-CSP)
 	header {
 		X-Content-Type-Options nosniff
@@ -25,7 +39,11 @@ const caddyfileTemplate = `{
 
 	# Self-contained health endpoint — used by the proxy's container
 	# healthcheck. Returns 200 regardless of upstream state.
+	#
+	# log_skip because the healthcheck runs every 30s: without it this one path
+	# writes ~2900 lines a day and buries the traffic the log exists to show.
 	handle /proxy-health {
+		log_skip
 		respond "OK" 200
 	}
 
