@@ -646,7 +646,7 @@ func TestCharacterize_SystemInfoGet_Success(t *testing.T) {
 	want := SystemInfo{
 		Hostname: "truffels", OS: "Debian", Kernel: "6.12", Model: "Raspberry Pi 5",
 		CPUCores: 4, MemTotal: "8G", MemFree: "2G", Uptime: "3d",
-		Networks: []NetworkIfInfo{{Name: "wlan0", IP: "192.168.0.196", MAC: "aa:bb"}},
+		Networks: []NetworkIfInfo{{Name: "wlan0", IP: "192.0.2.10", MAC: "aa:bb"}},
 		Storage:  []StorageInfo{{Device: "/dev/nvme0n1p2", Mount: "/", UsePct: "53%"}},
 		DockerStorage: []DockerStorageItem{
 			{Type: "Images", Count: 13, TotalSize: "8GB", Reclaimable: "2GB", ReclaimableRaw: 2147483648},
@@ -661,7 +661,7 @@ func TestCharacterize_SystemInfoGet_Success(t *testing.T) {
 	if got.Hostname != "truffels" || got.CPUCores != 4 {
 		t.Errorf("got = %+v", got)
 	}
-	if len(got.Networks) != 1 || got.Networks[0].IP != "192.168.0.196" {
+	if len(got.Networks) != 1 || got.Networks[0].IP != "192.0.2.10" {
 		t.Errorf("networks = %+v", got.Networks)
 	}
 	if len(got.DockerStorage) != 1 || got.DockerStorage[0].ReclaimableRaw != 2147483648 {

@@ -43,7 +43,7 @@ func newMockAgent(t *testing.T, state *mockAgentState) *httptest.Server {
 				"model": "Raspberry Pi 5", "cpu_cores": 4,
 				"mem_total": "8063 MB", "mem_free": "4000 MB", "uptime": "1d 2h",
 				"networks": []map[string]string{
-					{"name": "wlan0", "ip": "192.168.0.196/16", "mac": "aa:bb:cc:dd:ee:ff"},
+					{"name": "wlan0", "ip": "192.0.2.10/24", "mac": "aa:bb:cc:dd:ee:ff"},
 				},
 			})
 
