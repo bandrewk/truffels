@@ -59,10 +59,34 @@ var allowedContainers = map[string]bool{
 
 // --- Container images ---
 
-// allowedImagePrefixes controls which images can be removed via /v1/image/remove.
+// allowedImagePrefixes names the image namespaces this appliance manages: the
+// images it builds itself plus the upstream images of the services it runs.
+// btcpayserver/ is Bitcoin Core and getumbrel/ is electrs — both are live, and
+// neither is a leftover.
 var allowedImagePrefixes = []string{
 	"truffels/", "mempool/", "btcpayserver/", "getumbrel/",
 	"caddy:", "postgres:", "mariadb:",
+}
+
+// isAllowedManagedImage gates both /v1/image/pull and /v1/image/remove.
+//
+// One predicate for both on purpose. They take the same kind of input — a
+// reference to an image on this appliance — and hand it to the same root-level
+// docker CLI; the only difference is the verb. An image this box may not delete
+// is an image it has no reason to fetch, and a `docker pull` of an attacker's
+// choosing on a machine holding a Bitcoin node is a worse outcome than a stray
+// `docker rmi`, not a milder one. Splitting the two checks is how /v1/image/pull
+// came to have none at all.
+//
+// Distinct from isAllowedImageRef below: that one covers the *locally built*
+// images only, and is stricter for reasons documented there.
+func isAllowedManagedImage(ref string) bool {
+	for _, prefix := range allowedImagePrefixes {
+		if strings.HasPrefix(ref, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isAllowedImageRef restricts image operations to images this appliance builds

@@ -500,6 +500,83 @@ func TestHandleImagePull_EmptyImage(t *testing.T) {
 	}
 }
 
+// pullRefsInProduction is every image reference that really reaches
+// /v1/image/pull on this appliance. Fetching an image is not less privileged
+// than deleting one, so the endpoint now applies the same allowlist as
+// /v1/image/remove — and this list is the proof that the tightening does not
+// abandon a single service.
+//
+// The values are not invented. They come from:
+//   - install.sh, which pins bitcoind and electrs by digest;
+//   - the live compose files under /srv/truffels/compose;
+//   - updates.Engine, which builds pull refs as <image>:<version> from the
+//     registry's Images (btcpayserver/bitcoin, getumbrel/electrs,
+//     mempool/backend, mempool/frontend, mariadb, postgres, caddy,
+//     truffels/{agent,api,web}) — see engine.go applyUpdate/rollback;
+//   - api.services "pull-restart", which pulls the running image ref with the
+//     digest stripped.
+//
+// A change that turns any of these into a 403 stops updates for that service.
+var pullRefsInProduction = []string{
+	// install.sh pins — digest-carrying, and the reason no charset filter here
+	// may reject '@' or hex.
+	"btcpayserver/bitcoin:30.2@sha256:cff45bbc8e166bb3403675baea73cf597c7373f20a87a76101e3d849f766d61e",
+	"getumbrel/electrs:v0.11.0@sha256:0a2c6f573abfd8d724651c6ba1c1f3a9c740219c1cf0f4468043c3342170d8a5",
+	"mariadb:lts@sha256:8164f184d16c30e2f159e30518113667b796306dff0fe558876ab1ff521a682f",
+	"postgres:16.13-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416",
+	"caddy:2.11.2-alpine@sha256:fce4f15aad23222c0ac78a1220adf63bae7b94355d5ea28eee53910624acedfa",
+	"mempool/backend:v3.2.1@sha256:d3531090e3bdd9a3dd38151349c5027768c3b7132438db267df8d8f026e15e61",
+	"mempool/frontend:v3.2.1@sha256:dd126cf383bd425ad46710925697c6a7925675a535c1026c206f2c092231e106",
+	// The refs the live compose files name today.
+	"btcpayserver/bitcoin:31.0",
+	"getumbrel/electrs:v0.11.1",
+	"mempool/backend:v3.3.1",
+	"mempool/frontend:v3.3.1",
+	"caddy:2.11.4-alpine",
+	"postgres:16.14-alpine",
+	"mariadb:lts",
+	"truffels/agent:v0.3.1-dev.29",
+	"truffels/api:v0.3.1-dev.29",
+	"truffels/web:v0.3.1-dev.29",
+}
+
+func TestHandleImagePull_AllowsEveryRefProductionReallyPulls(t *testing.T) {
+	for _, img := range pullRefsInProduction {
+		reqBody, _ := json.Marshal(imagePullRequest{Image: img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+		handleImagePull(w, r)
+
+		// docker is absent in the test container, so the pull itself fails with
+		// 500. What must never happen is the guard refusing the ref.
+		if w.Code == 403 {
+			t.Errorf("pull of %q was refused; that stops updates for this service: %s", img, w.Body.String())
+		}
+	}
+}
+
+func TestHandleImagePull_RefusesImagesOutsideTheAllowlist(t *testing.T) {
+	// Same inputs /v1/image/remove refuses. An image this appliance may not
+	// delete is an image it has no reason to fetch either.
+	for _, img := range []string{"nginx:latest", "alpine:3", "evil/miner:latest", "bitcoin/bitcoin:29.0"} {
+		reqBody, _ := json.Marshal(imagePullRequest{Image: img})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+		handleImagePull(w, r)
+
+		if w.Code != 403 {
+			t.Errorf("expected 403 for %q, got %d: %s", img, w.Code, w.Body.String())
+		}
+		var body map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if body["error"] != "image not allowed" {
+			t.Errorf("error for %q = %q, want the same text /v1/image/remove uses", img, body["error"])
+		}
+	}
+}
+
 // --- handleImageInspect ---
 
 func TestHandleImageInspect_DeniedContainer(t *testing.T) {

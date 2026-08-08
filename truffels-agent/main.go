@@ -374,6 +374,11 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "image required"})
 		return
 	}
+	// Same gate as /v1/image/remove: see isAllowedManagedImage.
+	if !isAllowedManagedImage(req.Image) {
+		writeJSON(w, 403, map[string]string{"error": "image not allowed"})
+		return
+	}
 
 	slog.Info("pulling image", "image", req.Image)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -400,15 +405,7 @@ func handleImageRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Allowlist check
-	allowed := false
-	for _, prefix := range allowedImagePrefixes {
-		if strings.HasPrefix(req.Image, prefix) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
+	if !isAllowedManagedImage(req.Image) {
 		writeJSON(w, 403, map[string]string{"error": "image not allowed"})
 		return
 	}
