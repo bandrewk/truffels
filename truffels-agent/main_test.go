@@ -2454,10 +2454,78 @@ func TestImageTagRejectsForeignImages(t *testing.T) {
 	}
 }
 
+// localRefsInProduction is every "truffels/…" reference the API really sends to
+// /v1/image/inspect-by-name and /v1/image/tag. Like pullRefsInProduction, the
+// values are read off the system rather than invented:
+//
+//   - truffels/{agent,api,web}:<version> — updates.selfUpdateImage and
+//     verifySelfBuild during a self-update; the live compose files name
+//     v0.3.1-dev.29 today.
+//   - truffels/{ckpool,ckstats}:<tag> — updates.composeImageRef, read out of
+//     the compose file (truffels/ckpool:v1.0.0, truffels/ckstats:latest), plus
+//     its conventional :latest fallback.
+//   - truffels/{ckpool,ckstats}:rollback — updates.rollbackImageRef, the single
+//     staged generation. Both exist on the device right now.
+//   - a bare commit hash as a tag: ckstats builds from a git commit, and
+//     RewriteTags moves the compose ref onto it.
+var localRefsInProduction = []string{
+	"truffels/agent:v0.3.1-dev.29",
+	"truffels/api:v0.3.1-dev.29",
+	"truffels/web:v0.3.1-dev.29",
+	"truffels/agent:v1.0.0",
+	"truffels/api:rollback",
+	"truffels/ckpool:v1.0.0",
+	"truffels/ckpool:rollback",
+	"truffels/ckpool:latest",
+	"truffels/ckstats:latest",
+	"truffels/ckstats:rollback",
+	"truffels/ckstats:8f2e7c2f8403",
+}
+
+// The prefix "truffels/" alone let the agent inspect and retag any repository
+// in the namespace. Exactly five exist, and they are not derivable from
+// allowedServices: the service is "truffels-agent", the image is
+// "truffels/agent".
+func TestIsAllowedImageRef_OnlyRealRepositories(t *testing.T) {
+	for _, ref := range localRefsInProduction {
+		if !isAllowedImageRef(ref) {
+			t.Errorf("ref %q is used in production and must be allowed", ref)
+		}
+	}
+
+	denied := map[string]string{
+		// No such image and no such service: the ckstats-cron *container* runs
+		// the truffels/ckstats image. `docker images` on the device lists five
+		// truffels repositories and this is not one of them.
+		"truffels/ckstats-cron:rollback": "container name, not an image repository",
+		// rollbackImageRef would produce this for the truffels stack, but
+		// ApplyUpdateToVersion routes github_release sources to applySelfUpdate
+		// and RollbackService refuses them before the ref is built. Nothing
+		// stages it, so nothing may act on it.
+		"truffels/truffels:rollback": "never staged",
+		// Service IDs that name no image of ours.
+		"truffels/bitcoind:latest": "upstream service, not built here",
+		"truffels/mempool:latest":  "upstream service, not built here",
+		"truffels/proxy:latest":    "upstream service, not built here",
+		// Near-misses on the real names.
+		"truffels/agent-x:v1": "not a repository",
+		"truffels/ap:v1":      "not a repository",
+		"truffels/apix:v1":    "not a repository",
+		"truffels/:latest":    "empty repository",
+		"truffels/evil:v1":    "attacker-chosen repository",
+		"truffels/agent/x:v1": "extra path segment",
+	}
+	for ref, why := range denied {
+		if isAllowedImageRef(ref) {
+			t.Errorf("ref %q must be rejected (%s)", ref, why)
+		}
+	}
+}
+
 func TestIsAllowedImageRef_Charset(t *testing.T) {
 	allowed := []string{
 		"truffels/ckpool:v1.0.0", "truffels/ckstats:latest",
-		"truffels/ckstats-cron:rollback", "truffels/api:v0.3.1-dev.23",
+		"truffels/api:v0.3.1-dev.23",
 		"truffels/web:sha256_abc",
 	}
 	for _, ref := range allowed {

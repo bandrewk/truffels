@@ -134,16 +134,55 @@ func isAllowedManagedImage(ref string) bool {
 	return false
 }
 
+// allowedLocalImageRepos are the image repositories this appliance builds
+// itself. Five, and they are enumerated rather than matched by the "truffels/"
+// prefix, because the prefix is a namespace an attacker may name freely: with
+// it alone, /v1/image/tag would happily move any tag onto truffels/anything and
+// /v1/image/inspect-by-name would report on it.
+//
+// NOT derivable from allowedServices, and it must not be generated from it. The
+// service is "truffels-agent"; the image it runs is "truffels/agent". The
+// service "ckstats" runs both the truffels-ckstats and truffels-ckstats-cron
+// containers off the single truffels/ckstats image, so there is no
+// truffels/ckstats-cron. And the "truffels" service has no image of its own at
+// all — it is the stack of the three below.
+//
+// The five: agent, api and web are the self-update targets, built and tagged
+// truffels/<name>:<release>. ckpool and ckstats are the NeedsBuild services,
+// built from vendored sources and tagged with a version, a commit hash, :latest
+// or :rollback. Verified against `docker images` on the device.
+//
+// Adding one means a sixth image exists. Check that before adding it.
+var allowedLocalImageRepos = map[string]bool{
+	"truffels/agent":   true,
+	"truffels/api":     true,
+	"truffels/web":     true,
+	"truffels/ckpool":  true,
+	"truffels/ckstats": true,
+}
+
 // isAllowedImageRef restricts image operations to images this appliance builds
-// itself. Anything else — upstream images, anything with shell metacharacters —
-// is refused; the agent runs as root against the docker socket. Exact charset
-// check, no normalising: a cleaned or lowercased ref would let something that
+// itself. Anything else — upstream images, an unknown repository in our own
+// namespace, anything with shell metacharacters — is refused; the agent runs as
+// root against the docker socket. Exact charset check and an exact repository
+// match, no normalising: a cleaned or lowercased ref would let something that
 // should fail slip through.
+//
+// The tag is split off at the last ':' and then deliberately not inspected
+// beyond the charset. Tags legitimately take four unrelated shapes here
+// (:v0.3.1-dev.29, :v1.0.0, :latest, :rollback, and a bare commit hash for
+// ckstats), and a pattern covering all of them would say nothing a charset
+// check does not already say. A ref with no tag keeps passing, exactly as
+// before: the repository is what this decides on.
 func isAllowedImageRef(ref string) bool {
-	if !strings.HasPrefix(ref, "truffels/") {
+	if !hasOnlyChars(ref, localImageRefChars) {
 		return false
 	}
-	return hasOnlyChars(ref, localImageRefChars)
+	repo := ref
+	if idx := strings.LastIndex(repo, ":"); idx >= 0 {
+		repo = repo[:idx]
+	}
+	return allowedLocalImageRepos[repo]
 }
 
 // --- Journal queries ---

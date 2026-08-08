@@ -101,9 +101,14 @@ func TestHandleImageInspect_AllowedContainerReachesDocker(t *testing.T) {
 func TestHandleImageTag_AllowedRefsReachDockerTag(t *testing.T) {
 	// Both refs pass isAllowedImageRef; the source image does not exist, so the
 	// tag fails with or without a docker CLI.
+	//
+	// The repository has to be a real one now that isAllowedImageRef enumerates
+	// them — the guard, not the missing image, would otherwise be what this
+	// test observes. Nonexistence moved into the tag, which is unconstrained
+	// beyond its charset.
 	body, _ := json.Marshal(map[string]string{
-		"source": "truffels/agent-test-nonexistent:src",
-		"target": "truffels/agent-test-nonexistent:dst",
+		"source": "truffels/ckpool:agent-test-nonexistent-src",
+		"target": "truffels/ckpool:agent-test-nonexistent-dst",
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/image/tag", bytes.NewReader(body))
