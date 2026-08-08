@@ -1695,6 +1695,100 @@ func TestIsAllowedManagedImage_Charset(t *testing.T) {
 	}
 }
 
+// "truffels/" is a namespace an attacker may name freely, and the two gates
+// disagreed about it: /v1/image/tag and /v1/image/inspect-by-name have required
+// one of the five repositories we actually build since the boundary was
+// tightened, while /v1/image/pull and /v1/image/remove matched the bare prefix
+// and took anything after it. So `docker pull truffels/<whatever>` was reachable
+// on a box holding a full node — a fetch of an attacker-named image is the worse
+// half of that pair, not the milder one.
+//
+// Foreign prefixes stay prefix-matched: we do not enumerate mempool's or
+// btcpayserver's repositories and pinning them here would break their updates
+// the first time upstream renames one.
+func TestIsAllowedManagedImage_TruffelsNamespaceIsNotAWildcard(t *testing.T) {
+	denied := map[string]string{
+		"truffels/evil:latest":           "attacker-chosen repository",
+		"truffels/nginx:latest":          "not one of ours",
+		"truffels/ckstats-cron:rollback": "container name, not an image repository",
+		"truffels/truffels:rollback":     "the stack has no image of its own",
+		"truffels/bitcoind:latest":       "upstream service, not built here",
+		"truffels/agent-x:v1":            "near-miss on a real name",
+		"truffels/:latest":               "empty repository",
+		"truffels/agent/x:v1":            "extra path segment",
+		"truffels/miner":                 "untagged, still not a repository of ours",
+		// '@' is in this endpoint's alphabet because every *upstream* image is
+		// digest-pinned. Nothing in truffels-api ever builds a digest for an
+		// image this appliance built itself — api.services strips the digest
+		// before pulling, pruneOldImages joins with ':' — so a digest here is
+		// not a shape we have to keep working.
+		"truffels/api@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416": "no digest is ever built for our own images",
+	}
+	for ref, why := range denied {
+		if isAllowedManagedImage(ref) {
+			t.Errorf("ref %q must be rejected (%s)", ref, why)
+		}
+	}
+
+	// Every truffels ref the API really pulls or removes. RemoveImage gets
+	// these from pruneOldImages (src.Images × old version) and from
+	// rollbackImageRef; the pull-restart action in api.services pulls the
+	// running ref of every container in a service, which for the truffels stack
+	// is truffels/{agent,api,web}:<version>.
+	for _, ref := range localRefsInProduction {
+		if !isAllowedManagedImage(ref) {
+			t.Errorf("ref %q is used in production and must be allowed", ref)
+		}
+	}
+}
+
+// Inside our own namespace the two gates must give the same answer: a
+// repository the appliance may retag is one it may delete, and the reverse. A
+// divergence is not a cosmetic inconsistency — it makes the looser of the two
+// the way in, which is exactly what the bare "truffels/" prefix was.
+//
+// Held structurally today (isAllowedManagedImage defers to isAllowedImageRef
+// here), which is why this asserts the property rather than a list of refs:
+// splitting the paths again has to fail here.
+func TestIsAllowedManagedImage_AgreesWithIsAllowedImageRefOnOurOwnImages(t *testing.T) {
+	refs := append([]string{
+		"truffels/evil:v1", "truffels/truffels:rollback", "truffels/ckstats-cron:latest",
+		"truffels/:latest", "truffels/agent/x:v1",
+		"truffels/api@sha256:abc", "truffels/ckpool:latest;id", "truffels/CKPOOL:latest",
+	}, localRefsInProduction...)
+
+	for _, ref := range refs {
+		if isAllowedManagedImage(ref) != isAllowedImageRef(ref) {
+			t.Errorf("ref %q: pull/remove says %v, tag/inspect says %v — the two gates must agree inside our namespace",
+				ref, isAllowedManagedImage(ref), isAllowedImageRef(ref))
+		}
+	}
+}
+
+func TestHandleImageRemove_RefusesAnUnknownRepositoryInOurNamespace(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]string{"image": "truffels/evil:latest"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/remove", bytes.NewReader(reqBody))
+
+	handleImageRemove(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImagePull_RefusesAnUnknownRepositoryInOurNamespace(t *testing.T) {
+	reqBody, _ := json.Marshal(imagePullRequest{Image: "truffels/evil:latest"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/image/pull", bytes.NewReader(reqBody))
+
+	handleImagePull(w, r)
+
+	if w.Code != 403 {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleImageRemove_RefusesShellMetacharacters(t *testing.T) {
 	reqBody, _ := json.Marshal(map[string]string{"image": "mempool/x; rm -rf /"})
 	w := httptest.NewRecorder()
@@ -1776,13 +1870,17 @@ func TestHandleDockerPrune_ReturnsJSON(t *testing.T) {
 	if ct != "application/json" {
 		t.Fatalf("expected application/json, got %q", ct)
 	}
-	// docker commands will fail in CI but should still return JSON
+	// Written to hold with and without a docker CLI. Where docker is missing
+	// all three prunes fail and the answer is an error — it used to be
+	// {"status":"ok"}, which is what this assertion no longer accepts. The
+	// exact-outcome cases live in exec_test.go, where the exit status is
+	// chosen rather than inherited from the container.
 	var body map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if body["status"] != "ok" {
-		t.Fatalf("expected status ok, got %q", body["status"])
+	if body["status"] != "ok" && body["error"] == "" {
+		t.Fatalf("expected status ok or an error field, got %v", body)
 	}
 }
 

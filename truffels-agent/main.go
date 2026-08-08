@@ -431,6 +431,14 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 
 	// Each prune is best-effort: a failure is logged and the next one still
 	// runs, and whatever it printed still counts towards the reclaimed total.
+	// One subcommand a docker version does not have must not cost the operator
+	// the other two.
+	//
+	// Best-effort is about not aborting, though, not about staying quiet. The
+	// failures are collected so the answer can name them, because "ok" used to
+	// come back even when all three had failed and nothing was reclaimed — the
+	// UI printed "Pruned: unknown" and the audit row recorded a cleanup that
+	// never ran.
 	prunes := []struct {
 		name string
 		args []string
@@ -440,10 +448,12 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 		{"system prune", []string{"system", "prune", "-f"}},
 	}
 	var totalReclaimed bytes.Buffer
+	var failures []string
 	for _, p := range prunes {
 		out, err := runCapture(ctx, "docker", p.args...)
 		if err != nil {
 			slog.Warn(p.name+" failed", "err", err)
+			failures = append(failures, p.name+": "+err.Error())
 		}
 		totalReclaimed.WriteString(out)
 	}
@@ -462,12 +472,30 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Refresh storage immediately so /system/info reflects the prune result
-	// on the very next request, not 5 minutes later.
+	// on the very next request, not 5 minutes later. Done on the failure path
+	// too: a run that reclaimed nothing still leaves the cache correct.
 	if storageCache != nil {
 		storageCache.invalidate()
 		storageCache.set(fetchDockerStorage())
 	}
 
+	// Nothing ran, so nothing was reclaimed. Reporting that as a success is the
+	// one outcome this endpoint has no business claiming.
+	if len(failures) == len(prunes) {
+		writeJSON(w, 500, map[string]string{"error": "docker prune failed: " + strings.Join(failures, "; ")})
+		return
+	}
+	// Some ran. The 200 stays — the space they freed is real — and the warning
+	// field carries what did not, the same way handleImageRemove reports a
+	// removal it could not complete.
+	if len(failures) > 0 {
+		writeJSON(w, 200, map[string]string{
+			"status":    "ok",
+			"reclaimed": reclaimed,
+			"warning":   "prune incomplete: " + strings.Join(failures, "; "),
+		})
+		return
+	}
 	writeJSON(w, 200, map[string]string{"status": "ok", "reclaimed": reclaimed})
 }
 
