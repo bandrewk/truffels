@@ -178,16 +178,25 @@ func (c *ComposeClient) callInto(op string, r agentReq, out any) error {
 	return nil
 }
 
-// callDecode sends r and decodes the body into out without consulting the
-// status code. The two host-info endpoints have always behaved this way: an
-// agent that answers with a parseable body is treated as a success even when it
-// reports a failure status.
+// callDecode sends r, rejects a failure status, and decodes the body into out.
+//
+// The status check is the point. Without it a 500 whose body happens to parse
+// was reported as a success carrying zero values — and HostDirSize feeds the
+// directory-size watch, so a failing agent produced "0 bytes" rather than an
+// error, the watch read that as a real measurement, and the warning that exists
+// because of the dev.20 OOM went quiet.
 func (c *ComposeClient) callDecode(op string, r agentReq, out any) error {
 	resp, err := c.send(op, r)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if !r.accepts(resp.StatusCode) {
+		var ar agentResponse
+		_ = json.NewDecoder(resp.Body).Decode(&ar)
+		return agentError(op, ar)
+	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("%s: %w", r.decodeOpFor(op), err)
