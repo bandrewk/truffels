@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: truffels-api/go.sum
       - run: go mod download
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           working-directory: truffels-api
@@ -47,7 +47,7 @@ jobs:
           go-version: "1.26"
           cache: false
       - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           working-directory: truffels-agent
