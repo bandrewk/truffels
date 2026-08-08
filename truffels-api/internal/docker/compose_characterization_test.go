@@ -10,10 +10,12 @@ package docker
 // That means a few of the assertions below deliberately pin behaviour that
 // looks wrong:
 //
-//   - SystemInfoGet and HostDirSize never inspect the status code, so a 500 that
-//     still carries a JSON body is reported as success.
 //   - Logs and SystemJournal return the agent's partial log text alongside the
 //     error; Pull and ComposeRead return "" in the same situation.
+//
+// SystemInfoGet and HostDirSize used to be on that list — they ignored the
+// status code entirely. That was a defect rather than a quirk and is fixed;
+// their tests now assert the rejection.
 //   - The reconcile/prune/read family reports only ar.Error and drops the
 //     agent's output, while everything else routes through agentError and keeps
 //     it.
@@ -685,14 +687,14 @@ func TestCharacterize_SystemInfoGet_Success(t *testing.T) {
 // SystemInfoGet never looks at the status code. A 500 carrying a decodable body
 // is reported as success. Preserved deliberately — changing it would alter what
 // the system tab shows when the agent is degraded.
-func TestCharacterize_SystemInfoGet_IgnoresStatusCode(t *testing.T) {
+func TestSystemInfoGet_RejectsFailureStatus(t *testing.T) {
 	c, _ := newFakeAgent(t, 500, SystemInfo{Hostname: "degraded"})
 	got, err := c.SystemInfoGet()
-	if err != nil {
-		t.Fatalf("status code is not checked today, want nil error, got %v", err)
+	if err == nil {
+		t.Fatalf("a 500 must not read as success, got info %+v", got)
 	}
-	if got.Hostname != "degraded" {
-		t.Errorf("hostname = %q", got.Hostname)
+	if got != nil {
+		t.Errorf("no info may be handed out on failure, got %+v", got)
 	}
 }
 
@@ -748,14 +750,16 @@ func TestCharacterize_HostDirSize_NotYetWalked(t *testing.T) {
 }
 
 // Like SystemInfoGet, the status code is not consulted.
-func TestCharacterize_HostDirSize_IgnoresStatusCode(t *testing.T) {
-	c, _ := newFakeAgent(t, 500, map[string]any{"size_bytes": 42, "fresh": true})
+// A failing agent used to yield size 0 with a nil error here. The directory-size
+// watch in internal/alerts treats a negative size as "not measured yet" and
+// anything else as real, so 0 read as an empty directory and the warning that
+// exists because of the dev.20 OOM stopped firing. The error is what makes the
+// watch skip the round instead.
+func TestHostDirSize_RejectsFailureStatus(t *testing.T) {
+	c, _ := newFakeAgent(t, 500, map[string]any{"size_bytes": 0, "fresh": false})
 	size, fresh, err := c.HostDirSize("/srv/x")
-	if err != nil {
-		t.Fatalf("status code is not checked today, want nil error, got %v", err)
-	}
-	if size != 42 || !fresh {
-		t.Errorf("size = %d, fresh = %v", size, fresh)
+	if err == nil {
+		t.Fatalf("a 500 must not read as a measurement, got size=%d fresh=%v", size, fresh)
 	}
 }
 
