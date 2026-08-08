@@ -2256,19 +2256,31 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("clear-dir", "path", cleaned, "uid", req.UID, "gid", req.GID)
 
-	if err := os.RemoveAll(cleaned); err != nil {
+	// Anchored, because this is the one endpoint that deletes recursively as
+	// root, and the tree it deletes in is mounted read-write into several
+	// containers. Through the root every component is resolved against dataRoot
+	// by the kernel, so a symlink planted after the checks above cannot redirect
+	// the RemoveAll — there is no longer an interval to plant it in.
+	root, name, err := anchorUnderRoot(cleaned, dataRoot)
+	if err != nil {
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.RemoveAll(name); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "remove: " + err.Error()})
 		return
 	}
-	if err := os.MkdirAll(cleaned, mode); err != nil {
+	if err := root.MkdirAll(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "mkdir: " + err.Error()})
 		return
 	}
-	if err := os.Chown(cleaned, req.UID, req.GID); err != nil {
+	if err := root.Chown(name, req.UID, req.GID); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chown: " + err.Error()})
 		return
 	}
-	if err := os.Chmod(cleaned, mode); err != nil {
+	if err := root.Chmod(name, mode); err != nil {
 		writeJSON(w, 500, map[string]string{"error": "chmod: " + err.Error()})
 		return
 	}
