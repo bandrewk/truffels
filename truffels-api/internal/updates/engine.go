@@ -257,6 +257,33 @@ func versionLabel(v string) string {
 	return v
 }
 
+// statfs is syscall.Statfs behind a package variable so the preflight disk-space
+// check can be exercised in both directions. It reads a fixed path under
+// /srv/truffels, which does not exist in a test container, so without the seam
+// only the "cannot check disk space" arm is ever reached. Production never
+// replaces it.
+var statfs = syscall.Statfs
+
+// A preflight check is only ever recorded in one of three shapes, and one of
+// them carries an obligation: a blocking failure has to clear CanProceed too, or
+// the API offers to start an update its own checks just rejected. These three
+// helpers make that pairing structural instead of a line every new check has to
+// remember to repeat.
+func preflightPass(r *model.PreflightResult, name, msg string) {
+	r.Checks = append(r.Checks, model.PreflightCheck{Name: name, Status: "pass", Message: msg, Blocking: true})
+}
+
+func preflightFail(r *model.PreflightResult, name, msg string) {
+	r.Checks = append(r.Checks, model.PreflightCheck{Name: name, Status: "fail", Message: msg, Blocking: true})
+	r.CanProceed = false
+}
+
+// preflightWarn records what the user should know before starting but that is
+// not a fault — a dependent that will be disrupted, not a reason to refuse.
+func preflightWarn(r *model.PreflightResult, name, msg string) {
+	r.Checks = append(r.Checks, model.PreflightCheck{Name: name, Status: "warn", Message: msg, Blocking: false})
+}
+
 // RunPreflight checks whether a service is safe to update and returns detailed results.
 func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) {
 	result := &model.PreflightResult{
@@ -267,30 +294,19 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 	// 1. Service exists and has UpdateSource
 	tmpl, ok := e.registry.Get(serviceID)
 	if !ok {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "service_exists", Status: "fail", Message: "unknown service", Blocking: true,
-		})
-		result.CanProceed = false
+		preflightFail(result, "service_exists", "unknown service")
 		return result, nil
 	}
 	if tmpl.UpdateSource == nil {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "update_source", Status: "fail", Message: "service has no update source configured", Blocking: true,
-		})
-		result.CanProceed = false
+		preflightFail(result, "update_source", "service has no update source configured")
 		return result, nil
 	}
-	result.Checks = append(result.Checks, model.PreflightCheck{
-		Name: "service_exists", Status: "pass", Message: "service found with update source", Blocking: true,
-	})
+	preflightPass(result, "service_exists", "service found with update source")
 
 	// 2. Update available
 	check, _ := e.store.GetLatestUpdateCheck(serviceID)
 	if check == nil || !check.HasUpdate {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "update_available", Status: "fail", Message: "no update available", Blocking: true,
-		})
-		result.CanProceed = false
+		preflightFail(result, "update_available", "no update available")
 	} else {
 		result.FromVersion = check.CurrentVersion
 		result.ToVersion = check.LatestVersion
@@ -303,60 +319,34 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 		if check.CurrentVersion == "" {
 			msg = fmt.Sprintf("update available: running version unknown (the image carries no source ref) → %s; rebuilding stamps it", check.LatestVersion)
 		}
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "update_available", Status: "pass",
-			Message:  msg,
-			Blocking: true,
-		})
+		preflightPass(result, "update_available", msg)
 	}
 
 	// 3. Not already updating
 	if e.IsUpdating(serviceID) {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "not_updating", Status: "fail", Message: "update already in progress", Blocking: true,
-		})
-		result.CanProceed = false
+		preflightFail(result, "not_updating", "update already in progress")
 	} else {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "not_updating", Status: "pass", Message: "no update in progress", Blocking: true,
-		})
+		preflightPass(result, "not_updating", "no update in progress")
 	}
 
 	// 4. Compose file accessible
 	composePath := tmpl.ComposeDir + "/docker-compose.yml"
 	if _, err := os.Stat(composePath); err != nil {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "compose_file", Status: "fail", Message: "compose file not accessible: " + err.Error(), Blocking: true,
-		})
-		result.CanProceed = false
+		preflightFail(result, "compose_file", "compose file not accessible: "+err.Error())
 	} else {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "compose_file", Status: "pass", Message: "compose file accessible", Blocking: true,
-		})
+		preflightPass(result, "compose_file", "compose file accessible")
 	}
 
 	// 5. Disk space (require at least 2GB free)
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/srv/truffels", &stat); err != nil {
-		result.Checks = append(result.Checks, model.PreflightCheck{
-			Name: "disk_space", Status: "fail", Message: "cannot check disk space: " + err.Error(), Blocking: true,
-		})
-		result.CanProceed = false
+	if err := statfs("/srv/truffels", &stat); err != nil {
+		preflightFail(result, "disk_space", "cannot check disk space: "+err.Error())
 	} else {
 		availGB := float64(stat.Bavail*uint64(stat.Bsize)) / (1 << 30)
 		if availGB < 2.0 {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "disk_space", Status: "fail",
-				Message:  fmt.Sprintf("insufficient disk space: %.1f GB available (need 2 GB)", availGB),
-				Blocking: true,
-			})
-			result.CanProceed = false
+			preflightFail(result, "disk_space", fmt.Sprintf("insufficient disk space: %.1f GB available (need 2 GB)", availGB))
 		} else {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "disk_space", Status: "pass",
-				Message:  fmt.Sprintf("%.1f GB available", availGB),
-				Blocking: true,
-			})
+			preflightPass(result, "disk_space", fmt.Sprintf("%.1f GB available", availGB))
 		}
 	}
 
@@ -364,11 +354,7 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 	for _, dep := range tmpl.Dependencies {
 		depTmpl, depOK := e.registry.Get(dep)
 		if !depOK {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "dependency_" + dep, Status: "fail",
-				Message: "dependency not found in registry", Blocking: true,
-			})
-			result.CanProceed = false
+			preflightFail(result, "dependency_"+dep, "dependency not found in registry")
 			continue
 		}
 		allHealthy := true
@@ -384,16 +370,9 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 			}
 		}
 		if !allHealthy {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "dependency_" + dep, Status: "fail",
-				Message: dep + " is not healthy", Blocking: true,
-			})
-			result.CanProceed = false
+			preflightFail(result, "dependency_"+dep, dep+" is not healthy")
 		} else {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "dependency_" + dep, Status: "pass",
-				Message: dep + " is healthy", Blocking: true,
-			})
+			preflightPass(result, "dependency_"+dep, dep+" is healthy")
 		}
 	}
 
@@ -413,11 +392,7 @@ func (e *Engine) RunPreflight(serviceID string) (*model.PreflightResult, error) 
 			}
 		}
 		if running {
-			result.Checks = append(result.Checks, model.PreflightCheck{
-				Name: "dependent_" + depID, Status: "warn",
-				Message:  depID + " depends on this service and may be temporarily disrupted",
-				Blocking: false,
-			})
+			preflightWarn(result, "dependent_"+depID, depID+" depends on this service and may be temporarily disrupted")
 		}
 	}
 
@@ -451,6 +426,26 @@ func (e *Engine) alertUpdateFailed(serviceID, msg string) {
 		ServiceID: serviceID,
 		Message:   msg,
 	})
+}
+
+// failUpdate ends a failed update step: it records msg on the update log, raises
+// the update_failed alert and hands msg back as the error. The three belong
+// together — a step that logs without alerting leaves the UI quiet about a
+// service that is down — and writing them as one call is what makes forgetting
+// one impossible. rollbackVersion is the version the service can still be
+// returned to; empty when the step failed before anything was staged.
+//
+// Not every failure fits this shape, and the ones that do not are left written
+// out on purpose. Several paths word the log, the alert and the returned error
+// differently — a failed pull during a rollback logs "pull failed" but alerts
+// "rollback pull failed", so the alert names the flow that broke — and folding
+// them in would mean a helper taking three separate strings, which reads worse
+// than the lines it replaces. One path, the github_release refusal in
+// RollbackService, deliberately raises no alert at all.
+func (e *Engine) failUpdate(logID int64, serviceID, msg, rollbackVersion string) error {
+	_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, rollbackVersion)
+	e.alertUpdateFailed(serviceID, msg)
+	return &UpdateError{Msg: msg}
 }
 
 // ApplyUpdate performs the update for a single service with automatic rollback on health failure.
@@ -534,9 +529,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		for _, img := range src.Images {
 			pullRef := img + ":" + src.TagFilter
 			if _, err := e.compose.Pull(pullRef); err != nil {
-				_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "pull failed: "+err.Error(), "")
-				e.alertUpdateFailed(serviceID, "pull failed: "+err.Error())
-				return &UpdateError{Msg: "pull failed: " + err.Error()}
+				return e.failUpdate(logID, serviceID, "pull failed: "+err.Error(), "")
 			}
 		}
 		// No compose file rewrite needed — tag stays the same
@@ -565,9 +558,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 	// here.
 	if !src.NeedsBuild && !tmpl.FloatingTag {
 		if err := e.compose.RewriteTags(serviceID, src.Images, check.CurrentVersion, check.LatestVersion); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
-			return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+			return e.failUpdate(logID, serviceID, "compose rewrite failed: "+err.Error(), "")
 		}
 	}
 
@@ -575,9 +566,7 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 	_ = e.store.UpdateLogStatus(logID, model.UpdateRestarting, "", check.CurrentVersion)
 
 	if err := e.compose.Down(serviceID); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "stop failed: "+err.Error(), check.CurrentVersion)
-		e.alertUpdateFailed(serviceID, "stop failed: "+err.Error())
-		return &UpdateError{Msg: "stop failed: " + err.Error()}
+		return e.failUpdate(logID, serviceID, "stop failed: "+err.Error(), check.CurrentVersion)
 	}
 	if err := e.compose.Up(serviceID); err != nil {
 		if tmpl.FloatingTag {
@@ -588,10 +577,8 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		}
 		slog.Error("update: start failed, rolling back", "service", serviceID, "err", err)
 		if rbErr := e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion); rbErr != nil {
-			msg := "start failed: " + err.Error() + "; rollback incomplete: " + rbErr.Error()
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, check.CurrentVersion)
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+			return e.failUpdate(logID, serviceID,
+				"start failed: "+err.Error()+"; rollback incomplete: "+rbErr.Error(), check.CurrentVersion)
 		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "start failed: "+err.Error(), check.CurrentVersion)
 		e.alertUpdateFailed(serviceID, "start failed, rolled back to "+versionLabel(check.CurrentVersion))
@@ -610,10 +597,8 @@ func (e *Engine) ApplyUpdateToVersion(serviceID, targetVersion string) error {
 		}
 		slog.Error("update: service unhealthy after update, rolling back", "service", serviceID)
 		if rbErr := e.rollback(serviceID, tmpl, src, check.CurrentVersion, check.LatestVersion); rbErr != nil {
-			msg := "unhealthy after update; rollback incomplete: " + rbErr.Error()
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, check.CurrentVersion)
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+			return e.failUpdate(logID, serviceID,
+				"unhealthy after update; rollback incomplete: "+rbErr.Error(), check.CurrentVersion)
 		}
 		_ = e.store.UpdateLogStatus(logID, model.UpdateRolledBack, "unhealthy after update", check.CurrentVersion)
 		e.alertUpdateFailed(serviceID, "unhealthy after update, rolled back to "+versionLabel(check.CurrentVersion))
@@ -718,6 +703,10 @@ func (e *Engine) RollbackService(serviceID string) error {
 		// Without this guard the retag path below chases an image that does not
 		// exist and ends in a misleading "no rollback image available" plus an
 		// alert. Keep the honest message this path had before retag rollbacks.
+		//
+		// Deliberately not failUpdate: nothing was started, so nothing is broken,
+		// and an update_failed alert would report a fault that does not exist.
+		// TestRollbackService_SelfUpdateIsRefusedHonestly asserts the absence.
 		if src.Type == model.SourceGitHubRelease {
 			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "rollback not supported for custom-built services", "")
 			return &UpdateError{Msg: "rollback not supported for custom-built services"}
@@ -739,10 +728,7 @@ func (e *Engine) RollbackService(serviceID string) error {
 		rollbackRef := rollbackImageRef(serviceID)
 		info, inspectErr := e.compose.ImageInspectByName(rollbackRef)
 		if inspectErr != nil {
-			msg := "cannot verify the staged rollback image: " + inspectErr.Error()
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+			return e.failUpdate(logID, serviceID, "cannot verify the staged rollback image: "+inspectErr.Error(), "")
 		}
 		staged := info.Labels[SourceRefLabel]
 		switch {
@@ -755,15 +741,11 @@ func (e *Engine) RollbackService(serviceID string) error {
 			// dev.24 also has "unknown" in update_log.from_version, so a raw
 			// comparison found staged == prevVersion and restored an
 			// unidentifiable image while reporting the version it went back to.
-			msg := fmt.Sprintf("no rollback image available: %s carries no source ref, so it cannot be shown to hold %s", rollbackRef, prevVersion)
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+			return e.failUpdate(logID, serviceID, fmt.Sprintf(
+				"no rollback image available: %s carries no source ref, so it cannot be shown to hold %s", rollbackRef, prevVersion), "")
 		case staged != prevVersion:
-			msg := fmt.Sprintf("staged rollback image holds ref %q, not %q — only one generation is kept, so this version is gone", staged, prevVersion)
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-			e.alertUpdateFailed(serviceID, msg)
-			return &UpdateError{Msg: msg}
+			return e.failUpdate(logID, serviceID, fmt.Sprintf(
+				"staged rollback image holds ref %q, not %q — only one generation is kept, so this version is gone", staged, prevVersion), "")
 		}
 
 		// The update that got us here moved the compose tag to the version we
@@ -994,9 +976,7 @@ func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, s
 			refScheme = model.RefSchemeCommit
 		}
 		if err := e.compose.GitCheckout(src.RepoDir, check.LatestVersion, refScheme); err != nil {
-			_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
-			e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
-			return &UpdateError{Msg: "git checkout failed: " + err.Error()}
+			return e.failUpdate(logID, serviceID, "git checkout failed: "+err.Error(), "")
 		}
 	}
 
@@ -1067,10 +1047,7 @@ func (e *Engine) applyNeedsBuild(serviceID string, tmpl model.ServiceTemplate, s
 		return ""
 	}
 	fail := func(msg string) error {
-		msg += restoreComposeTag()
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-		e.alertUpdateFailed(serviceID, msg)
-		return &UpdateError{Msg: msg}
+		return e.failUpdate(logID, serviceID, msg+restoreComposeTag(), "")
 	}
 
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
@@ -1260,17 +1237,13 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 	// Step 1: Git checkout the new tag
 	_ = e.store.UpdateLogStatus(logID, model.UpdatePulling, "", "")
 	if err := e.compose.GitCheckout("/repo", check.LatestVersion, model.RefSchemeTag); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "git checkout failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "git checkout failed: "+err.Error())
-		return &UpdateError{Msg: "git checkout failed: " + err.Error()}
+		return e.failUpdate(logID, serviceID, "git checkout failed: "+err.Error(), "")
 	}
 
 	// Step 2: Rewrite compose image tags BEFORE building so the build
 	// creates images tagged with the new version (not the old one).
 	if err := e.compose.RewriteTags(serviceID, tmpl.UpdateSource.Images, "", check.LatestVersion); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "compose rewrite failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "compose rewrite failed: "+err.Error())
-		return &UpdateError{Msg: "compose rewrite failed: " + err.Error()}
+		return e.failUpdate(logID, serviceID, "compose rewrite failed: "+err.Error(), "")
 	}
 
 	// Step 3: Build with VERSION arg — build each service sequentially to avoid
@@ -1280,10 +1253,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 	// first: step 2 already moved it, and a file naming a version that was just
 	// rejected is a loaded gun for the next `up` from any source.
 	fail := func(msg string) error {
-		msg += e.restoreSelfComposeTags(serviceID, tmpl, check)
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, msg, "")
-		e.alertUpdateFailed(serviceID, msg)
-		return &UpdateError{Msg: msg}
+		return e.failUpdate(logID, serviceID, msg+e.restoreSelfComposeTags(serviceID, tmpl, check), "")
 	}
 
 	_ = e.store.UpdateLogStatus(logID, model.UpdateBuilding, "", "")
@@ -1302,9 +1272,7 @@ func (e *Engine) applySelfUpdate(serviceID string, tmpl model.ServiceTemplate, c
 	_ = e.store.UpdateLogStatus(logID, model.UpdateRestarting, "", check.CurrentVersion)
 
 	if err := e.compose.ComposeUpDetached("truffels-agent"); err != nil {
-		_ = e.store.UpdateLogStatus(logID, model.UpdateFailed, "detached restart failed: "+err.Error(), "")
-		e.alertUpdateFailed(serviceID, "detached restart failed: "+err.Error())
-		return &UpdateError{Msg: "detached restart failed: " + err.Error()}
+		return e.failUpdate(logID, serviceID, "detached restart failed: "+err.Error(), "")
 	}
 
 	// The API will be replaced shortly. The "restarting" status will be reconciled
