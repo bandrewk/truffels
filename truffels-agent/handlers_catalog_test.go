@@ -21,12 +21,28 @@ func TestHandleCatalogGet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d", rec.Code)
 	}
-	var got map[string]CatalogEntry
+	var got map[string]catalogEntryResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("Response not decodable: %v", err)
 	}
 	if _, ok := got["digibyted"]; !ok {
 		t.Error("digibyted missing from response")
+	}
+	// Verify that each entry includes container_names derived from catContainerName
+	entry := got["digibyted"]
+	if len(entry.ContainerNames) == 0 {
+		t.Error("digibyted entry has no container_names")
+	}
+	// Check that at least one container name matches the expected pattern
+	found := false
+	for _, cn := range entry.ContainerNames {
+		if cn == "truffels-digibyted-node" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected container name truffels-digibyted-node not found in %v", entry.ContainerNames)
 	}
 }
 

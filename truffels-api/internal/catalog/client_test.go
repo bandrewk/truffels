@@ -44,3 +44,40 @@ func TestClientGetUnknown(t *testing.T) {
 		t.Error("Get returned ok=true for unknown id")
 	}
 }
+
+func TestEntryContainerNamesFromField(t *testing.T) {
+	// Entry with container_names field set should return that field, no derivation.
+	entry := Entry{
+		ID: "test-id",
+		Containers: []struct {
+			Name          string `json:"name"`
+			MemoryLimitMB int    `json:"memory_limit_mb"`
+		}{
+			{Name: "node", MemoryLimitMB: 1024},
+		},
+		ContainerNamesField: []string{"truffels-test-id-node"},
+	}
+	got := entry.ContainerNames()
+	if len(got) != 1 || got[0] != "truffels-test-id-node" {
+		t.Errorf("ContainerNames() = %v, expected [truffels-test-id-node]", got)
+	}
+}
+
+func TestEntryContainerNamesWithoutFieldNoDerivation(t *testing.T) {
+	// Entry without container_names field should return empty/nil, not derived names.
+	// This tests the key change: no more self-derivation in the API.
+	entry := Entry{
+		ID: "test-id",
+		Containers: []struct {
+			Name          string `json:"name"`
+			MemoryLimitMB int    `json:"memory_limit_mb"`
+		}{
+			{Name: "node", MemoryLimitMB: 1024},
+		},
+		ContainerNamesField: nil,
+	}
+	got := entry.ContainerNames()
+	if len(got) != 0 {
+		t.Errorf("ContainerNames() = %v, expected empty when field not set (no derivation)", got)
+	}
+}

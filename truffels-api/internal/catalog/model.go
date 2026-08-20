@@ -31,14 +31,14 @@ type Entry struct {
 		MinDiskGB     int `json:"min_disk_gb,omitempty"`
 		MemoryFloorMB int `json:"memory_floor_mb"`
 	} `json:"resources"`
+
+	// ContainerNamesField holds the container names as reported by the agent.
+	// Derivation lives in the agent only; the API consumes what /v1/catalog reports.
+	ContainerNamesField []string `json:"container_names"`
 }
 
-// ContainerNames returns the derived container names. Same rule as in the
-// agent (catalog_derive.go): truffels-<id>-<container>.
+// ContainerNames returns the container names reported by the agent.
+// No derivation happens here — the agent is the source of truth.
 func (e Entry) ContainerNames() []string {
-	out := make([]string, 0, len(e.Containers))
-	for _, c := range e.Containers {
-		out = append(out, "truffels-"+e.ID+"-"+c.Name)
-	}
-	return out
+	return e.ContainerNamesField
 }

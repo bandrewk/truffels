@@ -12,8 +12,28 @@ import (
 // the two constructively impossible.
 var loadedCatalog Catalog
 
+// catalogEntryResponse wraps CatalogEntry with the derived container names.
+// Container name derivation is the agent's responsibility; the API consumes
+// what /v1/catalog reports. One rule, one place.
+type catalogEntryResponse struct {
+	CatalogEntry
+	ContainerNames []string `json:"container_names"`
+}
+
 func handleCatalogGet(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, loadedCatalog)
+	// Convert each CatalogEntry to catalogEntryResponse, computing container_names.
+	response := make(map[string]catalogEntryResponse)
+	for id, entry := range loadedCatalog {
+		names := make([]string, 0, len(entry.Containers))
+		for _, container := range entry.Containers {
+			names = append(names, catContainerName(id, container.Name))
+		}
+		response[id] = catalogEntryResponse{
+			CatalogEntry:   entry,
+			ContainerNames: names,
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func handleServiceApply(w http.ResponseWriter, r *http.Request) {
