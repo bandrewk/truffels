@@ -294,6 +294,73 @@ func isValidCommitHash(s string) bool {
 
 // --- Filesystem paths ---
 
+// hasCatalogSegment reports whether any path segment starts with "cat-".
+//
+// Catalog directories (compose/cat-<id>, config/cat-<id>, data/cat-<id>)
+// belong exclusively to the catalog handlers: they are generated from the
+// embedded catalog and re-applied on every apply. The legacy path-based
+// endpoints (file/reconcile, ensure-dir, clear-dir) must never write into or
+// clear them — a write would be undone by the next apply, and a clear would
+// delete catalog service data outside the purge_data contract. This is the
+// mirror image of the cat- prefix firewall: that one keeps catalog code out
+// of legacy directories, this one keeps legacy endpoints out of catalog
+// directories.
+func hasCatalogSegment(path string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(path), "/") {
+		if strings.HasPrefix(seg, "cat-") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveSymlinkPath resolves symlinks in the path and returns the real path
+// on the filesystem. This defends against intermediate symlinks that could
+// redirect operations into catalog directories: a compromised container with
+// r/w mount could create dataRoot/mempool/cache → ../cat-digibyted, and a
+// request to clear "mempool/cache" would pass a literal hasCatalogSegment
+// check but reach the catalog directory via the symlink. os.Root follows such
+// intermediate symlinks (they stay within the root), so the guard must check
+// the symlink-resolved path as well as the literal one.
+//
+// The implementation follows the pattern from validateUnderRoot: walk up to
+// the nearest existing ancestor, EvalSymlinks it, then append the remainder.
+// Returns the resolved path, or the original path if resolution fails or the
+// path does not exist.
+func resolveSymlinkPath(path string) string {
+	probe := path
+	// Walk up to the nearest existing ancestor.
+	for {
+		if _, err := os.Stat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe || parent == "/" {
+			// Could not find an existing ancestor; return original path.
+			return path
+		}
+		probe = parent
+	}
+	// Resolve symlinks in the ancestor.
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		// Resolution failed; return original path.
+		return path
+	}
+	if resolved == probe {
+		// No symlink in the ancestor; return original path.
+		return path
+	}
+	// Symlink was resolved. Reconstruct the full path by appending the
+	// remainder (the part that did not exist) to the resolved ancestor.
+	remainder := strings.TrimPrefix(path, probe)
+	if remainder != "" {
+		remainder = strings.TrimPrefix(remainder, string(filepath.Separator))
+		return filepath.Join(resolved, remainder)
+	}
+	return resolved
+}
+
 // validateUnderRoot returns the cleaned absolute path if it lies under `root`,
 // is not a symlink redirecting outside `root`, and contains no relative-path
 // escapes. Returns ("", error) otherwise. The path's parent must exist for
