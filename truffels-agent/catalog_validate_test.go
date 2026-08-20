@@ -169,4 +169,3 @@ func TestValidateParamsPatternControlCharsFirst(t *testing.T) {
 		t.Error("expected error for control char in pattern string")
 	}
 }
-

@@ -134,4 +134,3 @@ func TestValidateEntryAcceptsValidDigibyted(t *testing.T) {
 		t.Fatalf("expected valid entry to pass, got: %v", err)
 	}
 }
-

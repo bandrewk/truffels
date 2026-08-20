@@ -17,8 +17,8 @@ func TestHasCatalogSegment(t *testing.T) {
 	}
 	no := []string{
 		"/srv/truffels/compose/bitcoin/docker-compose.yml",
-		"/srv/truffels/data/duplicate-cat-pictures",   // substring, not a segment prefix
-		"/srv/truffels/data/bitcoin/catalog",           // segment does not start with cat-
+		"/srv/truffels/data/duplicate-cat-pictures", // substring, not a segment prefix
+		"/srv/truffels/data/bitcoin/catalog",        // segment does not start with cat-
 		"proxy/Caddyfile",
 	}
 	for _, p := range yes {

@@ -90,4 +90,3 @@ func LoadCatalog() (Catalog, error) {
 	}
 	return cat, nil
 }
-

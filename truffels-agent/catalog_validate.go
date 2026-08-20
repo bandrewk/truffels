@@ -130,4 +130,3 @@ func coerceParam(spec ParamSpec, raw any) (any, error) {
 		return nil, fmt.Errorf("unknown type %q", spec.Type)
 	}
 }
-

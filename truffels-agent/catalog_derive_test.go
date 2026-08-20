@@ -65,4 +65,3 @@ func TestSafeConfigKey(t *testing.T) {
 		}
 	}
 }
-

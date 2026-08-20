@@ -165,4 +165,3 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "purged": req.PurgeData})
 }
-

@@ -218,4 +218,3 @@ func TestServiceApplyWritesFiles(t *testing.T) {
 		t.Error("Data path exists but is not a directory")
 	}
 }
-

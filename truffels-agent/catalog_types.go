@@ -96,4 +96,3 @@ type ResourceSpec struct {
 	MinDiskGB     int `json:"min_disk_gb,omitempty"`
 	MemoryFloorMB int `json:"memory_floor_mb"`
 }
-

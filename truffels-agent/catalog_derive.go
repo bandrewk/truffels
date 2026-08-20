@@ -30,4 +30,3 @@ func catConfigPath(id, file string) string {
 func catConfigDir(id string) string {
 	return configRoot + "/cat-" + id
 }
-

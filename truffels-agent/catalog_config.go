@@ -69,4 +69,3 @@ func safeConfigKey(name string) error {
 	}
 	return nil
 }
-
