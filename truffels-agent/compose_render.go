@@ -125,4 +125,3 @@ func catalogImageRef(e CatalogEntry) (string, error) {
 	}
 	return "", fmt.Errorf("%s: neither image nor build specified", e.ID)
 }
-

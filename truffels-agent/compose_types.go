@@ -19,19 +19,19 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Image         string             `json:"image"`
-	ContainerName string             `json:"container_name"`
-	Restart       string             `json:"restart"`
-	User          string             `json:"user,omitempty"`
-	SecurityOpt   []string           `json:"security_opt"`
-	CapDrop       []string           `json:"cap_drop"`
-	Networks      []string           `json:"networks"`
-	Ports         []string           `json:"ports,omitempty"`
-	Volumes       []string           `json:"volumes,omitempty"`
-	Entrypoint    []string           `json:"entrypoint,omitempty"`
-	DependsOn     []string           `json:"depends_on,omitempty"`
-	Healthcheck   *composeHealth     `json:"healthcheck,omitempty"`
-	Deploy        composeDeploy      `json:"deploy"`
+	Image         string         `json:"image"`
+	ContainerName string         `json:"container_name"`
+	Restart       string         `json:"restart"`
+	User          string         `json:"user,omitempty"`
+	SecurityOpt   []string       `json:"security_opt"`
+	CapDrop       []string       `json:"cap_drop"`
+	Networks      []string       `json:"networks"`
+	Ports         []string       `json:"ports,omitempty"`
+	Volumes       []string       `json:"volumes,omitempty"`
+	Entrypoint    []string       `json:"entrypoint,omitempty"`
+	DependsOn     []string       `json:"depends_on,omitempty"`
+	Healthcheck   *composeHealth `json:"healthcheck,omitempty"`
+	Deploy        composeDeploy  `json:"deploy"`
 }
 
 type composeHealth struct {

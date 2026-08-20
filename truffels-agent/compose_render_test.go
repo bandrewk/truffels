@@ -119,4 +119,3 @@ func TestRenderComposeRejectsInvalidMountPath(t *testing.T) {
 		t.Fatal("expected error for mount path containing ':', got nil")
 	}
 }
-

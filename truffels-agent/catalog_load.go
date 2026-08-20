@@ -9,8 +9,9 @@ import (
 	"path"
 )
 
-//go:embed catalog/*.json
 // Embeds all catalog JSON files at compile time.
+//
+//go:embed catalog/*.json
 var catalogFS embed.FS
 
 type Catalog map[string]CatalogEntry
