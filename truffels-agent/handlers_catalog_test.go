@@ -133,6 +133,23 @@ func TestServiceRemovePurgesOnlyWhenAsked(t *testing.T) {
 	}
 }
 
+func TestServiceRemoveSkipsDownWithoutComposeFile(t *testing.T) {
+	loadedCatalog, _ = LoadCatalog()
+	tmp := t.TempDir()
+	composeRoot, dataRoot, configRoot = tmp+"/compose", tmp+"/data", tmp+"/config"
+	defer func() {
+		composeRoot, dataRoot, configRoot = "/srv/truffels/compose", "/srv/truffels/data", "/srv/truffels/config"
+	}()
+	// No compose directory created — remove must not attempt to call docker.
+	// Returns 200 and removes config/data as usual.
+	rec := httptest.NewRecorder()
+	handleServiceRemove(rec, httptest.NewRequest(http.MethodPost, "/v1/service/remove",
+		bytes.NewBufferString(`{"id":"digibyted","purge_data":false}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestServiceApplyWritesFiles(t *testing.T) {
 	loadedCatalog, _ = LoadCatalog()
 	tmp := t.TempDir()

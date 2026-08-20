@@ -104,6 +104,19 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Spec section 10: compose down BEFORE files disappear. Otherwise a
+	// running catalog container would be orphaned the moment its compose
+	// file is deleted. Only attempted when a compose file actually exists —
+	// a service that was applied but never started must still remove cleanly
+	// on hosts where docker is unavailable to the test environment.
+	composeFile := catComposeDir(req.ID) + "/docker-compose.yml"
+	if _, err := os.Stat(composeFile); err == nil {
+		if err := runCompose(catComposeDir(req.ID), "down"); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "compose down: " + err.Error()})
+			return
+		}
+	}
+
 	if err := os.RemoveAll(catComposeDir(req.ID)); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "compose-dir: " + err.Error()})
 		return
