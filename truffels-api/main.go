@@ -39,19 +39,28 @@ func main() {
 	}
 	defer st.Close()
 
-	// Service registry
-	registry := service.NewRegistry(cfg.ComposeRoot, cfg.GitHubRepo)
-
-	// Ensure all services exist in DB
-	for _, tmpl := range registry.All() {
-		_ = st.EnsureService(tmpl.ID)
-	}
-
 	// Agent client (Docker operations go through truffels-agent)
 	agentURL := envOr("TRUFFELS_AGENT_URL", "http://truffels-agent:9090")
 	compose := docker.NewComposeClient(agentURL)
 	docker.NewAgentInspector(agentURL)
 	slog.Info("agent configured", "url", agentURL)
+
+	// Catalog client is constructed before the registry: the registry projects
+	// installed catalog services, so it needs the catalog and the installation
+	// list as sources.
+	catalogClient := catalog.NewClient(agentURL)
+
+	// Service registry: legacy templates plus a projection of installed
+	// catalog services.
+	registry := service.NewRegistry(cfg.ComposeRoot, cfg.DataRoot, cfg.GitHubRepo, catalogClient, st)
+	if err := registry.Refresh(); err != nil {
+		slog.Warn("initial registry refresh failed", "err", err)
+	}
+
+	// Ensure all services exist in DB
+	for _, tmpl := range registry.All() {
+		_ = st.EnsureService(tmpl.ID)
+	}
 
 	// Host metrics collector
 	collector := metrics.NewCollector(cfg.HostProc, cfg.HostSys, cfg.DataRoot)
@@ -68,20 +77,38 @@ func main() {
 	updateEngine.Start()
 	defer updateEngine.Stop()
 
-	// Arm the catalog guards. The agent may still be starting when the API
-	// boots (both restart together on self-update), so retry until the
-	// catalog is served rather than crashing or silently staying unarmed.
-	catalogClient := catalog.NewClient(agentURL)
+	// Arm the catalog guards and reconcile installed catalog services. The
+	// agent may still be starting when the API boots (both restart together
+	// on self-update), so retry until the catalog is served.
 	go func() {
 		for {
 			ids, err := catalogClient.IDs()
-			if err == nil {
-				updates.SetCatalogIDs(ids)
-				slog.Info("catalog guards armed", "services", len(ids))
+			if err != nil {
+				slog.Warn("catalog not yet available, retrying", "err", err)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			updates.SetCatalogIDs(ids)
+			slog.Info("catalog guards armed", "services", len(ids))
+
+			// Reconcile installed catalog services on startup: re-apply each
+			// idempotently so compose+config exist (covers a DB restore whose
+			// files are missing). Running containers survive on their own via
+			// restart:unless-stopped; this does not force anything to start.
+			installs, err := st.ListCatalogInstallations()
+			if err != nil {
+				slog.Warn("list catalog installations failed", "err", err)
 				return
 			}
-			slog.Warn("catalog not yet available, retrying", "err", err)
-			time.Sleep(10 * time.Second)
+			for _, inst := range installs {
+				if err := catalogClient.Apply(inst.CatalogID, inst.Params); err != nil {
+					slog.Warn("catalog reconcile apply failed", "id", inst.CatalogID, "err", err)
+				}
+			}
+			if err := registry.Refresh(); err != nil {
+				slog.Warn("registry refresh after catalog reconcile failed", "err", err)
+			}
+			return
 		}
 	}()
 
@@ -104,7 +131,7 @@ func main() {
 	btcRPC := initBitcoinRPC(cfg.SecretsRoot)
 
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine, version)
+	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine, catalogClient, version)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),
