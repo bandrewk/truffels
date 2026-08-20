@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -79,4 +80,44 @@ func (c *Client) IDs() (map[string]bool, error) {
 		ids[id] = true
 	}
 	return ids, nil
+}
+
+func (c *Client) Apply(id string, params map[string]any) error {
+	type req struct {
+		ID     string         `json:"id"`
+		Params map[string]any `json:"params"`
+	}
+	body, err := json.Marshal(req{ID: id, Params: params})
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Post(c.agentURL+"/v1/service/apply", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("agent apply status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *Client) Remove(id string, purgeData bool) error {
+	type req struct {
+		ID        string `json:"id"`
+		PurgeData bool   `json:"purge_data"`
+	}
+	body, err := json.Marshal(req{ID: id, PurgeData: purgeData})
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Post(c.agentURL+"/v1/service/remove", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("agent remove status %d", resp.StatusCode)
+	}
+	return nil
 }
