@@ -10,6 +10,7 @@ import (
 
 	"truffels-api/internal/auth"
 	"truffels-api/internal/bitcoin"
+	"truffels-api/internal/catalog"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
@@ -18,26 +19,28 @@ import (
 )
 
 type Server struct {
-	registry     *service.Registry
-	store        *store.Store
-	compose      *docker.ComposeClient
-	collector    *metrics.Collector
-	auth         *auth.Auth
-	btcRPC       *bitcoin.Client
-	updateEngine *updates.Engine
-	Version      string
+	registry      *service.Registry
+	store         *store.Store
+	compose       *docker.ComposeClient
+	collector     *metrics.Collector
+	auth          *auth.Auth
+	btcRPC        *bitcoin.Client
+	updateEngine  *updates.Engine
+	catalogClient *catalog.Client
+	Version       string
 }
 
-func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine, version string) *Server {
+func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine, cat *catalog.Client, version string) *Server {
 	return &Server{
-		registry:     reg,
-		store:        st,
-		compose:      comp,
-		collector:    coll,
-		auth:         a,
-		btcRPC:       btc,
-		updateEngine: ue,
-		Version:      version,
+		registry:      reg,
+		store:         st,
+		compose:       comp,
+		collector:     coll,
+		auth:          a,
+		btcRPC:        btc,
+		updateEngine:  ue,
+		catalogClient: cat,
+		Version:       version,
 	}
 }
 
@@ -105,6 +108,11 @@ func (s *Server) Router() http.Handler {
 			r.Get("/updates/logs", s.handleUpdateLogs)
 			r.Get("/updates/status", s.handleUpdateStatus)
 			r.Post("/updates/rollback/{id}", s.handleRollbackService)
+
+			r.Get("/catalog", s.handleGetCatalog)
+			r.Post("/catalog/{id}/install", s.handleCatalogInstall)
+			r.Post("/catalog/{id}/uninstall", s.handleCatalogUninstall)
+			r.Get("/catalog/{id}/admission", s.handleCatalogAdmission)
 		})
 	})
 

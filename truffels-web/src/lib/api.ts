@@ -111,6 +111,35 @@ export interface ConfigResponse {
   message?: string
 }
 
+export interface CatalogEntry {
+  id: string
+  display_name: string
+  description: string
+  role: string
+  implementation: string
+  chain: string
+  params?: {
+    name: string
+    type: string
+    default: any
+    min?: number
+    max?: number
+    enum?: string[]
+  }[]
+  container_names: string[]
+  resources: any
+}
+
+export interface AdmissionDecision {
+  allowed: boolean
+  reason: string
+  required_ram_mb: number
+  usable_ram_mb: number
+  required_disk_gb: number
+  free_disk_gb: number
+}
+
+
 export interface BitcoindStats {
   blockchain: {
     chain: string
@@ -470,6 +499,10 @@ async function put<T>(path: string, body?: unknown): Promise<T> {
 
 export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
+  catalog: () => get<CatalogEntry[]>('/catalog'),
+  catalogAdmission: (id: string) => get<AdmissionDecision>('/catalog/' + id + '/admission'),
+  installCatalog: (id: string, params: Record<string, unknown>) => post<ServiceInstance>('/catalog/' + id + '/install', { params }),
+  uninstallCatalog: (id: string, purge_data: boolean) => post<{ status: string }>('/catalog/' + id + '/uninstall', { purge_data }),
   services: () => get<ServiceInstance[]>('/services'),
   service: (id: string) => get<ServiceInstance>(`/services/${id}`),
   serviceAction: (id: string, action: string) => post<{ status: string }>(`/services/${id}/action`, { action }),

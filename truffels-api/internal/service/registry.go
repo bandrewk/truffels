@@ -2,16 +2,38 @@ package service
 
 import (
 	"fmt"
+	"log/slog"
+	"sync"
+	"truffels-api/internal/catalog"
 	"truffels-api/internal/model"
 	"truffels-api/internal/service/templates"
+	"truffels-api/internal/store"
 )
 
-type Registry struct {
-	services map[string]model.ServiceTemplate
-	order    []string // topological order
+type CatalogSource interface {
+	All() (map[string]catalog.Entry, error)
 }
 
-func NewRegistry(composeRoot, gitHubRepo string) *Registry {
+type InstallSource interface {
+	ListCatalogInstallations() ([]store.CatalogInstallation, error)
+}
+
+type Registry struct {
+	mu       sync.RWMutex
+	services map[string]model.ServiceTemplate
+	order    []string // topological order
+
+	composeRoot   string
+	dataRoot      string
+	gitHubRepo    string
+	catalogSource CatalogSource
+	installSource InstallSource
+
+	legacyOrder    []string
+	legacyServices map[string]model.ServiceTemplate
+}
+
+func NewRegistry(composeRoot, dataRoot, gitHubRepo string, catalogSource CatalogSource, installSource InstallSource) *Registry {
 	all := []model.ServiceTemplate{
 		templates.Bitcoind,
 		templates.Electrs,
@@ -25,7 +47,12 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 	}
 
 	r := &Registry{
-		services: make(map[string]model.ServiceTemplate, len(all)),
+		composeRoot:    composeRoot,
+		dataRoot:       dataRoot,
+		gitHubRepo:     gitHubRepo,
+		catalogSource:  catalogSource,
+		installSource:  installSource,
+		legacyServices: make(map[string]model.ServiceTemplate, len(all)),
 	}
 
 	for _, svc := range all {
@@ -40,34 +67,85 @@ func NewRegistry(composeRoot, gitHubRepo string) *Registry {
 			src.Repo = gitHubRepo
 			svc.UpdateSource = &src
 		}
-		r.services[svc.ID] = svc
+		r.legacyServices[svc.ID] = svc
 	}
 
 	// Fixed topological order for the dependency graph
-	r.order = []string{"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db", "mempool", "ckstats", "proxy", "truffels"}
+	r.legacyOrder = []string{"bitcoind", "electrs", "ckpool", "mempool-db", "ckstats-db", "mempool", "ckstats", "proxy", "truffels"}
 
 	// Compute stack containers: all containers sharing the same compose dir
 	byDir := map[string][]string{}
-	for _, svc := range r.services {
+	for _, svc := range r.legacyServices {
 		byDir[svc.ComposeDir] = append(byDir[svc.ComposeDir], svc.ContainerNames...)
 	}
-	for id, svc := range r.services {
+	for id, svc := range r.legacyServices {
 		stack := byDir[svc.ComposeDir]
 		if len(stack) > 1 {
 			svc.StackContainers = stack
-			r.services[id] = svc
+			r.legacyServices[id] = svc
 		}
 	}
+
+	// Initialize the current view with legacy services
+	r.services = make(map[string]model.ServiceTemplate, len(r.legacyServices))
+	for k, v := range r.legacyServices {
+		r.services[k] = v
+	}
+	r.order = make([]string, len(r.legacyOrder))
+	copy(r.order, r.legacyOrder)
 
 	return r
 }
 
+func (r *Registry) Refresh() error {
+	var installations []store.CatalogInstallation
+	var entries map[string]catalog.Entry
+	if r.installSource != nil && r.catalogSource != nil {
+		var err error
+		installations, err = r.installSource.ListCatalogInstallations()
+		if err != nil {
+			return fmt.Errorf("failed to list installations: %w", err)
+		}
+		entries, err = r.catalogSource.All()
+		if err != nil {
+			return fmt.Errorf("failed to get catalog entries: %w", err)
+		}
+	}
+
+	newServices := make(map[string]model.ServiceTemplate, len(r.legacyServices))
+	for k, v := range r.legacyServices {
+		newServices[k] = v
+	}
+	newOrder := make([]string, len(r.legacyOrder))
+	copy(newOrder, r.legacyOrder)
+	for _, inst := range installations {
+		entry, ok := entries[inst.CatalogID]
+		if !ok {
+			slog.Warn("catalog entry not found for installation", "id", inst.CatalogID)
+			continue
+		}
+		tmpl := CatalogEntryToTemplate(entry, r.composeRoot, r.dataRoot)
+		newServices[tmpl.ID] = tmpl
+		newOrder = append(newOrder, tmpl.ID)
+	}
+
+	r.mu.Lock()
+	r.services = newServices
+	r.order = newOrder
+	r.mu.Unlock()
+	return nil
+}
+
 func (r *Registry) Get(id string) (model.ServiceTemplate, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	s, ok := r.services[id]
 	return s, ok
 }
 
 func (r *Registry) All() []model.ServiceTemplate {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make([]model.ServiceTemplate, 0, len(r.order))
 	for _, id := range r.order {
 		result = append(result, r.services[id])
@@ -77,7 +155,10 @@ func (r *Registry) All() []model.ServiceTemplate {
 
 // ValidateDependencies checks that all dependencies of a service are running.
 func (r *Registry) ValidateDependencies(id string, isRunning func(string) bool) error {
+	r.mu.RLock()
 	svc, ok := r.services[id]
+	r.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("unknown service: %s", id)
 	}
@@ -103,6 +184,8 @@ func NewTestRegistry(tmpls []model.ServiceTemplate) *Registry {
 
 // Dependents returns services that depend on the given service.
 func (r *Registry) Dependents(id string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var deps []string
 	for _, svc := range r.services {
 		for _, d := range svc.Dependencies {

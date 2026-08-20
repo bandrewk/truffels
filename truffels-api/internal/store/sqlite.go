@@ -55,6 +55,7 @@ func (s *Store) migrate() error {
 		"migrations/007_host_io_metrics.sql",
 		"migrations/008_trend_alerts.sql",
 		"migrations/009_dir_size_metrics.sql",
+		"migrations/010_catalog_installations.sql",
 	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
