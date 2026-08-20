@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -22,12 +21,28 @@ func TestHandleCatalogGet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d", rec.Code)
 	}
-	var got map[string]CatalogEntry
+	var got map[string]catalogEntryResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("Response not decodable: %v", err)
 	}
 	if _, ok := got["digibyted"]; !ok {
 		t.Error("digibyted missing from response")
+	}
+	// Verify that each entry includes container_names derived from catContainerName
+	entry := got["digibyted"]
+	if len(entry.ContainerNames) == 0 {
+		t.Error("digibyted entry has no container_names")
+	}
+	// Check that at least one container name matches the expected pattern
+	found := false
+	for _, cn := range entry.ContainerNames {
+		if cn == "truffels-digibyted-node" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected container name truffels-digibyted-node not found in %v", entry.ContainerNames)
 	}
 }
 
@@ -86,7 +101,7 @@ func TestServiceRemoveKeepsDataByDefault(t *testing.T) {
 	}
 
 	// Create config file that should be removed (it is a rendered artifact)
-	configDir := filepath.Dir(catConfigPath("digibyted", "x"))
+	configDir := catConfigDir("digibyted")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +145,23 @@ func TestServiceRemovePurgesOnlyWhenAsked(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Error("Data was not removed even though purge_data=true")
+	}
+}
+
+func TestServiceRemoveSkipsDownWithoutComposeFile(t *testing.T) {
+	loadedCatalog, _ = LoadCatalog()
+	tmp := t.TempDir()
+	composeRoot, dataRoot, configRoot = tmp+"/compose", tmp+"/data", tmp+"/config"
+	defer func() {
+		composeRoot, dataRoot, configRoot = "/srv/truffels/compose", "/srv/truffels/data", "/srv/truffels/config"
+	}()
+	// No compose directory created — remove must not attempt to call docker.
+	// Returns 200 and removes config/data as usual.
+	rec := httptest.NewRecorder()
+	handleServiceRemove(rec, httptest.NewRequest(http.MethodPost, "/v1/service/remove",
+		bytes.NewBufferString(`{"id":"digibyted","purge_data":false}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Code = %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

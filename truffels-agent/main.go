@@ -2145,6 +2145,11 @@ func handleFileReconcile(w http.ResponseWriter, r *http.Request) {
 		chosenRoot = configRoot
 	}
 
+	if hasCatalogSegment(fullPath) || hasCatalogSegment(resolveSymlinkPath(fullPath)) {
+		writeJSON(w, 403, map[string]string{"error": "catalog directories are managed exclusively via /v1/service/*"})
+		return
+	}
+
 	slog.Info("file reconcile", "path", fullPath)
 
 	root, name, err := anchorUnderRoot(fullPath, chosenRoot)
@@ -2212,6 +2217,11 @@ func handleEnsureDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if hasCatalogSegment(cleaned) || hasCatalogSegment(resolveSymlinkPath(cleaned)) {
+		writeJSON(w, 403, map[string]string{"error": "catalog directories are managed exclusively via /v1/service/*"})
+		return
+	}
+
 	root, name, err := anchorUnderRoot(cleaned, dataRoot)
 	if err != nil {
 		writeJSON(w, 403, map[string]string{"error": err.Error()})
@@ -2276,6 +2286,11 @@ func handleClearDir(w http.ResponseWriter, r *http.Request) {
 	cleaned, err := validateUnderRoot(req.Path, dataRoot)
 	if err != nil {
 		writeJSON(w, 403, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if hasCatalogSegment(cleaned) || hasCatalogSegment(resolveSymlinkPath(cleaned)) {
+		writeJSON(w, 403, map[string]string{"error": "catalog directories are managed exclusively via /v1/service/*"})
 		return
 	}
 

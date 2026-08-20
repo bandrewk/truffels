@@ -32,6 +32,33 @@ func parseEntry(raw []byte) (CatalogEntry, error) {
 	return e, nil
 }
 
+// validateEntry checks fields that parseEntry cannot verify:
+// container names, empty containers, memory limits, and image references.
+func validateEntry(e CatalogEntry) error {
+	if len(e.Containers) == 0 {
+		return fmt.Errorf("entry %q: containers must not be empty", e.ID)
+	}
+	for _, c := range e.Containers {
+		// Container names use the same rule as catalog IDs — intentional.
+		if !catalogIDRe.MatchString(c.Name) {
+			return fmt.Errorf("entry %q: invalid container name %q", e.ID, c.Name)
+		}
+		if c.MemoryLimitMB <= 0 {
+			return fmt.Errorf("entry %q: container %q: memory_limit_mb must be > 0", e.ID, c.Name)
+		}
+	}
+	if e.Image != "" {
+		// managedImageRefChars is defined in allowlists.go (same package).
+		if !hasOnlyChars(e.Image, managedImageRefChars) {
+			return fmt.Errorf("entry %q: image %q contains invalid characters", e.ID, e.Image)
+		}
+	}
+	if e.Build != nil && e.Build.Version == "" {
+		return fmt.Errorf("entry %q: build is set but version is empty", e.ID)
+	}
+	return nil
+}
+
 func LoadCatalog() (Catalog, error) {
 	entries, err := fs.ReadDir(catalogFS, "catalog")
 	if err != nil {
@@ -55,6 +82,9 @@ func LoadCatalog() (Catalog, error) {
 		}
 		if _, dup := cat[e.ID]; dup {
 			return nil, fmt.Errorf("duplicate id %q", e.ID)
+		}
+		if err := validateEntry(e); err != nil {
+			return nil, fmt.Errorf("%s: %w", de.Name(), err)
 		}
 		cat[e.ID] = e
 	}

@@ -37,6 +37,7 @@ type ParamSpec struct {
 	Min         *int     `json:"min,omitempty"`
 	Max         *int     `json:"max,omitempty"`
 	Enum        []string `json:"enum,omitempty"`
+	Pattern     string   `json:"pattern,omitempty"`
 }
 
 type ContainerSpec struct {

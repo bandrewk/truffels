@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -48,4 +49,23 @@ func renderDigibyteConf(params map[string]any) (map[string][]byte, error) {
 	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
 
 	return map[string][]byte{"digibyte.conf": []byte(b.String())}, nil
+}
+
+// safeConfigKey validates that a config file name is a safe bare filename:
+// not empty, equal to its own filepath.Base (no path separators), not "." or
+// "..", and containing no control characters.
+func safeConfigKey(name string) error {
+	if name == "" {
+		return fmt.Errorf("config key must not be empty")
+	}
+	if name != filepath.Base(name) {
+		return fmt.Errorf("config key %q must be a bare filename", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("config key %q is not allowed", name)
+	}
+	if err := rejectsControlChars(name); err != nil {
+		return fmt.Errorf("config key %q: %w", name, err)
+	}
+	return nil
 }

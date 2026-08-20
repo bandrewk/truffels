@@ -8,11 +8,13 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"truffels-api/internal/alerts"
 	"truffels-api/internal/api"
 	"truffels-api/internal/auth"
 	"truffels-api/internal/bitcoin"
+	"truffels-api/internal/catalog"
 	composereconcile "truffels-api/internal/compose"
 	"truffels-api/internal/config"
 	"truffels-api/internal/docker"
@@ -65,6 +67,23 @@ func main() {
 	updateEngine := updates.NewEngine(st, registry, compose)
 	updateEngine.Start()
 	defer updateEngine.Stop()
+
+	// Arm the catalog guards. The agent may still be starting when the API
+	// boots (both restart together on self-update), so retry until the
+	// catalog is served rather than crashing or silently staying unarmed.
+	catalogClient := catalog.NewClient(agentURL)
+	go func() {
+		for {
+			ids, err := catalogClient.IDs()
+			if err == nil {
+				updates.SetCatalogIDs(ids)
+				slog.Info("catalog guards armed", "services", len(ids))
+				return
+			}
+			slog.Warn("catalog not yet available, retrying", "err", err)
+			time.Sleep(10 * time.Second)
+		}
+	}()
 
 	// Compose reconciliation — regenerate compose files from templates on startup.
 	// Reconciler emits critical Alerts on compose-up failures so that a typo
