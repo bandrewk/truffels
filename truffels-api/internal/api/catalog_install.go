@@ -176,7 +176,7 @@ func (s *Server) handleCatalogUninstall(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body) // ignore error, optional
 
-	_, ok, err := s.store.GetCatalogInstallation(id)
+	inst, ok, err := s.store.GetCatalogInstallation(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -185,23 +185,25 @@ func (s *Server) handleCatalogUninstall(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "not installed")
 		return
 	}
-
-	if err := s.catalogClient.Remove(id, body.PurgeData); err != nil {
-		writeError(w, http.StatusBadGateway, "agent remove failed: "+err.Error())
-		return
-	}
-
+	// Delete the DB row before asking the agent to remove files. This keeps
+	// symmetry with install (which rolls back on DB failure) and, crucially,
+	// prevents a zombie: if the DB delete fails the service stays fully
+	// installed; if the agent remove fails we roll the DB row back, so the
+	// startup reconcile never revives a service whose files are already gone.
 	if err := s.store.RemoveCatalogInstallation(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "db remove failed: "+err.Error())
 		return
 	}
-
-	if body.PurgeData {
-		_ = s.store.SetServiceEnabled(id, false) // clear services row
+	if err := s.catalogClient.Remove(id, body.PurgeData); err != nil {
+		_ = s.store.AddCatalogInstallation(inst.ID, inst.CatalogID, inst.Params) // rollback
+		writeError(w, http.StatusBadGateway, "agent remove failed: "+err.Error())
+		return
 	}
-
+	if body.PurgeData {
+		_ = s.store.SetServiceEnabled(id, false)
+	}
 	if err := s.registry.Refresh(); err != nil {
-		slog.Warn("registry refresh after catalog change failed", "err", err)
+		slog.Warn("registry refresh after uninstall failed", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

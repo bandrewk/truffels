@@ -98,8 +98,19 @@ func NewRegistry(composeRoot, dataRoot, gitHubRepo string, catalogSource Catalog
 }
 
 func (r *Registry) Refresh() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	var installations []store.CatalogInstallation
+	var entries map[string]catalog.Entry
+	if r.installSource != nil && r.catalogSource != nil {
+		var err error
+		installations, err = r.installSource.ListCatalogInstallations()
+		if err != nil {
+			return fmt.Errorf("failed to list installations: %w", err)
+		}
+		entries, err = r.catalogSource.All()
+		if err != nil {
+			return fmt.Errorf("failed to get catalog entries: %w", err)
+		}
+	}
 
 	newServices := make(map[string]model.ServiceTemplate, len(r.legacyServices))
 	for k, v := range r.legacyServices {
@@ -107,31 +118,21 @@ func (r *Registry) Refresh() error {
 	}
 	newOrder := make([]string, len(r.legacyOrder))
 	copy(newOrder, r.legacyOrder)
-
-	if r.installSource != nil && r.catalogSource != nil {
-		installations, err := r.installSource.ListCatalogInstallations()
-		if err != nil {
-			return fmt.Errorf("failed to list installations: %w", err)
+	for _, inst := range installations {
+		entry, ok := entries[inst.CatalogID]
+		if !ok {
+			slog.Warn("catalog entry not found for installation", "id", inst.CatalogID)
+			continue
 		}
-		entries, err := r.catalogSource.All()
-		if err != nil {
-			return fmt.Errorf("failed to get catalog entries: %w", err)
-		}
-
-		for _, inst := range installations {
-			entry, ok := entries[inst.CatalogID]
-			if !ok {
-				slog.Warn("catalog entry not found for installation", "id", inst.CatalogID)
-				continue
-			}
-			tmpl := CatalogEntryToTemplate(entry, r.composeRoot, r.dataRoot)
-			newServices[tmpl.ID] = tmpl
-			newOrder = append(newOrder, tmpl.ID)
-		}
+		tmpl := CatalogEntryToTemplate(entry, r.composeRoot, r.dataRoot)
+		newServices[tmpl.ID] = tmpl
+		newOrder = append(newOrder, tmpl.ID)
 	}
 
+	r.mu.Lock()
 	r.services = newServices
 	r.order = newOrder
+	r.mu.Unlock()
 	return nil
 }
 
