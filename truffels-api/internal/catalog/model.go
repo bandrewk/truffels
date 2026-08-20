@@ -12,6 +12,18 @@ type Entry struct {
 	Implementation string `json:"implementation"`
 	Chain          string `json:"chain,omitempty"`
 
+	// Params is the install-parameter schema the web dialog builds its form
+	// from. Without it the install dialog renders no fields.
+	Params []struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description,omitempty"`
+		Type        string   `json:"type"`
+		Default     any      `json:"default,omitempty"`
+		Min         *int     `json:"min,omitempty"`
+		Max         *int     `json:"max,omitempty"`
+		Enum        []string `json:"enum,omitempty"`
+	} `json:"params,omitempty"`
+
 	Containers []struct {
 		Name          string `json:"name"`
 		MemoryLimitMB int    `json:"memory_limit_mb"`

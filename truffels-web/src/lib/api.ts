@@ -120,6 +120,7 @@ export interface CatalogEntry {
   chain: string
   params?: {
     name: string
+    description?: string
     type: string
     default: any
     min?: number
