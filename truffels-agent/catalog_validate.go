@@ -102,6 +102,18 @@ func coerceParam(spec ParamSpec, raw any) (any, error) {
 		if err := rejectsControlChars(s); err != nil {
 			return nil, err
 		}
+		if spec.Pattern != "" {
+			// Patterns are anchored by the catalog author, not implicitly —
+			// a catalog author writes ^…$ themselves; the code does not enforce it
+			// (documented decision so partial matches remain possible where intended).
+			re, err := regexp.Compile(spec.Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid pattern %q: %w", spec.Pattern, err)
+			}
+			if !re.MatchString(s) {
+				return nil, fmt.Errorf("value %q does not match pattern %q", s, spec.Pattern)
+			}
+		}
 		return s, nil
 	case "enum":
 		s, ok := raw.(string)
@@ -118,3 +130,4 @@ func coerceParam(spec ParamSpec, raw any) (any, error) {
 		return nil, fmt.Errorf("unknown type %q", spec.Type)
 	}
 }
+

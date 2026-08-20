@@ -107,3 +107,66 @@ func TestValidateParamsAcceptsNormalIntegers(t *testing.T) {
 		t.Errorf("expected no error for normal value 42, got %v", err)
 	}
 }
+
+func TestValidateParamsPatternMatch(t *testing.T) {
+	entry := CatalogEntry{
+		ID: "test-pattern",
+		Params: []ParamSpec{
+			{Name: "sig", Type: "string", Pattern: "^[a-z]{1,8}$"},
+		},
+	}
+	if _, err := ValidateParams(entry, map[string]any{"sig": "abc"}); err != nil {
+		t.Errorf("expected no error for 'abc', got %v", err)
+	}
+}
+
+func TestValidateParamsPatternRejectsUppercase(t *testing.T) {
+	entry := CatalogEntry{
+		ID: "test-pattern",
+		Params: []ParamSpec{
+			{Name: "sig", Type: "string", Pattern: "^[a-z]{1,8}$"},
+		},
+	}
+	if _, err := ValidateParams(entry, map[string]any{"sig": "ABC"}); err == nil {
+		t.Error("expected error for 'ABC'")
+	}
+}
+
+func TestValidateParamsPatternRejectsTooLong(t *testing.T) {
+	entry := CatalogEntry{
+		ID: "test-pattern",
+		Params: []ParamSpec{
+			{Name: "sig", Type: "string", Pattern: "^[a-z]{1,8}$"},
+		},
+	}
+	if _, err := ValidateParams(entry, map[string]any{"sig": "toolonghere"}); err == nil {
+		t.Error("expected error for 'toolonghere'")
+	}
+}
+
+func TestValidateParamsInvalidPattern(t *testing.T) {
+	entry := CatalogEntry{
+		ID: "test-pattern",
+		Params: []ParamSpec{
+			{Name: "sig", Type: "string", Pattern: "(["},
+		},
+	}
+	if _, err := ValidateParams(entry, map[string]any{"sig": "abc"}); err == nil {
+		t.Error("expected error for invalid pattern")
+	}
+}
+
+func TestValidateParamsPatternControlCharsFirst(t *testing.T) {
+	entry := CatalogEntry{
+		ID: "test-pattern",
+		Params: []ParamSpec{
+			{Name: "sig", Type: "string", Pattern: "^[a-z]{1,8}$"},
+		},
+	}
+	// "a\nb" contains a control character, so it must fail even though it
+	// would not match the pattern anyway — control char check runs first.
+	if _, err := ValidateParams(entry, map[string]any{"sig": "a\nb"}); err == nil {
+		t.Error("expected error for control char in pattern string")
+	}
+}
+
