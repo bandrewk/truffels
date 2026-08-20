@@ -145,14 +145,14 @@ func newTestServerWithAgent(t *testing.T, agentState *mockAgentState) (*Server, 
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose", "")
+	reg := service.NewRegistry("/srv/truffels/compose", "", "", nil, nil)
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 
 	// Set the global agent inspector to use our mock
 	docker.NewAgentInspector(mockSrv.URL)
 
-	srv := NewServer(reg, st, compose, nil, a, nil, nil, "test")
+	srv := NewServer(reg, st, compose, nil, a, nil, nil, nil, "test")
 	return srv, st, mockSrv
 }
 
@@ -1423,7 +1423,7 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	mockSrv := newMockAgent(t, agentState)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose", "")
+	reg := service.NewRegistry("/srv/truffels/compose", "", "", nil, nil)
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 	docker.NewAgentInspector(mockSrv.URL)
@@ -1454,7 +1454,7 @@ func newTestServerWithCollector(t *testing.T, agentState *mockAgentState, tempMi
 	_ = os.WriteFile(filepath.Join(procDir, "diskstats"), []byte(""), 0644)
 
 	coll := metrics.NewCollector(procDir, sysDir, diskDir)
-	srv := NewServer(reg, st, compose, coll, a, nil, nil, "test")
+	srv := NewServer(reg, st, compose, coll, a, nil, nil, nil, "test")
 	return srv, st, mockSrv
 }
 
@@ -1615,12 +1615,12 @@ func newTestServerWithPullAgent(t *testing.T, agentState *mockAgentState, pullOu
 	mockSrv := newMockAgentWithPull(t, agentState, pullOutput)
 	t.Cleanup(mockSrv.Close)
 
-	reg := service.NewRegistry("/srv/truffels/compose", "")
+	reg := service.NewRegistry("/srv/truffels/compose", "", "", nil, nil)
 	a := auth.New(st)
 	compose := docker.NewComposeClient(mockSrv.URL)
 	docker.NewAgentInspector(mockSrv.URL)
 
-	srv := NewServer(reg, st, compose, nil, a, nil, nil, "test")
+	srv := NewServer(reg, st, compose, nil, a, nil, nil, nil, "test")
 	return srv, st, mockSrv
 }
 
