@@ -15,12 +15,12 @@ type Input struct {
 
 // Decision is the result of an admission check.
 type Decision struct {
-	Allowed        bool
-	Reason         string
-	RequiredRAMMB  int
-	UsableRAMMB    int
-	RequiredDiskGB int
-	FreeDiskGB     int
+	Allowed        bool   `json:"allowed"`
+	Reason         string `json:"reason"`
+	RequiredRAMMB  int    `json:"required_ram_mb"`
+	UsableRAMMB    int    `json:"usable_ram_mb"`
+	RequiredDiskGB int    `json:"required_disk_gb"`
+	FreeDiskGB     int    `json:"free_disk_gb"`
 }
 
 // Check evaluates whether a new container can be admitted based on

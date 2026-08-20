@@ -1,6 +1,10 @@
 package admission
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestCheck_Allowed(t *testing.T) {
 	in := Input{
@@ -77,5 +81,20 @@ func TestCheck_DiskTooLow(t *testing.T) {
 	}
 	if d.Reason == "" {
 		t.Error("expected non-empty Reason")
+	}
+}
+
+// The web UI reads these exact snake_case keys; a struct without json tags
+// serialized them as PascalCase, which made the install dialog read
+// `allowed` as undefined and always show "Cannot install". Pin the wire shape.
+func TestDecisionJSONKeys(t *testing.T) {
+	raw, err := json.Marshal(Decision{Allowed: true, Reason: "ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"allowed"`, `"reason"`, `"required_ram_mb"`, `"usable_ram_mb"`, `"required_disk_gb"`, `"free_disk_gb"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("admission JSON missing %s: %s", key, raw)
+		}
 	}
 }
