@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 )
 
 // loadedCatalog is filled once at startup. The catalog lives only here in the
@@ -63,7 +62,7 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 	}{
 		{catComposeDir(req.ID), 0o755},
 		{catDataDir(req.ID), 0o755},
-		{filepath.Dir(catConfigPath(req.ID, "x")), 0o755},
+		{catConfigDir(req.ID), 0o755},
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d.path, d.mode); err != nil {
@@ -72,6 +71,10 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for name, content := range configs {
+		if err := safeConfigKey(name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config key: " + err.Error()})
+			return
+		}
 		if err := os.WriteFile(catConfigPath(req.ID, name), content, 0o644); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config: " + err.Error()})
 			return
@@ -125,7 +128,7 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 	// Rendered config files are artifacts derived from the catalog, not user
 	// data: they are removed together with the compose dir. The data dir is
 	// only ever touched when the caller explicitly asks via purge_data.
-	if err := os.RemoveAll(filepath.Dir(catConfigPath(req.ID, "x"))); err != nil {
+	if err := os.RemoveAll(catConfigDir(req.ID)); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config-dir: " + err.Error()})
 		return
 	}
@@ -142,3 +145,4 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "purged": req.PurgeData})
 }
+

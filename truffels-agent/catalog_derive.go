@@ -23,3 +23,11 @@ func catDataDir(id string) string {
 func catConfigPath(id, file string) string {
 	return configRoot + "/cat-" + id + "/" + file
 }
+
+// catConfigDir returns the directory containing the rendered config files for
+// a catalog entry. Replaces the filepath.Dir(catConfigPath(id,"x")) idiom —
+// a dummy filename as a path idiom in the trust boundary invites wrong copies.
+func catConfigDir(id string) string {
+	return configRoot + "/cat-" + id
+}
+

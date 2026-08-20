@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,7 +85,7 @@ func TestServiceRemoveKeepsDataByDefault(t *testing.T) {
 	}
 
 	// Create config file that should be removed (it is a rendered artifact)
-	configDir := filepath.Dir(catConfigPath("digibyted", "x"))
+	configDir := catConfigDir("digibyted")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -203,3 +202,4 @@ func TestServiceApplyWritesFiles(t *testing.T) {
 		t.Error("Data path exists but is not a directory")
 	}
 }
+

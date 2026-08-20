@@ -26,6 +26,9 @@ func TestDerivedNames(t *testing.T) {
 	if got := catConfigPath("digibyted", "digibyte.conf"); got != "/srv/truffels/config/cat-digibyted/digibyte.conf" {
 		t.Errorf("catConfigPath = %q", got)
 	}
+	if got := catConfigDir("digibyted"); got != "/srv/truffels/config/cat-digibyted" {
+		t.Errorf("catConfigDir = %q", got)
+	}
 }
 
 // The firewall: the catalog path must not be able to address a legacy
@@ -41,3 +44,25 @@ func TestCatalogPathsCannotReachLegacyDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestSafeConfigKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"digibyte.conf", false},
+		{"../x", true},
+		{"a/b", true},
+		{"", true},
+		{".", true},
+		{"..", true},
+		{"bad\x00name", true},
+	}
+	for _, tt := range tests {
+		err := safeConfigKey(tt.name)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("safeConfigKey(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+		}
+	}
+}
+
