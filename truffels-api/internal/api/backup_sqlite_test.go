@@ -53,7 +53,7 @@ func TestSnapshotSQLiteRefusesExistingDest(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	_, _ = db.Exec(`CREATE TABLE t (x INTEGER)`)
 
-	dest := filepath.Join(dir, "vorhanden.db")
+	dest := filepath.Join(dir, "existing.db")
 	if err := os.WriteFile(dest, []byte("do not overwrite"), 0o644); err != nil {
 		t.Fatal(err)
 	}

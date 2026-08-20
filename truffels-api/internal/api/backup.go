@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"truffels-api/internal/model"
@@ -20,7 +21,14 @@ const (
 	maxBackups = 5
 )
 
+// backupMu serializes backup exports. Backups share a fixed staging path;
+// serializing exports keeps the pre-clean from deleting a concurrent run's snapshot.
+var backupMu sync.Mutex
+
 func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
+	backupMu.Lock()
+	defer backupMu.Unlock()
+
 	_ = os.MkdirAll(backupDir, 0750)
 
 	// Instead of backing up data/truffels/truffels.db raw, create a consistent

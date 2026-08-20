@@ -27,10 +27,10 @@ func TestClientFetchesAndCaches(t *testing.T) {
 		t.Errorf("Implementation = %q", got["digibyted"].Implementation)
 	}
 	if _, err := c.All(); err != nil {
-		t.Fatalf("zweiter All: %v", err)
+		t.Fatalf("second All: %v", err)
 	}
 	if calls != 1 {
-		t.Errorf("Agent wurde %d mal aufgerufen, erwartet 1 (Cache)", calls)
+		t.Errorf("Agent was called %d times, expected 1 (cache)", calls)
 	}
 }
 
@@ -40,7 +40,7 @@ func TestClientGetUnknown(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL)
-	if _, ok := c.Get("gibtsnicht"); ok {
-		t.Error("Get lieferte ok=true fuer unbekannte id")
+	if _, ok := c.Get("no-such-id"); ok {
+		t.Error("Get returned ok=true for unknown id")
 	}
 }

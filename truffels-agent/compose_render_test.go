@@ -104,3 +104,19 @@ func TestRenderComposeRejectsTraversalFile(t *testing.T) {
 	}
 }
 
+// Mount paths containing ':' break the short volume syntax and must be rejected.
+func TestRenderComposeRejectsInvalidMountPath(t *testing.T) {
+	e := CatalogEntry{
+		SchemaVersion: 1, ID: "evil", DisplayName: "Evil", Description: "d",
+		Role: "chain-node", Implementation: "x", Image: "busybox:1",
+		Containers: []ContainerSpec{{
+			Name: "c", MemoryLimitMB: 64,
+			Volumes: []VolumeSpec{{Kind: "data", Mount: "/data:rw", RO: false}},
+		}},
+		Resources: ResourceSpec{MemoryFloorMB: 64},
+	}
+	if _, err := RenderCompose(e, map[string]any{}); err == nil {
+		t.Fatal("expected error for mount path containing ':', got nil")
+	}
+}
+

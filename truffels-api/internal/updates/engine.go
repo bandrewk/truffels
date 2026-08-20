@@ -1421,7 +1421,9 @@ var (
 	catalogIDs   map[string]bool
 )
 
-// SetCatalogIDs is called at startup from the catalog client.
+// SetCatalogIDs will be called at startup once the catalog client is wired into
+// the registry projection (follow-up plan). Until then the map stays empty and
+// IsCatalogService reports false for everything.
 func SetCatalogIDs(ids map[string]bool) { setCatalogIDs(ids) }
 
 func setCatalogIDs(ids map[string]bool) {

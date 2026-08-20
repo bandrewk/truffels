@@ -132,3 +132,57 @@ func TestServiceRemovePurgesOnlyWhenAsked(t *testing.T) {
 		t.Error("Data was not removed even though purge_data=true")
 	}
 }
+
+func TestServiceApplyWritesFiles(t *testing.T) {
+	loadedCatalog, _ = LoadCatalog()
+	tmp := t.TempDir()
+	composeRoot, dataRoot, configRoot = tmp+"/compose", tmp+"/data", tmp+"/config"
+	defer func() {
+		composeRoot, dataRoot, configRoot = "/srv/truffels/compose", "/srv/truffels/data", "/srv/truffels/config"
+	}()
+
+	rec := httptest.NewRecorder()
+	handleServiceApply(rec, httptest.NewRequest(http.MethodPost, "/v1/service/apply",
+		bytes.NewBufferString(`{"id":"digibyted","params":{"prune_gb":12}}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Code = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Check (a): compose file exists and contains container name
+	composeFile := catComposeDir("digibyted") + "/docker-compose.yml"
+	if _, err := os.Stat(composeFile); err != nil {
+		t.Fatalf("Compose file does not exist: %v", err)
+	}
+	composeData, err := os.ReadFile(composeFile)
+	if err != nil {
+		t.Fatalf("Cannot read compose file: %v", err)
+	}
+	if !strings.Contains(string(composeData), "truffels-digibyted-node") {
+		t.Error("Compose file does not contain expected container name truffels-digibyted-node")
+	}
+
+	// Check (b): config file exists and contains required settings
+	configFile := catConfigPath("digibyted", "digibyte.conf")
+	if _, err := os.Stat(configFile); err != nil {
+		t.Fatalf("Config file does not exist: %v", err)
+	}
+	configData, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("Cannot read config file: %v", err)
+	}
+	configContent := string(configData)
+	if !strings.Contains(configContent, "algo=sha256d") {
+		t.Error("Config file does not contain algo=sha256d")
+	}
+	if !strings.Contains(configContent, "prune=12288") {
+		t.Error("Config file does not contain prune=12288 (prune_gb=12 should become 12*1024)")
+	}
+
+	// Check (c): data directory exists
+	dataDir := catDataDir("digibyted")
+	if stat, err := os.Stat(dataDir); err != nil {
+		t.Fatalf("Data directory does not exist: %v", err)
+	} else if !stat.IsDir() {
+		t.Error("Data path exists but is not a directory")
+	}
+}

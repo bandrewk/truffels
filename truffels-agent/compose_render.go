@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func catNetworkName(id string) string { return "cat-" + id + "-net" }
@@ -73,6 +74,12 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 // volumeSource derives the host path from kind. The catalog never names a
 // host path, so an entry cannot mount "/".
 func volumeSource(id string, v VolumeSpec) (string, error) {
+	// Validate mount path before using it: the short volume syntax splits on ':',
+	// so the mount path itself must never carry one.
+	if err := validateMountPath(v.Mount); err != nil {
+		return "", err
+	}
+
 	switch v.Kind {
 	case "data":
 		return catDataDir(id), nil
@@ -92,6 +99,21 @@ func volumeSource(id string, v VolumeSpec) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown volume kind %q", v.Kind)
 	}
+}
+
+// validateMountPath checks that a mount path is valid for the short volume syntax.
+// The path must be absolute and clean, and cannot contain ':' (which splits the syntax).
+func validateMountPath(mount string) error {
+	if !filepath.IsAbs(mount) {
+		return fmt.Errorf("volume mount must be an absolute path, got %q", mount)
+	}
+	if filepath.Clean(mount) != mount {
+		return fmt.Errorf("volume mount must be a clean path, got %q", mount)
+	}
+	if strings.Contains(mount, ":") {
+		return fmt.Errorf("volume mount must be an absolute clean path without ':'")
+	}
+	return nil
 }
 
 func catalogImageRef(e CatalogEntry) (string, error) {
