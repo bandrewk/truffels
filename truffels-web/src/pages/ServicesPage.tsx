@@ -48,6 +48,8 @@ export default function ServicesPage() {
   const { data, error, loading } = useApi(fetcher, 10000)
   const settingsFetcher = useCallback(() => api.settings(), [])
   const { data: settings } = useApi(settingsFetcher)
+  const catalogFetcher = useCallback(() => api.catalog(), [])
+  const { data: catalog } = useApi(catalogFetcher)
 
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
@@ -55,13 +57,25 @@ export default function ServicesPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Services</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Services</h1>
+        <Link to="/services/add" className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent rounded text-sm font-medium transition-colors">
+          Dienst hinzufügen
+        </Link>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {data.map((svc) => (
           <Link key={svc.template.id} to={`/services/${svc.template.id}`}>
             <Card className="hover:border-accent/30 transition-colors h-full">
               <div className="flex items-start justify-between mb-2">
-                <h3 className="font-semibold text-gray-100">{svc.template.display_name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-gray-100">{svc.template.display_name}</h3>
+                  {catalog?.some(c => c.id === svc.template.id) && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-400">
+                      Katalog
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   {svc.sync_info?.syncing && (
                     <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">

@@ -12,6 +12,7 @@ import MonitoringPage from './pages/MonitoringPage'
 import SettingsPage from './pages/SettingsPage'
 import LoginPage from './pages/LoginPage'
 import SetupPage from './pages/SetupPage'
+import AddServicePage from './pages/AddServicePage'
 
 type AuthState = 'loading' | 'setup' | 'login' | 'authenticated'
 
@@ -75,6 +76,7 @@ export default function App() {
         <Route element={<Layout onLogout={() => setAuthState('login')} />}>
           <Route index element={<DashboardPage />} />
           <Route path="services" element={<ServicesPage />} />
+          <Route path="services/add" element={<AddServicePage />} />
           <Route path="services/:id" element={<ServiceDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="updates" element={<UpdatesPage />} />

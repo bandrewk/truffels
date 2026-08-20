@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   AreaChart,
   Area,
@@ -15,6 +15,7 @@ import { canRollback } from '@/lib/updates'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardTitle } from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import {
   type LogSeverity,
   classifyLine,
@@ -58,18 +59,42 @@ function ActionButton({ label, variant, onClick, disabled }: {
 
 export default function ServiceDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<'overview' | 'monitor' | 'logs' | 'config'>('overview')
   const [actionLoading, setActionLoading] = useState(false)
   const [actionMsg, setActionMsg] = useState('')
+
+  const [uninstallOpen, setUninstallOpen] = useState(false)
+  const [purgeData, setPurgeData] = useState(false)
+  const [confirmId, setConfirmId] = useState('')
+  const [uninstallLoading, setUninstallLoading] = useState(false)
+  const [uninstallMsg, setUninstallMsg] = useState('')
 
   const fetcher = useCallback(() => api.service(id!), [id])
   const { data: svc, error, loading, refresh } = useApi(fetcher, 5000)
   const updateFetcher = useCallback(() => api.updateStatus(), [])
   const { data: updateStatus } = useApi(updateFetcher, 30000)
 
+  const catalogFetcher = useCallback(() => api.catalog(), [])
+  const { data: catalog } = useApi(catalogFetcher)
+  const isCatalog = catalog?.some(c => c.id === svc?.template.id)
+
   if (loading) return <div className="text-gray-400">Loading...</div>
   if (error) return <div className="text-red-400">Error: {error}</div>
   if (!svc) return null
+
+  const doUninstall = async () => {
+    setUninstallLoading(true)
+    setUninstallMsg('')
+    try {
+      await api.uninstallCatalog(id!, purgeData)
+      navigate('/services')
+    } catch (e: any) {
+      setUninstallMsg(`Error: ${e.message}`)
+    } finally {
+      setUninstallLoading(false)
+    }
+  }
 
   const doAction = async (action: string) => {
     setActionLoading(true)
@@ -131,8 +156,56 @@ export default function ServiceDetailPage() {
             )}
           </>
         )}
+        {isCatalog && (
+          <button
+            onClick={() => { setUninstallOpen(true); setPurgeData(false); setConfirmId(''); setUninstallMsg('') }}
+            disabled={actionLoading}
+            className="px-3 py-1.5 rounded text-sm font-medium text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+          >
+            Deinstallieren
+          </button>
+        )}
         {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
       </div>
+
+      <ConfirmDialog
+        open={uninstallOpen}
+        title="Dienst deinstallieren"
+        onCancel={() => !uninstallLoading && setUninstallOpen(false)}
+        onConfirm={doUninstall}
+        confirmLabel={uninstallLoading ? 'Deinstalliere...' : 'Deinstallieren'}
+        confirmDisabled={uninstallLoading || (purgeData && confirmId !== id)}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-300">
+            Soll der Dienst <strong>{svc.template.display_name}</strong> wirklich deinstalliert werden?
+          </p>
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={purgeData}
+              onChange={(e) => setPurgeData(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-surface text-accent focus:ring-accent/50"
+            />
+            Daten löschen (purge_data)
+          </label>
+          
+          {purgeData && (
+            <div className="flex flex-col gap-1 mt-2">
+              <label className="text-xs text-gray-400">
+                Bitte tippen Sie die ID <span className="font-mono text-gray-200">{id}</span> ein, um das Löschen zu bestätigen:
+              </label>
+              <input
+                type="text"
+                value={confirmId}
+                onChange={(e) => setConfirmId(e.target.value)}
+                className="bg-surface border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent text-gray-200"
+              />
+            </div>
+          )}
+          {uninstallMsg && <div className="text-red-400 text-sm mt-2">{uninstallMsg}</div>}
+        </div>
+      </ConfirmDialog>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border">
