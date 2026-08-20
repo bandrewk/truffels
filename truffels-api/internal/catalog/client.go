@@ -1,0 +1,68 @@
+package catalog
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
+type Client struct {
+	agentURL string
+	http     *http.Client
+
+	mu     sync.RWMutex
+	cached map[string]Entry
+}
+
+func NewClient(agentURL string) *Client {
+	return &Client{
+		agentURL: agentURL,
+		http:     &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (c *Client) All() (map[string]Entry, error) {
+	c.mu.RLock()
+	if c.cached != nil {
+		defer c.mu.RUnlock()
+		return c.cached, nil
+	}
+	c.mu.RUnlock()
+
+	resp, err := c.http.Get(c.agentURL + "/v1/catalog")
+	if err != nil {
+		return nil, fmt.Errorf("fetch catalog: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch catalog: status %d", resp.StatusCode)
+	}
+	var out map[string]Entry
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode catalog: %w", err)
+	}
+
+	c.mu.Lock()
+	c.cached = out
+	c.mu.Unlock()
+	return out, nil
+}
+
+func (c *Client) Get(id string) (Entry, bool) {
+	all, err := c.All()
+	if err != nil {
+		return Entry{}, false
+	}
+	e, ok := all[id]
+	return e, ok
+}
+
+// Invalidate discards the cache. Call this after the agent has been restarted
+// — for example after a self-update of the truffels stack.
+func (c *Client) Invalidate() {
+	c.mu.Lock()
+	c.cached = nil
+	c.mu.Unlock()
+}

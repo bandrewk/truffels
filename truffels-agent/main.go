@@ -51,7 +51,18 @@ func main() {
 	storageCache = newDockerStorageCache(5 * time.Minute)
 	go walkDockerStorageForever(storageCache)
 
+	var err error
+	loadedCatalog, err = LoadCatalog()
+	if err != nil {
+		slog.Error("Failed to load catalog", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("Catalog loaded", "entries", len(loadedCatalog))
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/catalog", handleCatalogGet)
+	mux.HandleFunc("POST /v1/service/apply", handleServiceApply)
+	mux.HandleFunc("POST /v1/service/remove", handleServiceRemove)
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
 	mux.HandleFunc("POST /v1/compose/down", handleComposeDown)
 	mux.HandleFunc("POST /v1/compose/stop", handleComposeStop)

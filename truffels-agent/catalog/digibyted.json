@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "digibyted",
+  "display_name": "DigiByte Core",
+  "description": "DigiByte Full Node. Runs with algo=sha256d because getblocktemplate otherwise returns a Scrypt template.",
+  "role": "chain-node",
+  "implementation": "digibyte-core",
+  "chain": "dgb",
+  "build": {
+    "dockerfile": "dockerfiles/digibyted/Dockerfile",
+    "version": "9.26.5",
+    "sha256": "6baf0c2673bcd635620108116ad57a2a5dc8e9e3d9380a2d708c070a72508587"
+  },
+  "params": [
+    {
+      "name": "prune_gb",
+      "description": "Limit block data to this size. 0 = no pruning.",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 2000
+    }
+  ],
+  "containers": [
+    {
+      "name": "node",
+      "memory_limit_mb": 2048,
+      "user": "1000:1000",
+      "entrypoint": ["digibyted", "-conf=/dgb.conf", "-datadir=/data", "-printtoconsole"],
+      "ports": [{"container": 12024, "host": 12024, "role": "p2p"}],
+      "volumes": [
+        {"kind": "data", "mount": "/data"},
+        {"kind": "config", "file": "digibyte.conf", "mount": "/dgb.conf", "ro": true}
+      ],
+      "healthcheck": {
+        "test": ["CMD", "digibyte-cli", "-conf=/dgb.conf", "-datadir=/data", "-getinfo"],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 3,
+        "start_period": "60s"
+      }
+    }
+  ],
+  "chain_info": {"p2p_port": 12024, "rpc_port": 14022, "rpc_style": "bitcoin-core"},
+  "resources": {"min_disk_gb": 12, "memory_floor_mb": 1024}
+}
