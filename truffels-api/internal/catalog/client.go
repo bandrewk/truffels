@@ -66,3 +66,17 @@ func (c *Client) Invalidate() {
 	c.cached = nil
 	c.mu.Unlock()
 }
+
+// IDs returns a map of all catalog service IDs. The map keys are the IDs and
+// values are always true for use as a set.
+func (c *Client) IDs() (map[string]bool, error) {
+	all, err := c.All()
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool)
+	for id := range all {
+		ids[id] = true
+	}
+	return ids, nil
+}

@@ -81,3 +81,36 @@ func TestEntryContainerNamesWithoutFieldNoDerivation(t *testing.T) {
 		t.Errorf("ContainerNames() = %v, expected empty when field not set (no derivation)", got)
 	}
 }
+
+func TestClientIDs(t *testing.T) {
+	// IDs() should return a map with all catalog entry IDs
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"digibyted":{"schema_version":1,"id":"digibyted",
+		  "display_name":"DigiByte Core","description":"d","role":"chain-node",
+		  "implementation":"digibyte-core","chain":"dgb","containers":[],
+		  "resources":{"memory_floor_mb":1024}}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	ids, err := c.IDs()
+	if err != nil {
+		t.Fatalf("IDs: %v", err)
+	}
+	if !ids["digibyted"] {
+		t.Errorf("IDs should contain digibyted, got %v", ids)
+	}
+	if len(ids) != 1 {
+		t.Errorf("IDs() = %d entries, expected 1", len(ids))
+	}
+	// Verify it uses the cache
+	if _, err := c.IDs(); err != nil {
+		t.Fatalf("second IDs: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("Agent was called %d times, expected 1 (cache)", calls)
+	}
+}
