@@ -1,0 +1,39 @@
+package service
+
+import (
+	"strconv"
+
+	"truffels-api/internal/catalog"
+	"truffels-api/internal/model"
+)
+
+// CatalogEntryToTemplate projects an installed catalog entry onto the
+// ServiceTemplate the rest of the control plane already understands, so the
+// existing lifecycle handlers work for catalog services unchanged.
+//
+// UpdateSource is deliberately nil: the update path for catalog services is
+// separate (spec 8.1), and the update guards already refuse the legacy path
+// for these ids.
+func CatalogEntryToTemplate(e catalog.Entry, composeRoot, dataRoot string) model.ServiceTemplate {
+	dataDir := dataRoot + "/cat-" + e.ID
+	tmpl := model.ServiceTemplate{
+		ID:             e.ID,
+		DisplayName:    e.DisplayName,
+		Description:    e.Description,
+		ComposeDir:     composeRoot + "/cat-" + e.ID,
+		ContainerNames: e.ContainerNames(),
+		UpdateSource:   nil,
+		DataDirs: []model.DataDir{{
+			Path:      dataDir,
+			Label:     e.DisplayName + " data",
+			Clearable: true,
+		}},
+	}
+	if len(e.Containers) > 0 {
+		// memory limit string form matches the compose templates ("2048M")
+		if mb := e.Containers[0].MemoryLimitMB; mb > 0 {
+			tmpl.MemoryLimit = strconv.Itoa(mb) + "M"
+		}
+	}
+	return tmpl
+}
