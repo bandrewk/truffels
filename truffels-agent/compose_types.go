@@ -33,6 +33,11 @@ type composeService struct {
 	Healthcheck   *composeHealth `json:"healthcheck,omitempty"`
 	Deploy        composeDeploy  `json:"deploy"`
 	Build         *composeBuild  `json:"build,omitempty"`
+	// EnvFile loads KEY=VALUE environment from a rendered config file. It is a
+	// bounded widening of the allowlist: env_file only sets environment
+	// variables (no privilege escalation, no host access), and the file is
+	// catalog-rendered content under the config root, never a caller path.
+	EnvFile []string `json:"env_file,omitempty"`
 }
 
 // composeBuild is emitted only for catalog entries that ship a Dockerfile

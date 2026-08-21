@@ -94,6 +94,14 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 				StartPeriod: c.Healthcheck.StartPeriod,
 			}
 		}
+		if c.EnvFile != "" {
+			// The env file is a rendered config artifact; it must be a bare
+			// filename so it can only resolve inside the entry's config dir.
+			if err := safeConfigKey(c.EnvFile); err != nil {
+				return nil, fmt.Errorf("env_file: %w", err)
+			}
+			svc.EnvFile = []string{catConfigPath(e.ID, c.EnvFile)}
+		}
 		cf.Services[c.Name] = svc
 	}
 

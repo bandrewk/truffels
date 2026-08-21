@@ -22,9 +22,42 @@ func RenderConfig(id string, params map[string]any, creds *stackCreds) (map[stri
 		return renderDigibyteConf(creds)
 	case "ckpool-dgb":
 		return renderCkpoolDGBConf(params, creds)
+	case "ckstats-db-dgb":
+		return renderCkstatsDBEnv(creds)
+	case "ckstats-dgb":
+		return renderCkstatsEnv(creds)
 	default:
 		return map[string][]byte{}, nil
 	}
+}
+
+// renderCkstatsDBEnv writes the postgres env for the stats database. The
+// password is the shared per-stack secret, so the stats app authenticates with
+// the same value.
+func renderCkstatsDBEnv(creds *stackCreds) (map[string][]byte, error) {
+	if creds == nil {
+		return nil, fmt.Errorf("ckstats-db-dgb requires stack credentials")
+	}
+	env := "POSTGRES_USER=ckpool\nPOSTGRES_DB=ckstats\nPOSTGRES_PASSWORD=" + creds.Pass + "\n"
+	return map[string][]byte{"postgres.env": []byte(env)}, nil
+}
+
+// renderCkstatsEnv writes the ckstats app env: where to read the pool logs, and
+// how to reach its database (by the db's stack DNS name, with the shared secret).
+func renderCkstatsEnv(creds *stackCreds) (map[string][]byte, error) {
+	if creds == nil {
+		return nil, fmt.Errorf("ckstats-dgb requires stack credentials")
+	}
+	var b strings.Builder
+	b.WriteString("API_URL=/ckpool-logs\n")
+	b.WriteString("DB_HOST=" + catContainerName("ckstats-db-dgb", "db") + "\n")
+	b.WriteString("DB_PORT=5432\n")
+	b.WriteString("DB_USER=ckpool\n")
+	b.WriteString("DB_PASSWORD=" + creds.Pass + "\n")
+	b.WriteString("DB_NAME=ckstats\n")
+	b.WriteString("DB_SSL=false\n")
+	b.WriteString("DB_SSL_REJECT_UNAUTHORIZED=false\n")
+	return map[string][]byte{"ckstats.env": []byte(b.String())}, nil
 }
 
 // ckpool.conf is JSON, and two of its values (address, signature) are user
