@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +11,34 @@ import (
 	"strings"
 	"time"
 )
+
+// ensureStackNetwork creates the shared external network for a stack if it does
+// not already exist. Idempotent: members install sequentially, and a lost
+// create race is reconciled by re-inspecting.
+func ensureStackNetwork(ctx context.Context, stack string) error {
+	name := stackNetworkName(stack)
+	if _, err := runStdout(ctx, "docker", "network", "inspect", name); err == nil {
+		return nil
+	}
+	if out, err := runCapture(ctx, "docker", "network", "create", name); err != nil {
+		if _, e2 := runStdout(ctx, "docker", "network", "inspect", name); e2 == nil {
+			return nil // someone else created it in the meantime
+		}
+		return fmt.Errorf("create stack network %s: %s: %w", name, strings.TrimSpace(out), err)
+	}
+	return nil
+}
+
+// removeStackNetwork tears the shared network down — best effort. docker refuses
+// to remove a network that still has attached containers, which is exactly the
+// ref-count we want: only the last stack member to leave actually removes it.
+func removeStackNetwork(ctx context.Context, stack string) {
+	name := stackNetworkName(stack)
+	if out, err := runCapture(ctx, "docker", "network", "rm", name); err != nil {
+		slog.Info("stack network kept (still in use or absent)",
+			"stack", stack, "detail", strings.TrimSpace(out))
+	}
+}
 
 // loadedCatalog is filled once at startup. The catalog lives only here in the
 // agent; the API fetches it via this endpoint. This makes a version skew between
@@ -124,6 +153,17 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A stacked entry's compose references the shared external network, so it
+	// must exist before the service is brought up.
+	if entry.Stack != "" {
+		nctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := ensureStackNetwork(nctx, entry.Stack); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stack network: " + err.Error()})
+			return
+		}
+	}
+
 	slog.Info("Catalog service applied", "id", req.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": req.ID})
 }
@@ -141,7 +181,8 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid id"})
 		return
 	}
-	if _, ok := loadedCatalog[req.ID]; !ok {
+	entry, ok := loadedCatalog[req.ID]
+	if !ok {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unknown catalog entry"})
 		return
 	}
@@ -179,6 +220,14 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("Catalog data deleted", "id", req.ID, "path", catDataDir(req.ID))
+	}
+
+	// After the container is down and gone, try to drop the shared stack
+	// network. It only actually goes away once the last member has left.
+	if entry.Stack != "" {
+		nctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		removeStackNetwork(nctx, entry.Stack)
 	}
 
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)

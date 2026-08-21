@@ -200,3 +200,66 @@ func TestRenderComposeImageEntryHasNoBuild(t *testing.T) {
 		t.Errorf("image-only entry emitted a build block: %s", out)
 	}
 }
+
+// A stacked entry joins the shared external stack network in addition to its
+// own, so its containers can reach the other members by name.
+func TestRenderComposeStacked(t *testing.T) {
+	e := CatalogEntry{
+		ID:    "ckpool-dgb",
+		Stack: "dgb",
+		Image: "truffels/ckpool:v1.0.0",
+		Containers: []ContainerSpec{{
+			Name: "pool", User: "1000:1000", MemoryLimitMB: 256,
+		}},
+	}
+	out, err := RenderCompose(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	// service is on both its own network and the stack network
+	nets := doc["services"].(map[string]any)["pool"].(map[string]any)["networks"].([]any)
+	if len(nets) != 2 || nets[0] != "chain" || nets[1] != "stack" {
+		t.Errorf("service networks = %v, want [chain stack]", nets)
+	}
+	// the stack network is declared external with the shared name
+	stackNet := doc["networks"].(map[string]any)["stack"].(map[string]any)
+	if stackNet["name"] != "cat-stack-dgb-net" {
+		t.Errorf("stack network name = %v, want cat-stack-dgb-net", stackNet["name"])
+	}
+	if stackNet["external"] != true {
+		t.Errorf("stack network must be external, got %v", stackNet["external"])
+	}
+}
+
+// An entry with no stack must be unchanged: one network, no external net.
+func TestRenderComposeUnstacked(t *testing.T) {
+	e := CatalogEntry{
+		ID:    "solo",
+		Image: "example/img:1.0",
+		Containers: []ContainerSpec{{
+			Name: "svc", User: "1000:1000", MemoryLimitMB: 128,
+		}},
+	}
+	out, err := RenderCompose(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if strings.Contains(string(out), "cat-stack-") || strings.Contains(string(out), `"external"`) {
+		t.Errorf("unstacked entry must not reference a stack network: %s", out)
+	}
+}
+
+// A bad stack name must be rejected before it can reach a docker network name.
+func TestRenderComposeRejectsBadStack(t *testing.T) {
+	for _, bad := range []string{"../x", "DGB", "a b", "cat/../x"} {
+		e := CatalogEntry{ID: "x", Stack: bad, Image: "i:1",
+			Containers: []ContainerSpec{{Name: "c", User: "1000:1000", MemoryLimitMB: 64}}}
+		if _, err := RenderCompose(e, map[string]any{}); err == nil {
+			t.Errorf("stack %q was accepted", bad)
+		}
+	}
+}

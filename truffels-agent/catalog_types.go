@@ -6,21 +6,25 @@ package main
 // what blockchain it serves. See Spec 4.3 — BCH uses asicseer-pool instead of
 // ckpool; a schema with only `role` would create an entry that doesn't work.
 type CatalogEntry struct {
-	SchemaVersion  int             `json:"schema_version"`
-	ID             string          `json:"id"`
-	DisplayName    string          `json:"display_name"`
-	Description    string          `json:"description"`
-	Role           string          `json:"role"`
-	Implementation string          `json:"implementation"`
-	Chain          string          `json:"chain,omitempty"`
-	Image          string          `json:"image,omitempty"`
-	Build          *BuildSpec      `json:"build,omitempty"`
-	Params         []ParamSpec     `json:"params,omitempty"`
-	Containers     []ContainerSpec `json:"containers"`
-	Requires       []RequireSpec   `json:"requires,omitempty"`
-	Source         *SourceSpec     `json:"source,omitempty"`
-	ChainInfo      *ChainSpec      `json:"chain_info,omitempty"`
-	Resources      ResourceSpec    `json:"resources"`
+	SchemaVersion  int    `json:"schema_version"`
+	ID             string `json:"id"`
+	DisplayName    string `json:"display_name"`
+	Description    string `json:"description"`
+	Role           string `json:"role"`
+	Implementation string `json:"implementation"`
+	Chain          string `json:"chain,omitempty"`
+	// Stack groups entries that must reach each other (node + pool + stats).
+	// All members of a stack join a shared external network in addition to
+	// their own isolated one, so they resolve each other by container name.
+	Stack      string          `json:"stack,omitempty"`
+	Image      string          `json:"image,omitempty"`
+	Build      *BuildSpec      `json:"build,omitempty"`
+	Params     []ParamSpec     `json:"params,omitempty"`
+	Containers []ContainerSpec `json:"containers"`
+	Requires   []RequireSpec   `json:"requires,omitempty"`
+	Source     *SourceSpec     `json:"source,omitempty"`
+	ChainInfo  *ChainSpec      `json:"chain_info,omitempty"`
+	Resources  ResourceSpec    `json:"resources"`
 }
 
 type BuildSpec struct {
