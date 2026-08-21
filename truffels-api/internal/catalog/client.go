@@ -145,12 +145,17 @@ func (c *Client) IDs() (map[string]bool, error) {
 	return ids, nil
 }
 
-func (c *Client) Apply(id string, params map[string]any) error {
+// Apply renders and writes a catalog service's compose/config on the agent.
+// onlyIfMissing makes it a no-op when the service is already provisioned — used
+// by the startup reconcile so it heals missing files without rewriting (and
+// desyncing) a service whose template changed under a running container.
+func (c *Client) Apply(id string, params map[string]any, onlyIfMissing bool) error {
 	type req struct {
-		ID     string         `json:"id"`
-		Params map[string]any `json:"params"`
+		ID            string         `json:"id"`
+		Params        map[string]any `json:"params"`
+		OnlyIfMissing bool           `json:"only_if_missing,omitempty"`
 	}
-	body, err := json.Marshal(req{ID: id, Params: params})
+	body, err := json.Marshal(req{ID: id, Params: params, OnlyIfMissing: onlyIfMissing})
 	if err != nil {
 		return err
 	}
