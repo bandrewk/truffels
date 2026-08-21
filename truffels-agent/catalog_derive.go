@@ -30,3 +30,16 @@ func catConfigPath(id, file string) string {
 func catConfigDir(id string) string {
 	return configRoot + "/cat-" + id
 }
+
+// catStackSecretDir/Path hold the canonical shared RPC credential for a stack.
+// It lives under the config root (agent-writable; the real secrets mount is
+// read-only) but in a cat-stack-<name> dir that is never mounted into any
+// container — only the specific rendered config files are. The same password
+// is written into the node's and the pool's config, so both authenticate.
+func catStackSecretDir(stack string) string {
+	return configRoot + "/cat-stack-" + stack
+}
+
+func catStackSecretPath(stack string) string {
+	return catStackSecretDir(stack) + "/rpc.env"
+}

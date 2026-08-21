@@ -15,16 +15,16 @@ import (
 // formats of the services are too different for a common abstraction, and a
 // generic renderer would be exactly the place where an escaping problem
 // re-emerges.
-func RenderConfig(id string, params map[string]any) (map[string][]byte, error) {
+func RenderConfig(id string, params map[string]any, creds *stackCreds) (map[string][]byte, error) {
 	switch id {
 	case "digibyted":
-		return renderDigibyteConf(params)
+		return renderDigibyteConf(creds)
 	default:
 		return map[string][]byte{}, nil
 	}
 }
 
-func renderDigibyteConf(_ map[string]any) (map[string][]byte, error) {
+func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	var b strings.Builder
 	b.WriteString("# Project Truffels — DigiByte Core\n")
 	b.WriteString("# Generated from the catalog. Do not edit by hand.\n")
@@ -41,6 +41,19 @@ func renderDigibyteConf(_ map[string]any) (map[string][]byte, error) {
 	// is valid, just worthless for a SHA256d pool. See Spec 2.4.
 	b.WriteString("algo=sha256d\n")
 	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
+
+	// When part of a stack, expose RPC so the pool can reach the node with the
+	// shared credential. rpcallowip uses the broad private ranges the legacy
+	// node uses; actual reachability stays scoped to the shared stack network.
+	// The password is hex from crypto/rand — no config-escaping concern.
+	if creds != nil {
+		b.WriteString("rpcuser=" + creds.User + "\n")
+		b.WriteString("rpcpassword=" + creds.Pass + "\n")
+		b.WriteString("rpcbind=0.0.0.0\n")
+		b.WriteString("rpcallowip=172.16.0.0/12\n")
+		b.WriteString("rpcallowip=10.0.0.0/8\n")
+		b.WriteString("rpcport=14022\n")
+	}
 
 	return map[string][]byte{"digibyte.conf": []byte(b.String())}, nil
 }

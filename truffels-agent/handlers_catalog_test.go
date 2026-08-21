@@ -300,3 +300,29 @@ func TestDigibytedHasSyncProbe(t *testing.T) {
 		t.Errorf("sync probe should end in getblockchaininfo, got %v", e.ChainInfo.SyncProbe)
 	}
 }
+
+// The stack secret must be stable: the second member of a stack reads exactly
+// what the first wrote, so node and pool authenticate with the same credential.
+func TestEnsureStackSecretIsStable(t *testing.T) {
+	tmp := t.TempDir()
+	configRoot = tmp + "/config"
+	defer func() { configRoot = "/srv/truffels/config" }()
+
+	c1, err := ensureStackSecret("dgb")
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	c2, err := ensureStackSecret("dgb")
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if c1.User != c2.User || c1.Pass != c2.Pass {
+		t.Errorf("secret changed between calls: %+v vs %+v", c1, c2)
+	}
+	if len(c1.Pass) < 32 {
+		t.Errorf("generated pass too short: %q", c1.Pass)
+	}
+	if _, err := ensureStackSecret("../x"); err == nil {
+		t.Error("invalid stack name was accepted")
+	}
+}
