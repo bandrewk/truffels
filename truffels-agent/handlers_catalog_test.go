@@ -256,3 +256,47 @@ func TestDataDirOwner(t *testing.T) {
 		t.Error("dataDirOwner should be false when no container mounts a data volume")
 	}
 }
+
+func chainProbeReq(t *testing.T, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handleServiceChainProbe(rec, httptest.NewRequest(http.MethodPost, "/v1/service/chain-probe", bytes.NewBufferString(body)))
+	return rec
+}
+
+// The chain probe must reject anything it cannot map to a curated probe before
+// it ever runs a command: bad ids, unknown entries, and entries with no probe.
+func TestChainProbeGuards(t *testing.T) {
+	loadedCatalog, _ = LoadCatalog()
+
+	if rec := chainProbeReq(t, `{"id":"../x"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("invalid id: code=%d", rec.Code)
+	}
+	if rec := chainProbeReq(t, `{"id":"not-in-catalog"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("unknown entry: code=%d", rec.Code)
+	}
+
+	// An entry without a declared probe must be refused, not have a command guessed.
+	loadedCatalog = Catalog{"noprobe": CatalogEntry{ID: "noprobe", Containers: []ContainerSpec{{Name: "n", User: "1000:1000"}}}}
+	if rec := chainProbeReq(t, `{"id":"noprobe"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("no-probe entry: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	loadedCatalog, _ = LoadCatalog()
+}
+
+// The digibyted entry must actually carry a sync probe, or the API can never
+// render its sync progress.
+func TestDigibytedHasSyncProbe(t *testing.T) {
+	cat, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	e := cat["digibyted"]
+	if e.ChainInfo == nil || len(e.ChainInfo.SyncProbe) == 0 {
+		t.Fatal("digibyted has no chain_info.sync_probe")
+	}
+	if e.ChainInfo.SyncProbe[len(e.ChainInfo.SyncProbe)-1] != "getblockchaininfo" {
+		t.Errorf("sync probe should end in getblockchaininfo, got %v", e.ChainInfo.SyncProbe)
+	}
+}

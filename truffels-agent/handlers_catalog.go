@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // loadedCatalog is filled once at startup. The catalog lives only here in the
@@ -181,6 +183,57 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "purged": req.PurgeData})
+}
+
+// handleServiceChainProbe runs a catalog chain node's sync probe inside its
+// container and returns the probe's stdout verbatim (bitcoin-core style JSON,
+// e.g. getblockchaininfo). The command is taken from the embedded catalog, not
+// the request, so the endpoint can only ever run the fixed, curated probe for a
+// known entry — never an arbitrary command.
+func handleServiceChainProbe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if !isValidCatalogID(req.ID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid id"})
+		return
+	}
+	entry, ok := loadedCatalog[req.ID]
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unknown catalog entry"})
+		return
+	}
+	if entry.ChainInfo == nil || len(entry.ChainInfo.SyncProbe) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "entry has no sync probe"})
+		return
+	}
+	if len(entry.Containers) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "entry has no container"})
+		return
+	}
+	// The probe runs in the entry's primary (first) container — the node itself.
+	container := catContainerName(req.ID, entry.Containers[0].Name)
+	if !isAllowedContainer(container) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "container not allowed"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	// argv is the embedded probe, never caller input.
+	args := append([]string{"exec", container}, entry.ChainInfo.SyncProbe...)
+	out, err := runStdout(ctx, "docker", args...)
+	if err != nil {
+		// A stopped or still-starting node cannot answer; the caller treats this
+		// as "no sync info yet" rather than an error condition.
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "probe failed: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": out})
 }
 
 // dataDirOwner returns the uid/gid that should own the catalog data directory:

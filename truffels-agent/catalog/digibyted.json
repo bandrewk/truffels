@@ -31,6 +31,6 @@
       }
     }
   ],
-  "chain_info": {"p2p_port": 12024, "rpc_port": 14022, "rpc_style": "bitcoin-core"},
+  "chain_info": {"p2p_port": 12024, "rpc_port": 14022, "rpc_style": "bitcoin-core", "sync_probe": ["digibyte-cli", "-conf=/dgb.conf", "-datadir=/data", "getblockchaininfo"]},
   "resources": {"min_disk_gb": 12, "memory_floor_mb": 1024}
 }

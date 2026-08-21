@@ -73,6 +73,35 @@ func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
 		s.enrichElectrsSync(svc)
 	case "mempool":
 		s.enrichMempoolSync(svc)
+	default:
+		s.enrichCatalogChainSync(svc)
+	}
+}
+
+// enrichCatalogChainSync fills SyncInfo for a running catalog chain node (e.g.
+// DigiByte Core) by asking the agent to run the entry's sync probe. Only entries
+// that declare a probe in chain_info are queried; anything else is a no-op.
+func (s *Server) enrichCatalogChainSync(svc *model.ServiceInstance) {
+	if s.catalogClient == nil {
+		return
+	}
+	e, ok := s.catalogClient.Get(svc.Template.ID)
+	if !ok || e.ChainInfo == nil || len(e.ChainInfo.SyncProbe) == 0 {
+		return
+	}
+	status, err := s.catalogClient.ChainProbe(svc.Template.ID)
+	if err != nil {
+		return
+	}
+	// Fully synced: bitcoin-core reports verificationprogress ~1 and IBD false.
+	if !status.InitialBlockDownload && status.VerificationProgress >= 0.9999 {
+		return
+	}
+	svc.SyncInfo = &model.SyncInfo{
+		Syncing:  true,
+		Progress: status.VerificationProgress,
+		Detail: fmt.Sprintf("%.2f%% (%s / %s blocks)",
+			status.VerificationProgress*100, formatInt(int(status.Blocks)), formatInt(int(status.Headers))),
 	}
 }
 
