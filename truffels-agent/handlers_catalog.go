@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,12 @@ func parseStackCreds(b []byte) (*stackCreds, error) {
 // create race is reconciled by re-inspecting.
 func ensureStackNetwork(ctx context.Context, stack string) error {
 	name := stackNetworkName(stack)
+	// No docker in this environment (unit tests / dev): the network is created
+	// for real in production, where the agent always has the docker CLI.
+	if _, err := exec.LookPath("docker"); err != nil {
+		slog.Warn("stack network skipped (docker unavailable)", "stack", stack)
+		return nil
+	}
 	if _, err := runStdout(ctx, "docker", "network", "inspect", name); err == nil {
 		return nil
 	}

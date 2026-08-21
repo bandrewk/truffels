@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -50,5 +51,59 @@ func TestRenderConfigDigibytedStacked(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("stacked digibyte.conf missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// The pool config is valid JSON, points at the node by its stack DNS name,
+// carries the shared credential, and includes the payout address/signature.
+func TestRenderCkpoolDGBConf(t *testing.T) {
+	creds := &stackCreds{User: "truffels", Pass: "secretpass"}
+	files, err := RenderConfig("ckpool-dgb", map[string]any{
+		"dgb_address": "dgb1qc4txtrd36vw0hrjz93gvfhd28dvv0uu37rphy6",
+		"dgb_sig":     "/Truffels/",
+	}, creds)
+	if err != nil {
+		t.Fatalf("RenderConfig: %v", err)
+	}
+	raw := files["ckpool.conf"]
+	if raw == nil {
+		t.Fatal("ckpool.conf missing")
+	}
+	var conf map[string]any
+	if err := json.Unmarshal(raw, &conf); err != nil {
+		t.Fatalf("ckpool.conf is not valid JSON: %v", err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		"truffels-digibyted-node:14022", "secretpass",
+		"dgb1qc4txtrd36vw0hrjz93gvfhd28dvv0uu37rphy6", "0.0.0.0:3334", "/data/logs",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("ckpool.conf missing %q:\n%s", want, s)
+		}
+	}
+	if _, err := RenderConfig("ckpool-dgb", map[string]any{}, nil); err == nil {
+		t.Error("ckpool-dgb without stack creds should error")
+	}
+}
+
+// The payout address is required and pattern-checked.
+func TestCkpoolDGBAddressValidation(t *testing.T) {
+	cat, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	e, ok := cat["ckpool-dgb"]
+	if !ok {
+		t.Fatal("ckpool-dgb not in catalog")
+	}
+	if _, err := ValidateParams(e, map[string]any{"dgb_address": "dgb1qc4txtrd36vw0hrjz93gvfhd28dvv0uu37rphy6"}); err != nil {
+		t.Errorf("valid address rejected: %v", err)
+	}
+	if _, err := ValidateParams(e, map[string]any{}); err == nil {
+		t.Error("missing dgb_address should be rejected (required)")
+	}
+	if _, err := ValidateParams(e, map[string]any{"dgb_address": "not an address!!"}); err == nil {
+		t.Error("malformed dgb_address should be rejected")
 	}
 }

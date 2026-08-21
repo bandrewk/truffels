@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "ckpool-dgb",
+  "display_name": "DigiByte Pool (ckpool)",
+  "description": "ckpool mining pool for DigiByte, connected to the DigiByte Core node over the shared stack network.",
+  "role": "pool",
+  "implementation": "ckpool",
+  "chain": "dgb",
+  "stack": "dgb",
+  "build": {
+    "dockerfile": "dockerfiles/ckpool/Dockerfile",
+    "version": "v1.0.0"
+  },
+  "requires": [{"role": "chain-node", "id": "digibyted"}],
+  "params": [
+    {
+      "name": "dgb_address",
+      "description": "DigiByte payout address (block rewards are paid here).",
+      "type": "string",
+      "pattern": "^(dgb1[a-z0-9]{20,90}|[DS][1-9A-HJ-NP-Za-km-z]{25,40})$"
+    },
+    {
+      "name": "dgb_sig",
+      "description": "Coinbase signature tag included in mined blocks.",
+      "type": "string",
+      "default": "/Truffels/"
+    }
+  ],
+  "containers": [
+    {
+      "name": "pool",
+      "memory_limit_mb": 256,
+      "user": "1000:1000",
+      "entrypoint": ["sh", "-c", "rm -f /tmp/ckpool/main.pid; exec ckpool -B -l 4 -c /etc/ckpool/ckpool.conf"],
+      "ports": [{"container": 3334, "host": 3334, "role": "stratum"}],
+      "volumes": [
+        {"kind": "data", "mount": "/data"},
+        {"kind": "config", "file": "ckpool.conf", "mount": "/etc/ckpool/ckpool.conf", "ro": true}
+      ],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "pidof ckpool || exit 1"],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 3,
+        "start_period": "20s"
+      }
+    }
+  ],
+  "resources": {"min_disk_gb": 2, "memory_floor_mb": 128}
+}

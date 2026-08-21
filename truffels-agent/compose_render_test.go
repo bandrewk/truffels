@@ -36,6 +36,17 @@ func TestRenderComposeShape(t *testing.T) {
 	}
 }
 
+// testEntryParams supplies valid params for entries that have required ones,
+// so whole-catalog tests can render every entry.
+func testEntryParams(id string) map[string]any {
+	switch id {
+	case "ckpool-dgb":
+		return map[string]any{"dgb_address": "dgb1qc4txtrd36vw0hrjz93gvfhd28dvv0uu37rphy6"}
+	default:
+		return map[string]any{}
+	}
+}
+
 // The forbidden keys must not appear in ANY output, for no catalog entry.
 // See Spec 4.1.
 func TestRenderComposeNeverEmitsForbiddenKeys(t *testing.T) {
@@ -45,7 +56,7 @@ func TestRenderComposeNeverEmitsForbiddenKeys(t *testing.T) {
 	}
 	cat, _ := LoadCatalog()
 	for id, e := range cat {
-		params, err := ValidateParams(e, map[string]any{})
+		params, err := ValidateParams(e, testEntryParams(id))
 		if err != nil {
 			t.Fatalf("%s: ValidateParams: %v", id, err)
 		}
@@ -65,7 +76,7 @@ func TestRenderComposeNeverEmitsForbiddenKeys(t *testing.T) {
 func TestRenderComposeVolumesStayUnderDerivedRoots(t *testing.T) {
 	cat, _ := LoadCatalog()
 	for id, e := range cat {
-		params, _ := ValidateParams(e, map[string]any{})
+		params, _ := ValidateParams(e, testEntryParams(id))
 		out, _ := RenderCompose(e, params)
 		var doc map[string]any
 		_ = json.Unmarshal(out, &doc)

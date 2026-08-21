@@ -6,6 +6,7 @@
   "role": "chain-node",
   "implementation": "digibyte-core",
   "chain": "dgb",
+  "stack": "dgb",
   "build": {
     "dockerfile": "dockerfiles/digibyted/Dockerfile",
     "version": "9.26.5",
