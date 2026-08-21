@@ -39,6 +39,14 @@ type Entry struct {
 		From string `json:"from"`
 	} `json:"source,omitempty"`
 
+	// ChainInfo marks an entry as a chain node whose sync state can be probed.
+	// SyncProbe's presence is the signal the API uses to decide whether to ask
+	// the agent for this service's sync status.
+	ChainInfo *struct {
+		RPCStyle  string   `json:"rpc_style"`
+		SyncProbe []string `json:"sync_probe,omitempty"`
+	} `json:"chain_info,omitempty"`
+
 	Resources struct {
 		MinDiskGB     int `json:"min_disk_gb,omitempty"`
 		MemoryFloorMB int `json:"memory_floor_mb"`

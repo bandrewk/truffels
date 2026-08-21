@@ -90,6 +90,11 @@ type ChainSpec struct {
 	P2PPort  int    `json:"p2p_port"`
 	RPCPort  int    `json:"rpc_port"`
 	RPCStyle string `json:"rpc_style"`
+	// SyncProbe is the argv run inside the node's container to read its sync
+	// state (bitcoin-core style: getblockchaininfo). It comes from the embedded
+	// catalog, never from a request, so the chain-probe endpoint can never be
+	// asked to run an arbitrary command.
+	SyncProbe []string `json:"sync_probe,omitempty"`
 }
 
 type ResourceSpec struct {

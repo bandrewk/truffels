@@ -165,6 +165,46 @@ func (c *Client) Apply(id string, params map[string]any) error {
 	return nil
 }
 
+// ChainSyncStatus is the bitcoin-core-style subset of getblockchaininfo the
+// API needs to render a sync indicator.
+type ChainSyncStatus struct {
+	Blocks               int64   `json:"blocks"`
+	Headers              int64   `json:"headers"`
+	VerificationProgress float64 `json:"verificationprogress"`
+	InitialBlockDownload bool    `json:"initialblockdownload"`
+}
+
+// ChainProbe asks the agent to run a catalog chain node's sync probe inside its
+// container and returns the parsed status. The probe command lives in the
+// embedded catalog on the agent side; the API only names the service.
+func (c *Client) ChainProbe(id string) (*ChainSyncStatus, error) {
+	body, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: id})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.postJSON("/v1/service/chain-probe", body, c.readTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("agent chain-probe status %d", resp.StatusCode)
+	}
+	var wrap struct {
+		Output string `json:"output"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrap); err != nil {
+		return nil, fmt.Errorf("decode chain-probe: %w", err)
+	}
+	var status ChainSyncStatus
+	if err := json.Unmarshal([]byte(wrap.Output), &status); err != nil {
+		return nil, fmt.Errorf("parse chain-probe output: %w", err)
+	}
+	return &status, nil
+}
+
 func (c *Client) Remove(id string, purgeData bool) error {
 	type req struct {
 		ID        string `json:"id"`

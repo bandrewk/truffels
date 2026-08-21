@@ -63,6 +63,7 @@ func main() {
 	mux.HandleFunc("GET /v1/catalog", handleCatalogGet)
 	mux.HandleFunc("POST /v1/service/apply", handleServiceApply)
 	mux.HandleFunc("POST /v1/service/remove", handleServiceRemove)
+	mux.HandleFunc("POST /v1/service/chain-probe", handleServiceChainProbe)
 	mux.HandleFunc("POST /v1/compose/up", handleComposeUp)
 	mux.HandleFunc("POST /v1/compose/down", handleComposeDown)
 	mux.HandleFunc("POST /v1/compose/stop", handleComposeStop)
