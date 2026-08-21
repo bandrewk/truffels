@@ -136,6 +136,13 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID     string         `json:"id"`
 		Params map[string]any `json:"params"`
+		// OnlyIfMissing makes apply a no-op when the compose file already
+		// exists. The startup reconcile sets it: its job is to heal files that a
+		// DB restore left missing, not to re-render a service whose catalog
+		// template changed — rewriting config under a running container that was
+		// created from the old render desyncs the two (e.g. new RPC creds the
+		// running node never loaded). A real install leaves it false.
+		OnlyIfMissing bool `json:"only_if_missing,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -152,6 +159,13 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unknown catalog entry"})
 		return
+	}
+	// A reconcile only writes what is missing; leave an existing install alone.
+	if req.OnlyIfMissing {
+		if _, err := os.Stat(catComposeDir(req.ID) + "/docker-compose.yml"); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": req.ID, "skipped": true})
+			return
+		}
 	}
 	// 3. Parameters against the declared schema.
 	params, err := ValidateParams(entry, req.Params)

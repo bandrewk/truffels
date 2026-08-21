@@ -181,7 +181,7 @@ func (s *Server) handleCatalogInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.catalogClient.Apply(id, body.Params); err != nil {
+	if err := s.catalogClient.Apply(id, body.Params, false); err != nil {
 		writeError(w, http.StatusBadGateway, "agent apply failed: "+err.Error())
 		return
 	}

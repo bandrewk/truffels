@@ -101,7 +101,7 @@ func main() {
 				return
 			}
 			for _, inst := range installs {
-				if err := catalogClient.Apply(inst.CatalogID, inst.Params); err != nil {
+				if err := catalogClient.Apply(inst.CatalogID, inst.Params, true); err != nil {
 					slog.Warn("catalog reconcile apply failed", "id", inst.CatalogID, "err", err)
 				}
 			}
