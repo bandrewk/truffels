@@ -124,7 +124,7 @@ export default function AddServicePage() {
             )}
             {admission && admission.allowed && (
               <div className="p-3 rounded bg-green-500/20 text-green-400 text-sm">
-                Fits: needs ~{admission.required_ram_mb} MB RAM ({admission.usable_ram_mb} MB available), {admission.required_disk_gb} GB disk ({admission.free_disk_gb} GB free).
+                Fits. After install this host would use about {admission.required_ram_mb} of {admission.usable_ram_mb} MB RAM and {admission.required_disk_gb} of {admission.free_disk_gb} GB disk (all running services together, not this one alone).
               </div>
             )}
 
