@@ -265,7 +265,7 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid request"})
 		return
 	}
-	if _, ok := allowedServices[req.ServiceID]; !ok {
+	if _, ok := serviceComposeDir(req.ServiceID); !ok {
 		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
 		return
 	}
@@ -275,7 +275,7 @@ func handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 
 	// If a specific container is requested, use docker logs directly
 	if req.Container != "" {
-		if !allowedContainers[req.Container] {
+		if !isAllowedContainer(req.Container) {
 			writeJSON(w, 403, map[string]string{"error": "container not allowed: " + req.Container})
 			return
 		}
@@ -330,7 +330,7 @@ func handleInspect(w http.ResponseWriter, r *http.Request) {
 
 	states := make([]containerState, 0, len(req.Containers))
 	for _, name := range req.Containers {
-		if !allowedContainers[name] {
+		if !isAllowedContainer(name) {
 			slog.Warn("inspect denied", "container", name)
 			states = append(states, containerState{Name: name, Status: "denied", Health: "unknown"})
 			continue
@@ -857,8 +857,8 @@ func handleComposeBuild(w http.ResponseWriter, r *http.Request) {
 // --- Helpers ---
 
 func composeDir(serviceID string) string {
-	dirName := allowedServices[serviceID]
-	return composeRoot + "/" + dirName
+	dir, _ := serviceComposeDir(serviceID)
+	return dir
 }
 
 func decodeAndValidate(w http.ResponseWriter, r *http.Request, req *serviceRequest) bool {
@@ -866,7 +866,7 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, req *serviceReque
 		writeJSON(w, 400, map[string]string{"error": "invalid request"})
 		return false
 	}
-	if _, ok := allowedServices[req.ServiceID]; !ok {
+	if _, ok := serviceComposeDir(req.ServiceID); !ok {
 		writeJSON(w, 403, map[string]string{"error": "service not allowed: " + req.ServiceID})
 		return false
 	}

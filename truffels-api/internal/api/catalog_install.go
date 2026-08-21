@@ -45,6 +45,19 @@ func (s *Server) getAdmissionInput(id string, newFloorMB int, newMinDiskGB int) 
 		}
 	}
 
+	// Count only the containers of services that are NOT disabled. A stopped
+	// but enabled service can start again and reclaim its memory, so it counts;
+	// a disabled service never will, so it does not. Legacy and catalog
+	// services alike come from the registry.
+	enabled := make(map[string]bool)
+	for _, tmpl := range s.registry.All() {
+		if ok, _ := s.store.IsServiceEnabled(tmpl.ID); ok {
+			for _, cn := range tmpl.ContainerNames {
+				enabled[cn] = true
+			}
+		}
+	}
+
 	trend, err := s.store.GetContainerSnapshotsForTrend(time.Now().Add(-24 * time.Hour))
 	if err != nil {
 		return admission.Input{}, fmt.Errorf("snapshots: %w", err)
@@ -52,6 +65,9 @@ func (s *Server) getAdmissionInput(id string, newFloorMB int, newMinDiskGB int) 
 
 	usage := make(map[string][]int)
 	for _, snap := range trend {
+		if !enabled[snap.Container] {
+			continue
+		}
 		usage[snap.Container] = append(usage[snap.Container], int(snap.MemUsageMB))
 	}
 

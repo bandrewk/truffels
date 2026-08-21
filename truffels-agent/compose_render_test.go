@@ -119,3 +119,84 @@ func TestRenderComposeRejectsInvalidMountPath(t *testing.T) {
 		t.Fatal("expected error for mount path containing ':', got nil")
 	}
 }
+
+// A build entry (digibyted ships a Dockerfile, not a pre-built image) must emit
+// a build block whose context is confined to the read-only /repo mount, so
+// `docker compose up` builds the image on first start.
+func TestRenderComposeBuildEntry(t *testing.T) {
+	cat, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	e := cat["digibyted"]
+	if e.Build == nil {
+		t.Fatal("expected digibyted to be a build entry")
+	}
+	params, err := ValidateParams(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("ValidateParams: %v", err)
+	}
+	out, err := RenderCompose(e, params)
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("Output is not valid JSON: %v", err)
+	}
+	node := doc["services"].(map[string]any)["node"].(map[string]any)
+	build, ok := node["build"].(map[string]any)
+	if !ok {
+		t.Fatalf("build block missing on build entry: %v", node["build"])
+	}
+	if build["context"] != "/repo/dockerfiles/digibyted" {
+		t.Errorf("context = %v, want /repo/dockerfiles/digibyted", build["context"])
+	}
+	if build["dockerfile"] != "Dockerfile" {
+		t.Errorf("dockerfile = %v, want Dockerfile", build["dockerfile"])
+	}
+	if node["image"] != "truffels/digibyted:9.26.5" {
+		t.Errorf("image = %v, want truffels/digibyted:9.26.5", node["image"])
+	}
+}
+
+func TestCatalogBuildBlock(t *testing.T) {
+	ok, err := catalogBuildBlock(&BuildSpec{Dockerfile: "dockerfiles/digibyted/Dockerfile"})
+	if err != nil {
+		t.Fatalf("valid dockerfile rejected: %v", err)
+	}
+	if ok.Context != "/repo/dockerfiles/digibyted" || ok.Dockerfile != "Dockerfile" {
+		t.Errorf("got context=%q dockerfile=%q", ok.Context, ok.Dockerfile)
+	}
+	// A dockerfile at the repo root is allowed.
+	if b, err := catalogBuildBlock(&BuildSpec{Dockerfile: "Dockerfile"}); err != nil {
+		t.Errorf("root Dockerfile rejected: %v", err)
+	} else if b.Context != "/repo" {
+		t.Errorf("root context = %q, want /repo", b.Context)
+	}
+	// Escapes and absolute paths must be rejected so the build context can
+	// never leave /repo.
+	for _, bad := range []string{"", "/etc/passwd", "../../etc/Dockerfile", "a/../../b/Dockerfile", "foo/./Dockerfile"} {
+		if _, err := catalogBuildBlock(&BuildSpec{Dockerfile: bad}); err == nil {
+			t.Errorf("expected rejection for dockerfile %q", bad)
+		}
+	}
+}
+
+// An image-only entry (no Build spec) must never carry a build block.
+func TestRenderComposeImageEntryHasNoBuild(t *testing.T) {
+	e := CatalogEntry{
+		ID:    "imageonly",
+		Image: "example/img:1.0",
+		Containers: []ContainerSpec{{
+			Name: "svc", User: "1000:1000", MemoryLimitMB: 128,
+		}},
+	}
+	out, err := RenderCompose(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if strings.Contains(string(out), "\"build\"") {
+		t.Errorf("image-only entry emitted a build block: %s", out)
+	}
+}
