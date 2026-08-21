@@ -47,6 +47,13 @@ type Entry struct {
 		SyncProbe []string `json:"sync_probe,omitempty"`
 	} `json:"chain_info,omitempty"`
 
+	// Web declares a proxied web UI (route + which container/port serves it).
+	Web *struct {
+		Route     string `json:"route"`
+		Container string `json:"container"`
+		Port      int    `json:"port"`
+	} `json:"web,omitempty"`
+
 	Resources struct {
 		MinDiskGB     int `json:"min_disk_gb,omitempty"`
 		MemoryFloorMB int `json:"memory_floor_mb"`

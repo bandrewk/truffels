@@ -43,5 +43,15 @@ func CatalogEntryToTemplate(e catalog.Entry, composeRoot, dataRoot string) model
 			tmpl.Dependencies = append(tmpl.Dependencies, req.ID)
 		}
 	}
+	// A web entry gets its route projected with the full container name (the
+	// same "truffels-<id>-<container>" derivation the agent uses) so the proxy
+	// can reverse_proxy to it and the UI can link to it.
+	if e.Web != nil {
+		tmpl.Web = &model.WebRoute{
+			Route:     e.Web.Route,
+			Container: "truffels-" + e.ID + "-" + e.Web.Container,
+			Port:      e.Web.Port,
+		}
+	}
 	return tmpl
 }

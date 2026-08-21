@@ -61,6 +61,7 @@ export interface ServiceTemplate {
   update_source?: UpdateSource
   stack_containers?: string[]
   data_dirs?: DataDir[]
+  web?: { route: string; container: string; port: number }
 }
 
 export interface DataDir {

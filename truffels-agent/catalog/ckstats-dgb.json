@@ -84,5 +84,10 @@
   "resources": {
     "min_disk_gb": 2,
     "memory_floor_mb": 512
+  },
+  "web": {
+    "route": "/ckstats-dgb",
+    "container": "app",
+    "port": 3000
   }
 }

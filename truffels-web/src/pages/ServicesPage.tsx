@@ -77,6 +77,17 @@ export default function ServicesPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  {svc.template.web && svc.state === 'running' && (
+                    <a
+                      href={svc.template.web.route}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="px-1.5 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent hover:bg-accent/30"
+                    >
+                      Öffnen ↗
+                    </a>
+                  )}
                   {svc.sync_info?.syncing && (
                     <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
                       Syncing {(svc.sync_info.progress * 100).toFixed(1)}%
