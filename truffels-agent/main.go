@@ -214,7 +214,8 @@ func handleComposeUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := composeDir(req.ServiceID)
-	if err := runCompose(dir, "up", "-d", "--remove-orphans"); err != nil {
+	// up -d builds a missing catalog image; give it a build-sized budget.
+	if err := runComposeTimeout(dir, 20*time.Minute, "up", "-d", "--remove-orphans"); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
@@ -903,10 +904,18 @@ func runStdout(ctx context.Context, name string, args ...string) (string, error)
 }
 
 func runCompose(composeDir string, args ...string) error {
+	return runComposeTimeout(composeDir, 5*time.Minute, args...)
+}
+
+// runComposeTimeout is runCompose with an explicit deadline. `up` may build a
+// catalog image (a slow Next.js build outruns five minutes), so its caller
+// passes a build-sized budget; down/stop keep the short default so the API's
+// uninstall timeout still outlasts the agent's teardown.
+func runComposeTimeout(composeDir string, timeout time.Duration, args ...string) error {
 	fullArgs := append([]string{"compose", "-f", composeDir + "/docker-compose.yml"}, args...)
 	slog.Info("docker compose", "dir", composeDir, "args", strings.Join(args, " "))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)

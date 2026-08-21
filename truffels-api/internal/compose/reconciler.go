@@ -134,7 +134,7 @@ func (r *Reconciler) reconcileService(serviceID string) error {
 	// the same agent file/reconcile path so structural Caddy config changes
 	// flow through the update channel.
 	if serviceID == "proxy" {
-		caddyfile := RenderCaddyfile()
+		caddyfile := RenderCaddyfile(WebRoutesFrom(r.registry))
 		caddyfilePath := "/srv/truffels/config/proxy/Caddyfile"
 		if err := r.reconcileFileWithRetry(caddyfilePath, caddyfile); err != nil {
 			slog.Warn("Caddyfile reconcile failed; proceeding with compose",

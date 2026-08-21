@@ -38,6 +38,18 @@ type ServiceTemplate struct {
 	// Surfaced in the Service Data Storage panel. Clearable entries get a Clear
 	// button in the UI; non-clearable ones are view-only.
 	DataDirs []DataDir `json:"data_dirs,omitempty"`
+
+	// Web, when set, means the proxy exposes this service's UI at Route and the
+	// admin UI shows an "Open" link there.
+	Web *WebRoute `json:"web,omitempty"`
+}
+
+// WebRoute is a proxied web UI: Route is the path prefix, Container is the full
+// container name to reverse_proxy to, Port is its port.
+type WebRoute struct {
+	Route     string `json:"route"`
+	Container string `json:"container"`
+	Port      int    `json:"port"`
 }
 
 // EnsureDir describes a directory the reconciler must create before bringing

@@ -1,11 +1,50 @@
 package compose
 
-// RenderCaddyfile returns the canonical Caddyfile content for the proxy
-// service. The first handle block (/proxy-health) is a static OK response
-// so the proxy healthcheck doesn't depend on any upstream — fixes the
-// dev.14 false-positive where stopping mempool marked Caddy unhealthy.
-func RenderCaddyfile() string {
-	return caddyfileTemplate
+import (
+	"regexp"
+	"strconv"
+	"strings"
+
+	"truffels-api/internal/model"
+	"truffels-api/internal/service"
+)
+
+// WebRoutesFrom collects the web routes of every registered service that
+// declares one — the set the proxy exposes and the UI links to.
+func WebRoutesFrom(reg *service.Registry) []model.WebRoute {
+	var routes []model.WebRoute
+	for _, tmpl := range reg.All() {
+		if tmpl.Web != nil {
+			routes = append(routes, *tmpl.Web)
+		}
+	}
+	return routes
+}
+
+// caddyRouteRe/caddyHostRe bound what a catalog web route can inject into the
+// Caddyfile: a rooted path and a hostname. Anything else is skipped rather than
+// written, so a bad entry can never produce a Caddyfile that fails to parse.
+var (
+	caddyRouteRe = regexp.MustCompile(`^/[A-Za-z0-9/_-]+$`)
+	caddyHostRe  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
+
+// RenderCaddyfile returns the Caddyfile for the proxy, with a handle block for
+// each installed catalog web service spliced in before the mempool catch-all.
+// The first handle block (/proxy-health) is a static OK response so the proxy
+// healthcheck doesn't depend on any upstream.
+func RenderCaddyfile(webRoutes []model.WebRoute) string {
+	var b strings.Builder
+	for _, wr := range webRoutes {
+		if !caddyRouteRe.MatchString(wr.Route) || !caddyHostRe.MatchString(wr.Container) || wr.Port <= 0 || wr.Port > 65535 {
+			continue
+		}
+		b.WriteString("\thandle " + wr.Route + "* {\n")
+		b.WriteString("\t\theader Content-Security-Policy \"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'\"\n")
+		b.WriteString("\t\treverse_proxy " + wr.Container + ":" + strconv.Itoa(wr.Port) + "\n")
+		b.WriteString("\t}\n")
+	}
+	return strings.Replace(caddyfileTemplate, "%CATALOG_WEB_ROUTES%\n", b.String(), 1)
 }
 
 const caddyfileTemplate = `{
@@ -70,7 +109,7 @@ const caddyfileTemplate = `{
 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-mempool-frontend:8080
 	}
-
+%CATALOG_WEB_ROUTES%
 	handle {
 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; font-src 'self'"
 		reverse_proxy truffels-mempool-frontend:8080

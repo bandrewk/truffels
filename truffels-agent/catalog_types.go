@@ -24,7 +24,18 @@ type CatalogEntry struct {
 	Requires   []RequireSpec   `json:"requires,omitempty"`
 	Source     *SourceSpec     `json:"source,omitempty"`
 	ChainInfo  *ChainSpec      `json:"chain_info,omitempty"`
+	Web        *WebSpec        `json:"web,omitempty"`
 	Resources  ResourceSpec    `json:"resources"`
+}
+
+// WebSpec declares that an entry serves a web UI the proxy should expose. Route
+// is a fixed path prefix (the app is built with it as its basePath, so it is
+// not a runtime parameter), Container is which of the entry's containers serves
+// it, Port is the container port.
+type WebSpec struct {
+	Route     string `json:"route"`
+	Container string `json:"container"`
+	Port      int    `json:"port"`
 }
 
 type BuildSpec struct {

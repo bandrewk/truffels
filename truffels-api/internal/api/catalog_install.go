@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"truffels-api/internal/admission"
+	"truffels-api/internal/compose"
 )
 
 func (s *Server) handleGetCatalog(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +196,30 @@ func (s *Server) handleCatalogInstall(w http.ResponseWriter, r *http.Request) {
 	if err := s.registry.Refresh(); err != nil {
 		slog.Warn("registry refresh after catalog change failed", "err", err)
 	}
+	s.syncCaddyRoutes()
 	s.handleGetService(w, r)
+}
+
+// syncCaddyRoutes regenerates the proxy Caddyfile from the currently installed
+// web services and reloads the proxy if it changed, so a web service's route
+// appears (install) or disappears (uninstall) without waiting for a restart.
+// A no-op when nothing web-facing changed: an unchanged Caddyfile skips the
+// proxy reload.
+func (s *Server) syncCaddyRoutes() {
+	if s.compose == nil {
+		return
+	}
+	caddyfile := compose.RenderCaddyfile(compose.WebRoutesFrom(s.registry))
+	changed, err := s.compose.FileReconcile("/srv/truffels/config/proxy/Caddyfile", caddyfile)
+	if err != nil {
+		slog.Warn("caddy route sync: write failed", "err", err)
+		return
+	}
+	if changed {
+		if err := s.compose.Restart("proxy"); err != nil {
+			slog.Warn("caddy route sync: proxy reload failed", "err", err)
+		}
+	}
 }
 
 func (s *Server) handleCatalogUninstall(w http.ResponseWriter, r *http.Request) {
@@ -234,5 +258,6 @@ func (s *Server) handleCatalogUninstall(w http.ResponseWriter, r *http.Request) 
 	if err := s.registry.Refresh(); err != nil {
 		slog.Warn("registry refresh after uninstall failed", "err", err)
 	}
+	s.syncCaddyRoutes()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
