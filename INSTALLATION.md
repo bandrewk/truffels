@@ -92,6 +92,14 @@ On first install, all dependent services (electrs, mempool, ckpool, ckstats) are
 
 **Pruned mode:** electrs and mempool are incompatible with pruning and cannot be enabled. ckpool and ckstats work fine with pruned nodes.
 
+**Adding a second chain node (catalog):** wait until Bitcoin Core has finished its
+initial block download before installing another full node (e.g. DigiByte Core)
+from the service catalog. On the 8 GB Pi, two initial block downloads at once
+exhaust RAM and get one node OOM-killed into a slow crash-loop. See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) → *Chain node OOM-killed or syncs slowly
+during IBD*. Keep the second node's pool and stats containers stopped until its
+node is synced.
+
 ## SD card notes
 
 The installer auto-detects SD card boot and adapts:

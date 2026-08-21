@@ -47,6 +47,48 @@ environment:
   NODE_OPTIONS: "--max-old-space-size=768"
 ```
 
+## Chain node OOM-killed or syncs slowly during IBD
+
+**Do not run two initial block downloads at the same time.** The appliance is an
+8 GB Raspberry Pi. Bitcoin Core alone reserves a multi-GB `dbcache` plus its
+in-memory UTXO set during its initial sync; a second full node from the catalog
+(e.g. DigiByte Core) wants the same. Each container has its own memory limit, and
+two IBD-sized limits together exceed physical RAM — the box swaps hard (thrashing,
+slow sync), and whichever node's peak crosses *its own* limit is OOM-killed by the
+kernel. Every kill forces a dirty-shutdown recovery that reloads the block index
+for ~2 h on restart, so the node barely moves forward.
+
+Symptoms: a catalog chain node stuck `unhealthy`, `RestartCount` climbing,
+`getblockchaininfo` returning `error code: -28` for a long time, and the sync
+percentage resetting after each crash.
+
+Confirm it is an OOM and not something else:
+
+```bash
+sudo dmesg -T | grep -i 'oom\|killed process'          # kernel OOM-killer
+sudo docker inspect --format '{{.State.OOMKilled}} restarts={{.RestartCount}}' <container>
+sudo docker stats --no-stream <container>               # RSS pinned at the limit
+```
+
+What to do:
+
+- **Sync one chain at a time.** Let Bitcoin Core finish its initial block download
+  before installing or starting a second chain node from the catalog. Keep the
+  second stack's pool and stats containers stopped meanwhile — they are useless
+  until the node is synced and only add memory/CPU/disk pressure.
+- **Keep `dbcache` modest on the second node.** Under a 4 GB container limit,
+  `dbcache=512` holds the in-memory UTXO set near ~440 MiB and keeps the IBD peak
+  safely under the limit. `dbcache=1024` pushed the DigiByte node's peak over 4 GB
+  and OOM-killed it. The catalog ships `512`; do not raise it on this board while a
+  second node is also syncing.
+- Do **not** raise a node's container memory limit past what leaves the host
+  headroom. On 8 GB, two limits summing above ~7 GB leave nothing for the OS and
+  the other 11 containers and invite a host-level OOM that kills something worse.
+
+Once Bitcoin Core reaches `initialblockdownload=false` it drops to a ~1.5 GB
+steady state and frees the RAM and disk I/O the second node needs; that node then
+syncs markedly faster.
+
 ## ckstats blank page
 
 ckstats requires `basePath: '/ckstats'` in `next.config.js` — without it, assets load
