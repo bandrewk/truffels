@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // loadedCatalog is filled once at startup. The catalog lives only here in the
@@ -90,6 +92,21 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The data dir must be writable by the (typically non-root) user the
+	// container runs as. The agent creates it as root, so hand ownership over.
+	// Config dirs stay root-owned on purpose: config files are mounted read-only.
+	if uid, gid, ok := dataDirOwner(entry); ok {
+		if err := os.Chown(catDataDir(req.ID), uid, gid); err != nil {
+			// The agent runs as root in production, where chown always
+			// succeeds. In a non-root test/dev environment chown to a foreign
+			// uid is EPERM and there is nothing to hand over, so continue.
+			if os.Geteuid() == 0 {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "chown data dir: " + err.Error()})
+				return
+			}
+			slog.Warn("data dir chown skipped (agent not running as root)", "id", req.ID, "err", err)
+		}
+	}
 	for name, content := range configs {
 		if err := safeConfigKey(name); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config key: " + err.Error()})
@@ -164,4 +181,47 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "purged": req.PurgeData})
+}
+
+// dataDirOwner returns the uid/gid that should own the catalog data directory:
+// the numeric user of the container that mounts the data volume. Catalog
+// containers drop all capabilities and run unprivileged, so a root-owned data
+// dir would leave them unable to write. Returns ok=false when no container
+// mounts a data volume or its user is not a numeric uid[:gid].
+func dataDirOwner(e CatalogEntry) (uid, gid int, ok bool) {
+	for _, c := range e.Containers {
+		mountsData := false
+		for _, v := range c.Volumes {
+			if v.Kind == "data" {
+				mountsData = true
+				break
+			}
+		}
+		if mountsData {
+			return parseNumericUser(c.User)
+		}
+	}
+	return 0, 0, false
+}
+
+// parseNumericUser parses a Docker "uid[:gid]" string of numeric ids. A bare
+// "uid" uses that id for the group too, matching how the container resolves it.
+// Empty or non-numeric users yield ok=false rather than an arbitrary owner.
+func parseNumericUser(s string) (uid, gid int, ok bool) {
+	if s == "" {
+		return 0, 0, false
+	}
+	u, g, found := strings.Cut(s, ":")
+	uid, err := strconv.Atoi(u)
+	if err != nil {
+		return 0, 0, false
+	}
+	gid = uid
+	if found {
+		gid, err = strconv.Atoi(g)
+		if err != nil {
+			return 0, 0, false
+		}
+	}
+	return uid, gid, true
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -25,27 +24,22 @@ func RenderConfig(id string, params map[string]any) (map[string][]byte, error) {
 	}
 }
 
-func renderDigibyteConf(params map[string]any) (map[string][]byte, error) {
-	pruneGB, ok := params["prune_gb"].(int)
-	if !ok {
-		return nil, fmt.Errorf("prune_gb is missing or has the wrong type: %T", params["prune_gb"])
-	}
-
+func renderDigibyteConf(_ map[string]any) (map[string][]byte, error) {
 	var b strings.Builder
 	b.WriteString("# Project Truffels — DigiByte Core\n")
 	b.WriteString("# Generated from the catalog. Do not edit by hand.\n")
 	b.WriteString("server=1\n")
 	b.WriteString("printtoconsole=1\n")
 	b.WriteString("disablewallet=1\n")
-	b.WriteString("txindex=0\n")
+	// This build ships DigiDollar compiled in, which refuses to start unless
+	// txindex=1. That also rules out pruning (prune and txindex are mutually
+	// exclusive), so this entry runs as a full node with no prune option.
+	b.WriteString("txindex=1\n")
 	// Without this line getblocktemplate returns a Scrypt template:
 	// src/init.cpp:198 sets miningAlgo = ALGO_SCRYPT, and ckpool does not
 	// send an Algo argument. The failure would be silent — the RPC response
 	// is valid, just worthless for a SHA256d pool. See Spec 2.4.
 	b.WriteString("algo=sha256d\n")
-	if pruneGB > 0 {
-		b.WriteString("prune=" + strconv.Itoa(pruneGB*1024) + "\n")
-	}
 	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
 
 	return map[string][]byte{"digibyte.conf": []byte(b.String())}, nil
