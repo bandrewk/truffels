@@ -72,6 +72,13 @@ COPY --from=builder /app/ormconfig.ts ./
 COPY --from=builder /app/next.config.js ./
 COPY --from=builder /app/migrations ./migrations
 
+# Run as the node user (uid 1000). The catalog runs this with cap_drop=ALL, so
+# a root process would lose CAP_DAC_OVERRIDE and could not read the pool's
+# logs (owned by uid 1000). Running as 1000 matches the pool and reads them
+# natively; chown /app so the app can still write its runtime cache.
+RUN chown -R node:node /app
+USER node
+
 EXPOSE 3000
 
 CMD ["pnpm", "start"]

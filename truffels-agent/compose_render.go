@@ -53,7 +53,17 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 		svcNetworks = []string{"chain", "stack"}
 	}
 
+	// A web entry's serving container must sit on a network the reverse proxy
+	// can reach it on; truffels-edge is where the proxy lives.
+	if e.Web != nil {
+		cf.Networks["edge"] = composeNetwork{Name: "truffels-edge", External: true}
+	}
+
 	for _, c := range e.Containers {
+		nets := svcNetworks
+		if e.Web != nil && c.Name == e.Web.Container {
+			nets = append(append([]string{}, svcNetworks...), "edge")
+		}
 		svc := composeService{
 			Image:         image,
 			ContainerName: catContainerName(e.ID, c.Name),
@@ -61,7 +71,7 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 			User:          c.User,
 			SecurityOpt:   []string{"no-new-privileges:true"},
 			CapDrop:       []string{"ALL"},
-			Networks:      svcNetworks,
+			Networks:      nets,
 			Entrypoint:    c.Entrypoint,
 			Deploy: composeDeploy{Resources: composeResources{
 				Limits: composeLimits{Memory: strconv.Itoa(c.MemoryLimitMB) + "M"},
