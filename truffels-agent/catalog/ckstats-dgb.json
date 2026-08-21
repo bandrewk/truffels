@@ -59,7 +59,7 @@
       "entrypoint": [
         "/bin/sh",
         "-c",
-        "CLEANUP_COUNTER=0; while true; do date +%s > /tmp/cron-last-run; echo seed; pnpm seed 2>&1; echo update-users; pnpm update-users 2>&1; CLEANUP_COUNTER=$$((CLEANUP_COUNTER + 1)); if [ \"$$CLEANUP_COUNTER\" -ge 120 ]; then echo cleanup; pnpm cleanup 2>&1; CLEANUP_COUNTER=0; fi; sleep 60; done"
+        "until pnpm migration:run; do echo waiting for db; sleep 5; done; CLEANUP_COUNTER=0; while true; do date +%s > /tmp/cron-last-run; echo seed; pnpm seed 2>&1; echo update-users; pnpm update-users 2>&1; CLEANUP_COUNTER=$$((CLEANUP_COUNTER + 1)); if [ \"$$CLEANUP_COUNTER\" -ge 120 ]; then echo cleanup; pnpm cleanup 2>&1; CLEANUP_COUNTER=0; fi; sleep 60; done"
       ],
       "volumes": [
         {
