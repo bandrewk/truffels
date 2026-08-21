@@ -84,8 +84,9 @@ func (c *cancelOnClose) Close() error {
 func (c *Client) All() (map[string]Entry, error) {
 	c.mu.RLock()
 	if c.cached != nil {
-		defer c.mu.RUnlock()
-		return c.cached, nil
+		out := copyEntries(c.cached)
+		c.mu.RUnlock()
+		return out, nil
 	}
 	c.mu.RUnlock()
 
@@ -111,7 +112,17 @@ func (c *Client) All() (map[string]Entry, error) {
 	c.mu.Lock()
 	c.cached = out
 	c.mu.Unlock()
-	return out, nil
+	return copyEntries(out), nil
+}
+
+// copyEntries returns a shallow copy of the entry map so callers can iterate or
+// build sets without mutating the client's cache.
+func copyEntries(m map[string]Entry) map[string]Entry {
+	out := make(map[string]Entry, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func (c *Client) Get(id string) (Entry, bool) {
