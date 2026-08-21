@@ -43,6 +43,21 @@ func CatalogEntryToTemplate(e catalog.Entry, composeRoot, dataRoot string) model
 			tmpl.Dependencies = append(tmpl.Dependencies, req.ID)
 		}
 	}
+	// An entry with a rendered config file (not purely env-based) exposes it
+	// for viewing and editing at cat-<id>/<file>. Edits survive self-updates
+	// (the reconcile only writes missing files); a reinstall re-renders it,
+	// the same as reinstalling a legacy service.
+	for _, c := range e.Containers {
+		for _, v := range c.Volumes {
+			if v.Kind == "config" && v.File != "" {
+				tmpl.ConfigPath = "cat-" + e.ID + "/" + v.File
+				break
+			}
+		}
+		if tmpl.ConfigPath != "" {
+			break
+		}
+	}
 	// A web entry gets its route projected with the full container name (the
 	// same "truffels-<id>-<container>" derivation the agent uses) so the proxy
 	// can reverse_proxy to it and the UI can link to it.

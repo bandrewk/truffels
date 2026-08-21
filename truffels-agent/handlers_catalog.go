@@ -92,17 +92,6 @@ func ensureStackNetwork(ctx context.Context, stack string) error {
 	return nil
 }
 
-// removeStackNetwork tears the shared network down — best effort. docker refuses
-// to remove a network that still has attached containers, which is exactly the
-// ref-count we want: only the last stack member to leave actually removes it.
-func removeStackNetwork(ctx context.Context, stack string) {
-	name := stackNetworkName(stack)
-	if out, err := runCapture(ctx, "docker", "network", "rm", name); err != nil {
-		slog.Info("stack network kept (still in use or absent)",
-			"stack", stack, "detail", strings.TrimSpace(out))
-	}
-}
-
 // loadedCatalog is filled once at startup. The catalog lives only here in the
 // agent; the API fetches it via this endpoint. This makes a version skew between
 // the two constructively impossible.
@@ -269,8 +258,7 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid id"})
 		return
 	}
-	entry, ok := loadedCatalog[req.ID]
-	if !ok {
+	if _, ok := loadedCatalog[req.ID]; !ok {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unknown catalog entry"})
 		return
 	}
@@ -310,14 +298,10 @@ func handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("Catalog data deleted", "id", req.ID, "path", catDataDir(req.ID))
 	}
 
-	// After the container is down and gone, try to drop the shared stack
-	// network. It only actually goes away once the last member has left.
-	if entry.Stack != "" {
-		nctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		removeStackNetwork(nctx, entry.Stack)
-	}
-
+	// The shared stack network is deliberately left in place: other stack
+	// members (even stopped ones) hold compose references to it by name, and
+	// removing+recreating it on a single member's uninstall would orphan them
+	// against a stale network id. An unused bridge network is a negligible leak.
 	slog.Info("Catalog service removed", "id", req.ID, "purge_data", req.PurgeData)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "purged": req.PurgeData})
 }

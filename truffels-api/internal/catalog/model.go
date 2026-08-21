@@ -27,6 +27,10 @@ type Entry struct {
 	Containers []struct {
 		Name          string `json:"name"`
 		MemoryLimitMB int    `json:"memory_limit_mb"`
+		Volumes       []struct {
+			Kind string `json:"kind"`
+			File string `json:"file,omitempty"`
+		} `json:"volumes,omitempty"`
 	} `json:"containers"`
 
 	Requires []struct {
