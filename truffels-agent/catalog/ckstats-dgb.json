@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "ckstats-dgb",
+  "display_name": "DigiByte Pool Stats",
+  "description": "ckstats dashboard for DigiByte pool statistics. Reads the pool's logs and stores stats in its database.",
+  "role": "stats",
+  "implementation": "ckstats",
+  "chain": "dgb",
+  "stack": "dgb",
+  "build": {
+    "dockerfile": "dockerfiles/ckstats/Dockerfile",
+    "version": "v1.0.0"
+  },
+  "requires": [
+    {"role": "pool", "id": "ckpool-dgb"},
+    {"role": "database", "id": "ckstats-db-dgb"}
+  ],
+  "containers": [
+    {
+      "name": "app",
+      "memory_limit_mb": 512,
+      "env_file": "ckstats.env",
+      "ports": [{"container": 3000, "host": 3335, "role": "http"}],
+      "volumes": [
+        {"kind": "pool-logs", "from": "ckpool-dgb", "mount": "/ckpool-logs", "ro": true}
+      ],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000/ckstats\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 5,
+        "start_period": "60s"
+      }
+    },
+    {
+      "name": "cron",
+      "memory_limit_mb": 256,
+      "env_file": "ckstats.env",
+      "entrypoint": ["/bin/sh", "-c", "CLEANUP_COUNTER=0; while true; do date +%s > /tmp/cron-last-run; echo seed; pnpm seed 2>&1; echo update-users; pnpm update-users 2>&1; CLEANUP_COUNTER=$$((CLEANUP_COUNTER + 1)); if [ \"$$CLEANUP_COUNTER\" -ge 120 ]; then echo cleanup; pnpm cleanup 2>&1; CLEANUP_COUNTER=0; fi; sleep 60; done"],
+      "volumes": [
+        {"kind": "pool-logs", "from": "ckpool-dgb", "mount": "/ckpool-logs", "ro": true}
+      ],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/cron-last-run 2>/dev/null || echo 0) )) -lt 180"],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "120s"
+      }
+    }
+  ],
+  "resources": {"min_disk_gb": 2, "memory_floor_mb": 512}
+}

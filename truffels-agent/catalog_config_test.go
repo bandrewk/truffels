@@ -107,3 +107,29 @@ func TestCkpoolDGBAddressValidation(t *testing.T) {
 		t.Error("malformed dgb_address should be rejected")
 	}
 }
+
+// The stats DB and app share the per-stack secret as their DB password, and the
+// app points at the DB by its stack DNS name.
+func TestRenderCkstatsEnvs(t *testing.T) {
+	creds := &stackCreds{User: "truffels", Pass: "poolpass99"}
+	db, err := RenderConfig("ckstats-db-dgb", map[string]any{}, creds)
+	if err != nil {
+		t.Fatalf("db env: %v", err)
+	}
+	if !strings.Contains(string(db["postgres.env"]), "POSTGRES_PASSWORD=poolpass99") {
+		t.Errorf("postgres.env missing password: %s", db["postgres.env"])
+	}
+	app, err := RenderConfig("ckstats-dgb", map[string]any{}, creds)
+	if err != nil {
+		t.Fatalf("app env: %v", err)
+	}
+	s := string(app["ckstats.env"])
+	for _, want := range []string{"DB_HOST=truffels-ckstats-db-dgb-db", "DB_PASSWORD=poolpass99", "API_URL=/ckpool-logs"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("ckstats.env missing %q:\n%s", want, s)
+		}
+	}
+	if _, err := RenderConfig("ckstats-db-dgb", map[string]any{}, nil); err == nil {
+		t.Error("ckstats-db-dgb without creds should error")
+	}
+}

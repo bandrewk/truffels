@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "ckstats-db-dgb",
+  "display_name": "DigiByte Pool Stats DB",
+  "description": "PostgreSQL database backing the DigiByte pool statistics.",
+  "role": "database",
+  "implementation": "postgres",
+  "chain": "dgb",
+  "stack": "dgb",
+  "image": "postgres:16-alpine",
+  "containers": [
+    {
+      "name": "db",
+      "memory_limit_mb": 512,
+      "user": "70:70",
+      "env_file": "postgres.env",
+      "volumes": [
+        {"kind": "data", "mount": "/var/lib/postgresql/data"}
+      ],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "pg_isready -U ckpool -d ckstats"],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 5,
+        "start_period": "30s"
+      }
+    }
+  ],
+  "resources": {"min_disk_gb": 2, "memory_floor_mb": 256}
+}

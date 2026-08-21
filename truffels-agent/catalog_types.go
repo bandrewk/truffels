@@ -52,6 +52,9 @@ type ContainerSpec struct {
 	Ports         []PortSpec       `json:"ports,omitempty"`
 	Volumes       []VolumeSpec     `json:"volumes,omitempty"`
 	Healthcheck   *HealthcheckSpec `json:"healthcheck,omitempty"`
+	// EnvFile names a rendered config file (bare filename) whose KEY=VALUE lines
+	// become this container's environment — e.g. postgres credentials.
+	EnvFile string `json:"env_file,omitempty"`
 }
 
 type PortSpec struct {

@@ -88,7 +88,11 @@ func TestRenderComposeVolumesStayUnderDerivedRoots(t *testing.T) {
 			for _, v := range vols {
 				src := strings.SplitN(v.(string), ":", 2)[0]
 				src = filepath.Clean(src)
-				okPrefix := strings.HasPrefix(src, catDataDir(id)) ||
+				// Sources live under a catalog entry's data dir (its own, or —
+				// for a pool-logs volume — another entry's, always a validated
+				// cat-<id> path) or the entry's own config dir. Never "/" or a
+				// host path.
+				okPrefix := strings.HasPrefix(src, dataRoot+"/cat-") ||
 					strings.HasPrefix(src, configRoot+"/cat-"+id+"/")
 				if !okPrefix {
 					t.Errorf("%s: bind source %q lies outside the derived roots", id, src)
@@ -314,5 +318,23 @@ func TestVolumeSourcePoolLogsRejectsBadFrom(t *testing.T) {
 		if _, err := volumeSource("stats", VolumeSpec{Kind: "pool-logs", From: bad, Mount: "/x"}); err == nil {
 			t.Errorf("bad from %q was accepted", bad)
 		}
+	}
+}
+
+// A container declaring an env_file has it rendered as a path under the entry's
+// config dir.
+func TestRenderComposeEnvFile(t *testing.T) {
+	cat, _ := LoadCatalog()
+	e, ok := cat["ckstats-db-dgb"]
+	if !ok {
+		t.Fatal("ckstats-db-dgb not in catalog")
+	}
+	out, err := RenderCompose(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "env_file") || !strings.Contains(s, "cat-ckstats-db-dgb/postgres.env") {
+		t.Errorf("ckstats-db-dgb should reference env_file postgres.env:\n%s", s)
 	}
 }
