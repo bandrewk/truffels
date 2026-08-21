@@ -460,3 +460,48 @@ func anchorUnderRoot(cleaned, root string) (*os.Root, string, error) {
 	}
 	return r, rel, nil
 }
+
+// --- Catalog services on the legacy lifecycle endpoints ---
+//
+// Catalog services are installed through /v1/service/apply, but their
+// day-to-day lifecycle (start/stop/restart, logs, status) runs through the
+// same legacy endpoints the built-in services use. Those endpoints gate on the
+// static allowlists above, which do not know catalog services. The two helpers
+// here widen that gate to exactly the curated catalog: an entry present in the
+// embedded catalog, whose id passes the charset check, whose directory is the
+// cat- path (which by construction cannot address a legacy directory), and
+// whose container names are the derived truffels-<id>-<container>. This is a
+// grant of privilege to the curated catalog, consistent with the trust model —
+// review it as such.
+
+// serviceComposeDir resolves a service id to its compose directory, allowing
+// both legacy services and installed catalog services. ok is false if neither.
+func serviceComposeDir(id string) (string, bool) {
+	if dirName, ok := allowedServices[id]; ok {
+		return composeRoot + "/" + dirName, true
+	}
+	if _, ok := loadedCatalog[id]; ok && isValidCatalogID(id) {
+		return catComposeDir(id), true
+	}
+	return "", false
+}
+
+// isAllowedContainer reports whether a container may be inspected or have its
+// logs read: a legacy container, or a catalog service container named
+// truffels-<catId>-<container> for an entry in the embedded catalog.
+func isAllowedContainer(name string) bool {
+	if allowedContainers[name] {
+		return true
+	}
+	for id, entry := range loadedCatalog {
+		if !isValidCatalogID(id) {
+			continue
+		}
+		for _, c := range entry.Containers {
+			if name == catContainerName(id, c.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
