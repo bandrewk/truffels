@@ -175,7 +175,7 @@ func TestServiceApplyWritesFiles(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	handleServiceApply(rec, httptest.NewRequest(http.MethodPost, "/v1/service/apply",
-		bytes.NewBufferString(`{"id":"digibyted","params":{"prune_gb":12}}`)))
+		bytes.NewBufferString(`{"id":"digibyted","params":{}}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -206,8 +206,8 @@ func TestServiceApplyWritesFiles(t *testing.T) {
 	if !strings.Contains(configContent, "algo=sha256d") {
 		t.Error("Config file does not contain algo=sha256d")
 	}
-	if !strings.Contains(configContent, "prune=12288") {
-		t.Error("Config file does not contain prune=12288 (prune_gb=12 should become 12*1024)")
+	if !strings.Contains(configContent, "txindex=1") {
+		t.Error("Config file does not contain txindex=1 (required by this build's DigiDollar)")
 	}
 
 	// Check (c): data directory exists
@@ -216,5 +216,43 @@ func TestServiceApplyWritesFiles(t *testing.T) {
 		t.Fatalf("Data directory does not exist: %v", err)
 	} else if !stat.IsDir() {
 		t.Error("Data path exists but is not a directory")
+	}
+}
+
+func TestParseNumericUser(t *testing.T) {
+	cases := []struct {
+		in       string
+		uid, gid int
+		ok       bool
+	}{
+		{"1000:1000", 1000, 1000, true},
+		{"1000", 1000, 1000, true}, // bare uid → gid defaults to uid
+		{"0:0", 0, 0, true},
+		{"", 0, 0, false},       // no user set
+		{"nobody", 0, 0, false}, // non-numeric
+		{"1000:grp", 0, 0, false},
+	}
+	for _, c := range cases {
+		uid, gid, ok := parseNumericUser(c.in)
+		if ok != c.ok || (ok && (uid != c.uid || gid != c.gid)) {
+			t.Errorf("parseNumericUser(%q) = (%d,%d,%v), want (%d,%d,%v)", c.in, uid, gid, ok, c.uid, c.gid, c.ok)
+		}
+	}
+}
+
+// The data dir owner is the user of the container that mounts the data volume.
+func TestDataDirOwner(t *testing.T) {
+	e := CatalogEntry{Containers: []ContainerSpec{
+		{Name: "aux", User: "0:0", Volumes: []VolumeSpec{{Kind: "config", File: "x.conf", Mount: "/x"}}},
+		{Name: "node", User: "1000:1000", Volumes: []VolumeSpec{{Kind: "data", Mount: "/data"}}},
+	}}
+	uid, gid, ok := dataDirOwner(e)
+	if !ok || uid != 1000 || gid != 1000 {
+		t.Errorf("dataDirOwner = (%d,%d,%v), want (1000,1000,true)", uid, gid, ok)
+	}
+	// No data volume anywhere → no owner to assign.
+	none := CatalogEntry{Containers: []ContainerSpec{{Name: "x", User: "1000:1000"}}}
+	if _, _, ok := dataDirOwner(none); ok {
+		t.Error("dataDirOwner should be false when no container mounts a data volume")
 	}
 }

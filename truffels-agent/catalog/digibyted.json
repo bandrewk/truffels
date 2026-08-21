@@ -11,16 +11,6 @@
     "version": "9.26.5",
     "sha256": "6baf0c2673bcd635620108116ad57a2a5dc8e9e3d9380a2d708c070a72508587"
   },
-  "params": [
-    {
-      "name": "prune_gb",
-      "description": "Limit block data to this size. 0 = no pruning.",
-      "type": "int",
-      "default": 0,
-      "min": 0,
-      "max": 2000
-    }
-  ],
   "containers": [
     {
       "name": "node",

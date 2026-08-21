@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderConfigDigibyted(t *testing.T) {
-	files, err := RenderConfig("digibyted", map[string]any{"prune_gb": 0})
+	files, err := RenderConfig("digibyted", map[string]any{})
 	if err != nil {
 		t.Fatalf("RenderConfig: %v", err)
 	}
@@ -20,14 +20,12 @@ func TestRenderConfigDigibyted(t *testing.T) {
 	if !strings.Contains(s, "algo=sha256d") {
 		t.Error("algo=sha256d is missing in digibyte.conf")
 	}
-	if strings.Contains(s, "prune=") {
-		t.Error("prune must not be set when prune_gb=0")
+	// This build's DigiDollar refuses to start without txindex=1.
+	if !strings.Contains(s, "txindex=1") {
+		t.Error("txindex=1 is missing in digibyte.conf")
 	}
-}
-
-func TestRenderConfigSetsPrune(t *testing.T) {
-	files, _ := RenderConfig("digibyted", map[string]any{"prune_gb": 12})
-	if !strings.Contains(string(files["digibyte.conf"]), "prune=12288") {
-		t.Errorf("prune=12288 is missing, got:\n%s", files["digibyte.conf"])
+	// txindex=1 rules out pruning: the entry is a full node, never pruned.
+	if strings.Contains(s, "prune=") {
+		t.Error("prune must never be set (incompatible with txindex=1)")
 	}
 }
