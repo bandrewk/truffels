@@ -10,6 +10,9 @@ import (
 
 func catNetworkName(id string) string { return "cat-" + id + "-net" }
 
+// stackNetworkName is the shared external network every member of a stack joins.
+func stackNetworkName(stack string) string { return "cat-stack-" + stack + "-net" }
+
 func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 	if !isValidCatalogID(e.ID) {
 		return nil, fmt.Errorf("invalid id %q", e.ID)
@@ -38,6 +41,18 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 		},
 	}
 
+	// A stacked entry additionally joins the shared external stack network, so
+	// its containers can reach the other stack members by name. The network is
+	// created and torn down by the agent, not compose (External: true).
+	svcNetworks := []string{"chain"}
+	if e.Stack != "" {
+		if !isValidCatalogID(e.Stack) {
+			return nil, fmt.Errorf("invalid stack %q", e.Stack)
+		}
+		cf.Networks["stack"] = composeNetwork{Name: stackNetworkName(e.Stack), External: true}
+		svcNetworks = []string{"chain", "stack"}
+	}
+
 	for _, c := range e.Containers {
 		svc := composeService{
 			Image:         image,
@@ -46,7 +61,7 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 			User:          c.User,
 			SecurityOpt:   []string{"no-new-privileges:true"},
 			CapDrop:       []string{"ALL"},
-			Networks:      []string{"chain"},
+			Networks:      svcNetworks,
 			Entrypoint:    c.Entrypoint,
 			Deploy: composeDeploy{Resources: composeResources{
 				Limits: composeLimits{Memory: strconv.Itoa(c.MemoryLimitMB) + "M"},

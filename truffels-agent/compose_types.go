@@ -70,4 +70,8 @@ type composeLimits struct {
 
 type composeNetwork struct {
 	Name string `json:"name"`
+	// External marks a network compose must NOT create or destroy: it is the
+	// shared stack network, whose lifecycle the agent manages (ref-counted
+	// across stack members). Only ever set for the stack network.
+	External bool `json:"external,omitempty"`
 }
