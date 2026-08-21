@@ -4,11 +4,29 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // catalogIDRe matches valid catalog entry IDs: lowercase letters, digits, hyphens,
 // 1-32 characters long, must start with letter or digit.
 var catalogIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// patternCache compiles each ParamSpec pattern once and reuses it. ValidateParams
+// runs on every install and admission check; recompiling the same fixed pattern
+// each time was pure waste.
+var patternCache sync.Map // string -> *regexp.Regexp
+
+func compilePattern(pattern string) (*regexp.Regexp, error) {
+	if v, ok := patternCache.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	patternCache.Store(pattern, re)
+	return re, nil
+}
 
 // isValidCatalogID checks if the ID is a valid catalog entry identifier.
 func isValidCatalogID(s string) bool { return catalogIDRe.MatchString(s) }
@@ -106,7 +124,7 @@ func coerceParam(spec ParamSpec, raw any) (any, error) {
 			// Patterns are anchored by the catalog author, not implicitly —
 			// a catalog author writes ^…$ themselves; the code does not enforce it
 			// (documented decision so partial matches remain possible where intended).
-			re, err := regexp.Compile(spec.Pattern)
+			re, err := compilePattern(spec.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf("invalid pattern %q: %w", spec.Pattern, err)
 			}
