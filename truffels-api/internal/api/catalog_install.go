@@ -156,6 +156,19 @@ func (s *Server) handleCatalogInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Required services must already be installed. registry.Get returns a
+	// catalog service only once it is installed (and legacy services always),
+	// so this refuses e.g. installing ckpool-dgb before digibyted.
+	for _, req := range entry.Requires {
+		if req.ID == "" {
+			continue
+		}
+		if _, present := s.registry.Get(req.ID); !present {
+			writeError(w, http.StatusConflict, "requires "+req.ID+" to be installed first")
+			return
+		}
+	}
+
 	in, err := s.getAdmissionInput(id, entry.Resources.MemoryFloorMB, entry.Resources.MinDiskGB)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

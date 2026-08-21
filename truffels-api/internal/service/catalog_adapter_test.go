@@ -31,3 +31,18 @@ func TestCatalogEntryToTemplate(t *testing.T) {
 		t.Error("UpdateSource must be nil for catalog services")
 	}
 }
+
+// A catalog entry's Requires must project onto template Dependencies so the
+// existing start-time dependency check enforces stack ordering.
+func TestCatalogEntryToTemplateRequires(t *testing.T) {
+	e := catalog.Entry{ID: "ckpool-dgb", DisplayName: "DGB Pool"}
+	e.Requires = append(e.Requires, struct {
+		Role string `json:"role"`
+		ID   string `json:"id,omitempty"`
+	}{Role: "chain-node", ID: "digibyted"})
+
+	tmpl := CatalogEntryToTemplate(e, "/srv/truffels/compose", "/srv/truffels/data")
+	if len(tmpl.Dependencies) != 1 || tmpl.Dependencies[0] != "digibyted" {
+		t.Errorf("Dependencies = %v, want [digibyted]", tmpl.Dependencies)
+	}
+}

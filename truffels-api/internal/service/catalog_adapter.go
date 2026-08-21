@@ -35,5 +35,13 @@ func CatalogEntryToTemplate(e catalog.Entry, composeRoot, dataRoot string) model
 			tmpl.MemoryLimit = strconv.Itoa(mb) + "M"
 		}
 	}
+	// A catalog entry's Requires become ordinary template dependencies, so the
+	// existing "dependency must be running" check in the start handler covers
+	// catalog stacks unchanged (e.g. ckpool-dgb requires digibyted).
+	for _, req := range e.Requires {
+		if req.ID != "" {
+			tmpl.Dependencies = append(tmpl.Dependencies, req.ID)
+		}
+	}
 	return tmpl
 }
