@@ -78,7 +78,9 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 				return nil, err
 			}
 			line := src + ":" + v.Mount
-			if v.RO {
+			// Borrowed pool logs are always read-only: a stats service must
+			// never write into the pool's data.
+			if v.RO || v.Kind == "pool-logs" {
 				line += ":ro"
 			}
 			svc.Volumes = append(svc.Volumes, line)
@@ -110,6 +112,13 @@ func volumeSource(id string, v VolumeSpec) (string, error) {
 	switch v.Kind {
 	case "data":
 		return catDataDir(id), nil
+	case "pool-logs":
+		// A stats service borrows the pool's log directory. From is another
+		// catalog entry's id (validated), so the path is derived, never passed.
+		if !isValidCatalogID(v.From) {
+			return "", fmt.Errorf("pool-logs volume needs a valid from, got %q", v.From)
+		}
+		return catDataDir(v.From) + "/logs", nil
 	case "config":
 		if v.File == "" {
 			return "", fmt.Errorf("volume kind=config without file")

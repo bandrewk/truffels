@@ -263,3 +263,45 @@ func TestRenderComposeRejectsBadStack(t *testing.T) {
 		}
 	}
 }
+
+// A stats service borrows the pool's logs: the pool's log dir is mounted
+// read-only at the declared target.
+func TestRenderComposePoolLogs(t *testing.T) {
+	e := CatalogEntry{
+		ID:    "ckstats-dgb",
+		Image: "truffels/ckstats:v1.0.0",
+		Containers: []ContainerSpec{{
+			Name: "stats", User: "1000:1000", MemoryLimitMB: 256,
+			Volumes: []VolumeSpec{{Kind: "pool-logs", From: "ckpool-dgb", Mount: "/pool-logs"}},
+		}},
+	}
+	out, err := RenderCompose(e, map[string]any{})
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	vols := doc["services"].(map[string]any)["stats"].(map[string]any)["volumes"].([]any)
+	found := false
+	for _, v := range vols {
+		s := v.(string)
+		if strings.Contains(s, "cat-ckpool-dgb/logs") && strings.HasSuffix(s, ":ro") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("pool-logs volume missing or not read-only: %v", vols)
+	}
+}
+
+// pool-logs must reject a From that is not a valid catalog id, so it can never
+// point the mount at an arbitrary path.
+func TestVolumeSourcePoolLogsRejectsBadFrom(t *testing.T) {
+	for _, bad := range []string{"", "../x", "Bad"} {
+		if _, err := volumeSource("stats", VolumeSpec{Kind: "pool-logs", From: bad, Mount: "/x"}); err == nil {
+			t.Errorf("bad from %q was accepted", bad)
+		}
+	}
+}

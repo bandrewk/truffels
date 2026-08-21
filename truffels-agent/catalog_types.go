@@ -63,10 +63,14 @@ type PortSpec struct {
 // VolumeSpec never names a host path. Kind plus derived root determine it;
 // an entry thus cannot mount `/`.
 type VolumeSpec struct {
-	Kind  string `json:"kind"` // "data" | "config"
+	Kind  string `json:"kind"` // "data" | "config" | "pool-logs"
 	File  string `json:"file,omitempty"`
 	Mount string `json:"mount"`
 	RO    bool   `json:"ro,omitempty"`
+	// From names another catalog entry whose data this volume borrows, used by
+	// kind "pool-logs" so a stats service can read a pool's logs. It is a
+	// catalog id (validated), never a host path.
+	From string `json:"from,omitempty"`
 }
 
 type HealthcheckSpec struct {
