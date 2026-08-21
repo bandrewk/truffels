@@ -15,16 +15,41 @@
   "containers": [
     {
       "name": "node",
-      "memory_limit_mb": 2048,
+      "memory_limit_mb": 4096,
       "user": "1000:1000",
-      "entrypoint": ["digibyted", "-conf=/dgb.conf", "-datadir=/data", "-printtoconsole"],
-      "ports": [{"container": 12024, "host": 12024, "role": "p2p"}],
+      "entrypoint": [
+        "digibyted",
+        "-conf=/dgb.conf",
+        "-datadir=/data",
+        "-printtoconsole"
+      ],
+      "ports": [
+        {
+          "container": 12024,
+          "host": 12024,
+          "role": "p2p"
+        }
+      ],
       "volumes": [
-        {"kind": "data", "mount": "/data"},
-        {"kind": "config", "file": "digibyte.conf", "mount": "/dgb.conf", "ro": true}
+        {
+          "kind": "data",
+          "mount": "/data"
+        },
+        {
+          "kind": "config",
+          "file": "digibyte.conf",
+          "mount": "/dgb.conf",
+          "ro": true
+        }
       ],
       "healthcheck": {
-        "test": ["CMD", "digibyte-cli", "-conf=/dgb.conf", "-datadir=/data", "-getinfo"],
+        "test": [
+          "CMD",
+          "digibyte-cli",
+          "-conf=/dgb.conf",
+          "-datadir=/data",
+          "-getinfo"
+        ],
         "interval": "30s",
         "timeout": "10s",
         "retries": 3,
@@ -32,6 +57,19 @@
       }
     }
   ],
-  "chain_info": {"p2p_port": 12024, "rpc_port": 14022, "rpc_style": "bitcoin-core", "sync_probe": ["digibyte-cli", "-conf=/dgb.conf", "-datadir=/data", "getblockchaininfo"]},
-  "resources": {"min_disk_gb": 12, "memory_floor_mb": 1024}
+  "chain_info": {
+    "p2p_port": 12024,
+    "rpc_port": 14022,
+    "rpc_style": "bitcoin-core",
+    "sync_probe": [
+      "digibyte-cli",
+      "-conf=/dgb.conf",
+      "-datadir=/data",
+      "getblockchaininfo"
+    ]
+  },
+  "resources": {
+    "min_disk_gb": 12,
+    "memory_floor_mb": 2048
+  }
 }
