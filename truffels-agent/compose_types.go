@@ -32,6 +32,20 @@ type composeService struct {
 	DependsOn     []string       `json:"depends_on,omitempty"`
 	Healthcheck   *composeHealth `json:"healthcheck,omitempty"`
 	Deploy        composeDeploy  `json:"deploy"`
+	Build         *composeBuild  `json:"build,omitempty"`
+}
+
+// composeBuild is emitted only for catalog entries that ship a Dockerfile
+// instead of a pre-built image. It is a deliberate, bounded widening of the
+// allowlist above: `context` is always rooted at the read-only /repo mount and
+// the generator (catalogBuildBlock) rejects any dockerfile path that is
+// absolute or escapes the repo, so a catalog entry cannot point the build at
+// an arbitrary host path. The Dockerfile itself is curated content shipped in
+// the repo, not a runtime parameter. `up -d` builds the image on first start
+// when it is missing; on later starts the existing image is reused.
+type composeBuild struct {
+	Context    string `json:"context"`
+	Dockerfile string `json:"dockerfile,omitempty"`
 }
 
 type composeHealth struct {

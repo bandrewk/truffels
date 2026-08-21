@@ -19,6 +19,17 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 		return nil, err
 	}
 
+	// A build entry ships a Dockerfile in the repo instead of a pre-built image.
+	// The block is shared by every container of the entry (they run the same
+	// image); compose/buildkit dedups the build by image tag.
+	var build *composeBuild
+	if e.Build != nil {
+		build, err = catalogBuildBlock(e.Build)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cf := composeFile{
 		Name:     "cat-" + e.ID,
 		Services: make(map[string]composeService, len(e.Containers)),
@@ -40,6 +51,7 @@ func RenderCompose(e CatalogEntry, params map[string]any) ([]byte, error) {
 			Deploy: composeDeploy{Resources: composeResources{
 				Limits: composeLimits{Memory: strconv.Itoa(c.MemoryLimitMB) + "M"},
 			}},
+			Build: build,
 		}
 		for _, p := range c.Ports {
 			svc.Ports = append(svc.Ports,
@@ -114,6 +126,36 @@ func validateMountPath(mount string) error {
 		return fmt.Errorf("volume mount must be an absolute clean path without ':'")
 	}
 	return nil
+}
+
+// repoMount is where the product repository is bind-mounted inside the agent
+// container. Catalog build contexts resolve against this path because the `up`
+// path runs `docker compose` in the agent's own namespace (unlike the legacy
+// build path, which uses nsenter and host paths).
+const repoMount = "/repo"
+
+// catalogBuildBlock turns a catalog BuildSpec into a compose build block whose
+// context is confined to the read-only /repo mount. It rejects any dockerfile
+// path that is empty, absolute, unclean, or escapes the repo root, so a catalog
+// entry can never point the build at an arbitrary host location.
+func catalogBuildBlock(b *BuildSpec) (*composeBuild, error) {
+	df := b.Dockerfile
+	if df == "" {
+		return nil, fmt.Errorf("build entry without dockerfile")
+	}
+	if err := rejectsControlChars(df); err != nil {
+		return nil, fmt.Errorf("build dockerfile: %w", err)
+	}
+	if filepath.IsAbs(df) || filepath.Clean(df) != df {
+		return nil, fmt.Errorf("build dockerfile must be a clean relative path, got %q", df)
+	}
+	if df == ".." || strings.HasPrefix(df, "../") {
+		return nil, fmt.Errorf("build dockerfile escapes repo, got %q", df)
+	}
+	return &composeBuild{
+		Context:    filepath.Join(repoMount, filepath.Dir(df)),
+		Dockerfile: filepath.Base(df),
+	}, nil
 }
 
 func catalogImageRef(e CatalogEntry) (string, error) {
