@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,23 +18,39 @@ import (
 )
 
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
-	var services []model.ServiceInstance
-	for _, tmpl := range s.registry.All() {
-		containers := docker.InspectContainers(tmpl.ContainerNames)
-		enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
-		svc := model.ServiceInstance{
-			Template:   tmpl,
-			State:      deriveState(containers),
-			Enabled:    enabled,
-			Containers: containers,
-		}
-		if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
-			svc.State = model.StateDisabled
-		}
-		svc.DependencyIssues = s.checkDependencyIssues(tmpl)
-		s.enrichSyncInfo(&svc)
-		services = append(services, svc)
+	// Each service's status is an independent set of docker inspects plus RPC/
+	// probe calls. Done sequentially the page grew to ~2s as the catalog stack
+	// added services; fan the per-service work out (bounded) so the wall-clock
+	// is the slowest single service, not their sum. Each goroutine writes its
+	// own slice index, so no shared state is mutated concurrently.
+	tmpls := s.registry.All()
+	services := make([]model.ServiceInstance, len(tmpls))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, tmpl := range tmpls {
+		wg.Add(1)
+		go func(i int, tmpl model.ServiceTemplate) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			containers := docker.InspectContainers(tmpl.ContainerNames)
+			enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
+			svc := model.ServiceInstance{
+				Template:   tmpl,
+				State:      deriveState(containers),
+				Enabled:    enabled,
+				Containers: containers,
+			}
+			if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
+				svc.State = model.StateDisabled
+			}
+			svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+			s.enrichSyncInfo(&svc)
+			services[i] = svc
+		}(i, tmpl)
 	}
+	wg.Wait()
 	writeJSON(w, http.StatusOK, services)
 }
 
