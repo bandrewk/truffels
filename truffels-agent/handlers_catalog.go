@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +13,60 @@ import (
 	"strings"
 	"time"
 )
+
+// stackCreds is the shared RPC credential every member of a stack uses to reach
+// the node: the node binds its RPC to it, the pool authenticates with it.
+type stackCreds struct {
+	User string
+	Pass string
+}
+
+// ensureStackSecret returns the stack's shared RPC credential, generating and
+// persisting it on first use. Idempotent: a second member of the same stack
+// reads the credential the first one wrote, so node and pool always match.
+func ensureStackSecret(stack string) (*stackCreds, error) {
+	if !isValidCatalogID(stack) {
+		return nil, fmt.Errorf("invalid stack %q", stack)
+	}
+	path := catStackSecretPath(stack)
+	if b, err := os.ReadFile(path); err == nil {
+		return parseStackCreds(b)
+	}
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, fmt.Errorf("generate stack secret: %w", err)
+	}
+	creds := &stackCreds{User: "truffels", Pass: hex.EncodeToString(buf)}
+	if err := os.MkdirAll(catStackSecretDir(stack), 0o750); err != nil {
+		return nil, err
+	}
+	content := "RPC_USER=" + creds.User + "\nRPC_PASS=" + creds.Pass + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		return nil, err
+	}
+	return creds, nil
+}
+
+// parseStackCreds reads back the RPC_USER / RPC_PASS lines ensureStackSecret wrote.
+func parseStackCreds(b []byte) (*stackCreds, error) {
+	c := &stackCreds{}
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "RPC_USER":
+			c.User = v
+		case "RPC_PASS":
+			c.Pass = v
+		}
+	}
+	if c.User == "" || c.Pass == "" {
+		return nil, fmt.Errorf("stack secret is incomplete")
+	}
+	return c, nil
+}
 
 // ensureStackNetwork creates the shared external network for a stack if it does
 // not already exist. Idempotent: members install sequentially, and a lost
@@ -102,11 +158,6 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	configs, err := RenderConfig(req.ID, params)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 
 	// From here on we write. Everything before could only reject.
 	dirs := []struct {
@@ -137,6 +188,22 @@ func handleServiceApply(w http.ResponseWriter, r *http.Request) {
 			}
 			slog.Warn("data dir chown skipped (agent not running as root)", "id", req.ID, "err", err)
 		}
+	}
+	// A stacked entry shares an RPC credential across its members; the node's
+	// config binds RPC to it. Acquiring it may generate and persist the secret,
+	// so it belongs here in the write section rather than in the reject-only part.
+	var creds *stackCreds
+	if entry.Stack != "" {
+		creds, err = ensureStackSecret(entry.Stack)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stack secret: " + err.Error()})
+			return
+		}
+	}
+	configs, err := RenderConfig(req.ID, params, creds)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	for name, content := range configs {
 		if err := safeConfigKey(name); err != nil {
