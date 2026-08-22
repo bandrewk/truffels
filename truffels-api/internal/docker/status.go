@@ -85,6 +85,43 @@ func Stats() ([]ContainerResourceStats, error) {
 	return agentClient.stats()
 }
 
+// OOMEvent is one container OOM-kill the agent observed on the Docker event
+// stream. Time is unix seconds.
+type OOMEvent struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+	Time int64  `json:"time"`
+}
+
+// OOMEvents returns the container OOM-kill events the agent has seen in the last
+// hour. Returns nil, nil when no agent is configured.
+func OOMEvents() ([]OOMEvent, error) {
+	if agentClient == nil {
+		return nil, nil
+	}
+	return agentClient.oomEvents()
+}
+
+func (ai *AgentInspector) oomEvents() ([]OOMEvent, error) {
+	resp, err := ai.httpClient.Get(ai.agentURL + "/v1/oom-events")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("agent oom-events: HTTP %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Events []OOMEvent `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("agent oom-events decode: %w", err)
+	}
+	return body.Events, nil
+}
+
 func (ai *AgentInspector) stats() ([]ContainerResourceStats, error) {
 	resp, err := ai.httpClient.Get(ai.agentURL + "/v1/stats")
 	if err != nil {
