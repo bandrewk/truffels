@@ -17,6 +17,36 @@ import (
 	"truffels-api/internal/model"
 )
 
+// inspectAllContainers inspects every container of the given templates in ONE
+// batched agent call and returns the states keyed by container name. Every
+// polled endpoint that shows service state uses this so the agent sees a single
+// inspect per response instead of one call per service.
+func inspectAllContainers(tmpls []model.ServiceTemplate) map[string]model.ContainerState {
+	var allNames []string
+	for _, tmpl := range tmpls {
+		allNames = append(allNames, tmpl.ContainerNames...)
+	}
+	byName := make(map[string]model.ContainerState, len(allNames))
+	for _, cs := range docker.InspectContainers(allNames) {
+		byName[cs.Name] = cs
+	}
+	return byName
+}
+
+// containersFor returns the states for one template's containers, filling an
+// "unknown" placeholder for any the batch inspect did not return.
+func containersFor(tmpl model.ServiceTemplate, byName map[string]model.ContainerState) []model.ContainerState {
+	out := make([]model.ContainerState, 0, len(tmpl.ContainerNames))
+	for _, name := range tmpl.ContainerNames {
+		if cs, ok := byName[name]; ok {
+			out = append(out, cs)
+		} else {
+			out = append(out, model.ContainerState{Name: name, Status: "unknown", Health: "unknown"})
+		}
+	}
+	return out
+}
+
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 	tmpls := s.registry.All()
 
@@ -29,14 +59,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 	// and the sync progress now comes from a cache the alerts engine refreshes
 	// (no live chain probe on this path either), so the remaining per-service
 	// work is map lookups plus a SQLite read — fast enough to run inline.
-	var allNames []string
-	for _, tmpl := range tmpls {
-		allNames = append(allNames, tmpl.ContainerNames...)
-	}
-	byName := make(map[string]model.ContainerState, len(allNames))
-	for _, cs := range docker.InspectContainers(allNames) {
-		byName[cs.Name] = cs
-	}
+	byName := inspectAllContainers(tmpls)
 
 	// Bitcoin Core blockchain info feeds only the dependency checks; fetch it
 	// once for the whole response rather than once (or twice) per service.
@@ -49,14 +72,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 
 	services := make([]model.ServiceInstance, len(tmpls))
 	for i, tmpl := range tmpls {
-		containers := make([]model.ContainerState, 0, len(tmpl.ContainerNames))
-		for _, name := range tmpl.ContainerNames {
-			if cs, ok := byName[name]; ok {
-				containers = append(containers, cs)
-			} else {
-				containers = append(containers, model.ContainerState{Name: name, Status: "unknown", Health: "unknown"})
-			}
-		}
+		containers := containersFor(tmpl, byName)
 		enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
 		svc := model.ServiceInstance{
 			Template:   tmpl,
@@ -84,25 +100,14 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 
 	// One batched inspect for this service's containers plus its dependencies',
 	// so checkDependencyIssues reads a map instead of probing each dependency.
-	var allNames []string
-	allNames = append(allNames, tmpl.ContainerNames...)
+	inspectTmpls := []model.ServiceTemplate{tmpl}
 	for _, depID := range tmpl.Dependencies {
 		if dep, ok := s.registry.Get(depID); ok {
-			allNames = append(allNames, dep.ContainerNames...)
+			inspectTmpls = append(inspectTmpls, dep)
 		}
 	}
-	byName := make(map[string]model.ContainerState, len(allNames))
-	for _, cs := range docker.InspectContainers(allNames) {
-		byName[cs.Name] = cs
-	}
-	containers := make([]model.ContainerState, 0, len(tmpl.ContainerNames))
-	for _, name := range tmpl.ContainerNames {
-		if cs, ok := byName[name]; ok {
-			containers = append(containers, cs)
-		} else {
-			containers = append(containers, model.ContainerState{Name: name, Status: "unknown", Health: "unknown"})
-		}
-	}
+	byName := inspectAllContainers(inspectTmpls)
+	containers := containersFor(tmpl, byName)
 	enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
 
 	svc := model.ServiceInstance{

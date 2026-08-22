@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
 
@@ -285,6 +284,10 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		StartedAt      string `json:"started_at"`
 	}
 	var floating []floatingService
+	// One batched inspect for all services (this endpoint is polled every 5s);
+	// the floating-tag branch below reads the running image from this map
+	// instead of calling the agent once per floating-tag service.
+	byName := inspectAllContainers(s.registry.All())
 	for _, tmpl := range s.registry.All() {
 		if s.updateEngine.IsUpdating(tmpl.ID) {
 			updating[tmpl.ID] = true
@@ -297,20 +300,21 @@ func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		if tmpl.FloatingTag {
 			fs := floatingService{ID: tmpl.ID, DisplayName: tmpl.DisplayName}
-			// Get image and tag from running container
-			containers := docker.InspectContainers(tmpl.ContainerNames)
-			if len(containers) > 0 && containers[0].Image != "" {
-				img := containers[0].Image
-				// Strip digest
-				if at := strings.Index(img, "@"); at >= 0 {
-					img = img[:at]
+			// Read image and tag from the running container (from the batch).
+			if len(tmpl.ContainerNames) > 0 {
+				if cs, ok := byName[tmpl.ContainerNames[0]]; ok && cs.Image != "" {
+					img := cs.Image
+					// Strip digest
+					if at := strings.Index(img, "@"); at >= 0 {
+						img = img[:at]
+					}
+					fs.Image = img
+					// Extract tag as version
+					if colon := strings.LastIndex(img, ":"); colon >= 0 {
+						fs.CurrentVersion = img[colon+1:]
+					}
+					fs.StartedAt = cs.StartedAt
 				}
-				fs.Image = img
-				// Extract tag as version
-				if colon := strings.LastIndex(img, ":"); colon >= 0 {
-					fs.CurrentVersion = img[colon+1:]
-				}
-				fs.StartedAt = containers[0].StartedAt
 			}
 			floating = append(floating, fs)
 		}

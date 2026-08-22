@@ -791,6 +791,14 @@ func (e *Engine) launchSyncRefresh() {
 // only reads the cache for running services — never shows stale progress.
 func (e *Engine) refreshSyncCache() {
 	for _, tmpl := range e.registry.All() {
+		// Bail promptly on shutdown: a full refresh is several ChainProbes, each
+		// up to the client read timeout, so without this it would keep hitting
+		// the agent for minutes while the API is being torn down.
+		select {
+		case <-e.stopCh:
+			return
+		default:
+		}
 		entry, ok := e.catalogClient.Get(tmpl.ID)
 		if !ok || entry.ChainInfo == nil || len(entry.ChainInfo.SyncProbe) == 0 {
 			continue
@@ -799,7 +807,13 @@ func (e *Engine) refreshSyncCache() {
 			continue
 		}
 		cs, err := docker.InspectContainer(tmpl.ContainerNames[0])
-		if err != nil || cs.Status != "running" {
+		if err != nil {
+			continue // unknown state — keep the last-good value
+		}
+		if cs.Status != "running" {
+			// Stopped: clear the entry so a later restart doesn't flash the
+			// previous run's stale sync percentage before the next probe.
+			e.syncCache.Set(tmpl.ID, nil)
 			continue
 		}
 		status, err := e.catalogClient.ChainProbe(tmpl.ID)
