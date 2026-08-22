@@ -122,18 +122,26 @@ func (c *Collector) collectMemory(m *model.HostMetrics) {
 	if err != nil {
 		return
 	}
-	var totalKB, availKB int64
+	var totalKB, availKB, swapTotalKB, swapFreeKB int64
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
 			totalKB = parseMemInfoValue(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {
 			availKB = parseMemInfoValue(line)
+		} else if strings.HasPrefix(line, "SwapTotal:") {
+			swapTotalKB = parseMemInfoValue(line)
+		} else if strings.HasPrefix(line, "SwapFree:") {
+			swapFreeKB = parseMemInfoValue(line)
 		}
 	}
 	m.MemTotalMB = totalKB / 1024
 	m.MemUsedMB = (totalKB - availKB) / 1024
 	if totalKB > 0 {
 		m.MemPercent = float64(totalKB-availKB) / float64(totalKB) * 100
+	}
+	m.SwapTotalMB = float64(swapTotalKB) / 1024
+	if swapTotalKB > 0 {
+		m.SwapUsedPercent = float64(swapTotalKB-swapFreeKB) / float64(swapTotalKB) * 100
 	}
 }
 

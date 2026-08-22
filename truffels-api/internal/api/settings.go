@@ -34,6 +34,7 @@ var settingsDefaults = map[string]string{
 	"dir_size_critical_mb":                    "900",
 	"dir_size_autoreclaim_enabled":            "true",
 	"dir_size_autoreclaim_min_interval_hours": "24",
+	"node_stuck_min":                          "30",
 }
 
 type settingsResponse struct {

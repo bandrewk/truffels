@@ -200,6 +200,10 @@ func newTestEngine(t *testing.T) (*Engine, *store.Store) {
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 		reclaimSlot:        newReclaimSlot(),
+		lastAdvance: make(map[string]struct {
+			height int64
+			at     time.Time
+		}),
 	}
 	return e, s
 }
@@ -422,6 +426,158 @@ func TestCheckTemp_CustomCritical(t *testing.T) {
 	}
 }
 
+// --- Swap pressure alerts ---
+
+func TestCheckSwap_Critical(t *testing.T) {
+	s := newTestStore(t)
+	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
+
+	e.checkSwap(model.HostMetrics{SwapTotalMB: 6000, SwapUsedPercent: 95})
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts))
+	}
+	if alerts[0].Type != "swap_exhaustion" {
+		t.Fatalf("expected swap_exhaustion, got %q", alerts[0].Type)
+	}
+	if alerts[0].Severity != model.SeverityCritical {
+		t.Fatalf("expected critical, got %q", alerts[0].Severity)
+	}
+}
+
+func TestCheckSwap_Warning(t *testing.T) {
+	s := newTestStore(t)
+	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
+
+	e.checkSwap(model.HostMetrics{SwapTotalMB: 6000, SwapUsedPercent: 80})
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts))
+	}
+	if alerts[0].Type != "swap_exhaustion" {
+		t.Fatalf("expected swap_exhaustion, got %q", alerts[0].Type)
+	}
+	if alerts[0].Severity != model.SeverityWarning {
+		t.Fatalf("expected warning, got %q", alerts[0].Severity)
+	}
+}
+
+func TestCheckSwap_None(t *testing.T) {
+	s := newTestStore(t)
+	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
+
+	e.checkSwap(model.HostMetrics{SwapTotalMB: 6000, SwapUsedPercent: 50})
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts, got %d", len(alerts))
+	}
+}
+
+func TestCheckSwap_NoSwap(t *testing.T) {
+	s := newTestStore(t)
+	e := &Engine{store: s, lastRestartCounts: make(map[string]int)}
+
+	// No swap configured — no alert even at 100% used.
+	e.checkSwap(model.HostMetrics{SwapTotalMB: 0, SwapUsedPercent: 100})
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts with no swap, got %d", len(alerts))
+	}
+}
+
+// --- Agent reachability streak ---
+
+func TestEvalAgentReachable_StreakRaisesAndResolves(t *testing.T) {
+	e, s := newTestEngine(t)
+
+	// Three consecutive misses are still transient — no alert yet.
+	for i := 0; i < 3; i++ {
+		e.evalAgentReachable(false)
+	}
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts at streak 3, got %d", len(alerts))
+	}
+
+	// The fourth consecutive miss crosses the threshold.
+	e.evalAgentReachable(false)
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert at streak 4, got %d", len(alerts))
+	}
+	if alerts[0].Type != "agent_unreachable" {
+		t.Fatalf("expected agent_unreachable, got %q", alerts[0].Type)
+	}
+	if alerts[0].Severity != model.SeverityCritical {
+		t.Fatalf("expected critical, got %q", alerts[0].Severity)
+	}
+
+	// A reachable tick resets the streak and resolves the alert.
+	e.evalAgentReachable(true)
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected alert resolved after reachable tick, got %d", len(alerts))
+	}
+}
+
+// --- Node stuck (stalled IBD) detection ---
+
+func TestEvalNodeStuck(t *testing.T) {
+	e, s := newTestEngine(t)
+
+	// (a) First observation records a baseline; an immediate re-probe at the
+	// same height is not yet a stall (< 30 min).
+	e.evalNodeStuck("dgb", 100, true)
+	e.evalNodeStuck("dgb", 100, true)
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for a fresh stall, got %d", len(alerts))
+	}
+
+	// (b) Back-date the baseline past the 30-min default threshold — the next
+	// probe at the same height must raise a Warning.
+	e.lastAdvance["dgb"] = struct {
+		height int64
+		at     time.Time
+	}{height: 100, at: time.Now().Add(-31 * time.Minute)}
+	e.evalNodeStuck("dgb", 100, true)
+
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 node_stuck alert after stalled baseline, got %d", len(alerts))
+	}
+	if alerts[0].Type != "node_stuck" {
+		t.Fatalf("expected node_stuck, got %q", alerts[0].Type)
+	}
+	if alerts[0].Severity != model.SeverityWarning {
+		t.Fatalf("expected warning, got %q", alerts[0].Severity)
+	}
+
+	// (c) Height advances again — alert resolves.
+	e.evalNodeStuck("dgb", 200, true)
+
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected node_stuck resolved after advance, got %d", len(alerts))
+	}
+
+	// (d) IBD finished — alert resolves and the tracking entry is deleted.
+	e.evalNodeStuck("dgb", 200, false)
+
+	alerts, _ = s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts after IBD done, got %d", len(alerts))
+	}
+	if _, ok := e.lastAdvance["dgb"]; ok {
+		t.Fatal("expected lastAdvance entry deleted after IBD done")
+	}
+}
+
 // --- Disabled service alert suppression ---
 
 // setupMockAgent creates a mock agent HTTP server that returns the given container states
@@ -479,6 +635,10 @@ func newTestEngineWithRegistry(t *testing.T, tmpls []model.ServiceTemplate) (*En
 		prevStates:         make(map[string]model.ContainerState),
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 		reclaimSlot:        newReclaimSlot(),
+		lastAdvance: make(map[string]struct {
+			height int64
+			at     time.Time
+		}),
 	}
 	return e, s
 }
