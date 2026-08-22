@@ -451,6 +451,20 @@ func setupMockAgent(t *testing.T, states map[string]model.ContainerState) {
 	docker.NewAgentInspector(srv.URL)
 }
 
+// inspectAll builds the batched container-state map the engine now expects,
+// using whatever the test's mock agent returns for every registered container.
+func inspectAll(e *Engine) map[string]model.ContainerState {
+	var names []string
+	for _, t := range e.registry.All() {
+		names = append(names, t.ContainerNames...)
+	}
+	m := make(map[string]model.ContainerState, len(names))
+	for _, cs := range docker.InspectContainers(names) {
+		m[cs.Name] = cs
+	}
+	return m
+}
+
 func newTestEngineWithRegistry(t *testing.T, tmpls []model.ServiceTemplate) (*Engine, *store.Store) {
 	t.Helper()
 	s := newTestStore(t)
@@ -484,7 +498,7 @@ func TestCheckService_DisabledExited_NoAlert(t *testing.T) {
 	_ = s.EnsureService("electrs")
 	_ = s.SetServiceEnabled("electrs", false)
 
-	e.checkService(tmpl)
+	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -505,7 +519,7 @@ func TestCheckService_EnabledExited_Alerts(t *testing.T) {
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
 
 	// Service is enabled by default
-	e.checkService(tmpl)
+	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 1 {
@@ -531,7 +545,7 @@ func TestCheckService_DisabledUnhealthy_StillAlerts(t *testing.T) {
 	_ = s.EnsureService("electrs")
 	_ = s.SetServiceEnabled("electrs", false)
 
-	e.checkService(tmpl)
+	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 1 {
@@ -564,7 +578,7 @@ func TestCheckService_DisabledExited_ResolvesExistingAlert(t *testing.T) {
 	// Now disable and re-check — should resolve
 	_ = s.EnsureService("electrs")
 	_ = s.SetServiceEnabled("electrs", false)
-	e.checkService(tmpl)
+	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ = s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -587,7 +601,7 @@ func TestCheckService_DisabledNotFound_NoAlert(t *testing.T) {
 	_ = s.EnsureService("ckpool")
 	_ = s.SetServiceEnabled("ckpool", false)
 
-	e.checkService(tmpl)
+	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -619,7 +633,7 @@ func TestCheckDependencyHealth_DisabledService_NoAlert(t *testing.T) {
 	_ = s.EnsureService("electrs")
 	_ = s.SetServiceEnabled("electrs", false)
 
-	e.checkDependencyHealth()
+	e.checkDependencyHealth(inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -646,7 +660,7 @@ func TestCheckDependencyHealth_EnabledService_Alerts(t *testing.T) {
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
 
 	// electrs is enabled by default
-	e.checkDependencyHealth()
+	e.checkDependencyHealth(inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 1 {
@@ -685,7 +699,7 @@ func TestCheckDependencyHealth_DisabledService_ResolvesExisting(t *testing.T) {
 	// Disable electrs and re-check — should resolve
 	_ = s.EnsureService("electrs")
 	_ = s.SetServiceEnabled("electrs", false)
-	e.checkDependencyHealth()
+	e.checkDependencyHealth(inspectAll(e))
 
 	alerts, _ = s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -718,7 +732,7 @@ func TestCheckService_ReadOnlyExited_AllDependentsDisabled_NoAlert(t *testing.T)
 	_ = s.EnsureService("ckstats")
 	_ = s.SetServiceEnabled("ckstats", false)
 
-	e.checkService(ckstatsDB)
+	e.checkService(ckstatsDB, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 0 {
@@ -746,7 +760,7 @@ func TestCheckService_ReadOnlyExited_SomeDependentsEnabled_Alerts(t *testing.T) 
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB, ckstats})
 
 	// ckstats is enabled by default — DB being exited is a real problem
-	e.checkService(ckstatsDB)
+	e.checkService(ckstatsDB, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 1 {
@@ -767,7 +781,7 @@ func TestCheckService_ReadOnlyRunning_NoAlertRegardless(t *testing.T) {
 	}
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB})
 
-	e.checkService(ckstatsDB)
+	e.checkService(ckstatsDB, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 0 {

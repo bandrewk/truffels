@@ -220,13 +220,26 @@ func (e *Engine) evaluate() {
 		e.evalWatchedDirs()
 	}
 
+	// One batched inspect for every managed container this tick, shared by the
+	// service and dependency checks below. Previously each did its own
+	// per-container inspect (~20 agent calls per 30s tick); this collapses them
+	// to a single call, the same fix the request-path handlers use.
+	var allNames []string
+	for _, tmpl := range e.registry.All() {
+		allNames = append(allNames, tmpl.ContainerNames...)
+	}
+	byName := make(map[string]model.ContainerState, len(allNames))
+	for _, cs := range docker.InspectContainers(allNames) {
+		byName[cs.Name] = cs
+	}
+
 	// Service health alerts + monitoring state change detection
 	for _, tmpl := range e.registry.All() {
-		e.checkService(tmpl)
+		e.checkService(tmpl, byName)
 	}
 
 	// Dependency health checks
-	e.checkDependencyHealth()
+	e.checkDependencyHealth(byName)
 
 	// Out-of-memory kills (from the agent's Docker event stream)
 	e.checkOOM()
@@ -634,7 +647,7 @@ func (e *Engine) checkTemp(tempC float64) {
 	}
 }
 
-func (e *Engine) checkService(tmpl model.ServiceTemplate) {
+func (e *Engine) checkService(tmpl model.ServiceTemplate, byName map[string]model.ContainerState) {
 	enabled, _ := e.store.IsServiceEnabled(tmpl.ID)
 	// For read-only services (DBs, proxy), suppress exited alerts if all
 	// dependent services are disabled — the user can't control these directly.
@@ -658,8 +671,8 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 	maxRetries := e.getSettingInt("restart_loop_max_retries", 10)
 
 	for _, name := range tmpl.ContainerNames {
-		cs, err := docker.InspectContainer(name)
-		if err != nil {
+		cs, ok := byName[name]
+		if !ok {
 			continue
 		}
 
@@ -825,7 +838,7 @@ func (e *Engine) refreshSyncCache() {
 	}
 }
 
-func (e *Engine) checkDependencyHealth() {
+func (e *Engine) checkDependencyHealth(byName map[string]model.ContainerState) {
 	mode := e.getSettingStr("dep_handling_mode", "flag_only")
 
 	for _, tmpl := range e.registry.All() {
@@ -846,8 +859,8 @@ func (e *Engine) checkDependencyHealth() {
 
 			upstreamDown := false
 			for _, name := range depTmpl.ContainerNames {
-				cs, err := docker.InspectContainer(name)
-				if err != nil {
+				cs, ok := byName[name]
+				if !ok {
 					continue
 				}
 				if cs.Health == "unhealthy" || cs.Status == "exited" || cs.Status == "restarting" || cs.Status == "not_found" {
