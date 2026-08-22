@@ -213,6 +213,9 @@ func (e *Engine) evaluate() {
 	// Dependency health checks
 	e.checkDependencyHealth()
 
+	// Out-of-memory kills (from the agent's Docker event stream)
+	e.checkOOM()
+
 	// ---- Trend alerts: every 10th tick (~5 minutes) ----
 	if e.snapshotTick%10 == 0 {
 		e.checkTrends()
@@ -694,6 +697,43 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate) {
 			}
 		}
 		e.prevStates[name] = cs
+	}
+}
+
+// checkOOM raises a critical alert for any managed container the agent reports
+// as OOM-killed within the last hour, and resolves it for services with no
+// recent OOM. Docker's per-container OOMKilled flag reads false again as soon
+// as the restart policy brings the container back, so the agent instead streams
+// the daemon's `oom` events; this consumes that recent-events list. The alert
+// therefore lingers ~1 h after the last kill, then self-clears.
+func (e *Engine) checkOOM() {
+	events, err := docker.OOMEvents()
+	if err != nil {
+		return // agent unreachable this tick — leave existing alerts untouched
+	}
+
+	// container name -> service ID
+	nameToService := map[string]string{}
+	for _, tmpl := range e.registry.All() {
+		for _, name := range tmpl.ContainerNames {
+			nameToService[name] = tmpl.ID
+		}
+	}
+
+	oomedService := map[string]string{} // serviceID -> a container name that OOM'd
+	for _, ev := range events {
+		if svc, ok := nameToService[ev.Name]; ok {
+			oomedService[svc] = ev.Name
+		}
+	}
+
+	for _, tmpl := range e.registry.All() {
+		if name, ok := oomedService[tmpl.ID]; ok {
+			e.upsert("oom_killed", tmpl.ID, model.SeverityCritical,
+				"Container %s ran out of memory and was killed", name)
+		} else {
+			e.resolve("oom_killed", tmpl.ID)
+		}
 	}
 }
 

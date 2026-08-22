@@ -9,6 +9,7 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   high_temp: 'High Temperature',
   service_unhealthy: 'Service Unhealthy',
   restart_loop: 'Restart Loop',
+  oom_killed: 'Out of Memory',
   upstream_unhealthy: 'Upstream Unhealthy',
   memory_trend: 'Memory Trend',
   disk_trend: 'Disk Trend',

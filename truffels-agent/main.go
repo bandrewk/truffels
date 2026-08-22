@@ -77,6 +77,7 @@ func main() {
 	mux.HandleFunc("POST /v1/compose/build", handleComposeBuild)
 	mux.HandleFunc("GET /v1/stats", handleStats)
 	mux.HandleFunc("GET /v1/health", handleHealth)
+	mux.HandleFunc("GET /v1/oom-events", handleOOMEvents)
 	mux.HandleFunc("GET /v1/host/dir-size", handleHostDirSize)
 	mux.HandleFunc("POST /v1/system/shutdown", handleSystemShutdown)
 	mux.HandleFunc("POST /v1/system/restart", handleSystemRestart)
@@ -97,6 +98,10 @@ func main() {
 	mux.HandleFunc("POST /v1/docker/prune-buildcache", handleDockerPruneBuildCache)
 
 	srv := &http.Server{Addr: listen, Handler: mux}
+
+	// Continuously record container OOM-kill events so the control plane can
+	// surface them (docker's OOMKilled flag is unreliable under auto-restart).
+	go watchOOMEvents(context.Background())
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
