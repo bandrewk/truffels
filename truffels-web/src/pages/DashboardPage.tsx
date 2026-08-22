@@ -129,6 +129,11 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+          {alerts.active_count > alerts.recent.length && (
+            <Link to="/alerts" className="block text-sm text-blue-400 hover:text-blue-300 mt-3">
+              View all {alerts.active_count} alerts →
+            </Link>
+          )}
         </Card>
       )}
     </div>

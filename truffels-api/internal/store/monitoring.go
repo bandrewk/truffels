@@ -365,3 +365,10 @@ func (s *Store) PruneServiceEvents(keepN int) error {
 		 )`, keepN)
 	return err
 }
+
+// PruneResolvedAlerts deletes resolved alerts older than the given time.
+func (s *Store) PruneResolvedAlerts(olderThan time.Time) error {
+	ts := olderThan.UTC().Format("2006-01-02 15:04:05")
+	_, err := s.db.Exec(`DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < ?`, ts)
+	return err
+}
