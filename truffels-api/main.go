@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -82,6 +83,14 @@ func main() {
 	updateEngine.Start()
 	defer updateEngine.Stop()
 
+	// Shutdown context, shared by the catalog-retry loop below and the graceful
+	// shutdown handler further down. A cancelled context's Done channel is
+	// closed (not consumed), so both consumers observe the signal — unlike a
+	// shared signal channel, where whichever goroutine received it first would
+	// starve the other.
+	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stopSignals()
+
 	// Arm the catalog guards and reconcile installed catalog services. The
 	// agent may still be starting when the API boots (both restart together
 	// on self-update), so retry until the catalog is served.
@@ -90,7 +99,12 @@ func main() {
 			ids, err := catalogClient.IDs()
 			if err != nil {
 				slog.Warn("catalog not yet available, retrying", "err", err)
-				time.Sleep(10 * time.Second)
+				select {
+				case <-time.After(10 * time.Second):
+				case <-shutdownCtx.Done():
+					slog.Info("shutting down during catalog retry")
+					return
+				}
 				continue
 			}
 			updates.SetCatalogIDs(ids)
@@ -142,12 +156,12 @@ func main() {
 		Handler: srv.Router(),
 	}
 
-	// Graceful shutdown
+	// Graceful shutdown — shutdownCtx was armed before the catalog-retry loop so
+	// the same signal wakes that loop too (a closed Done channel fans out to
+	// every waiter).
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		sig := <-sigCh
-		slog.Info("shutting down", "signal", sig)
+		<-shutdownCtx.Done()
+		slog.Info("shutting down")
 		_ = httpServer.Close()
 	}()
 

@@ -84,7 +84,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 			svc.State = model.StateDisabled
 		}
 		svc.DependencyIssues = s.checkDependencyIssues(tmpl, byName, bcInfo)
-		s.enrichSyncInfo(&svc)
+		s.enrichSyncInfo(&svc, bcInfo)
 		services[i] = svc
 	}
 	writeJSON(w, http.StatusOK, services)
@@ -126,21 +126,21 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	svc.DependencyIssues = s.checkDependencyIssues(tmpl, byName, bcInfo)
-	s.enrichSyncInfo(&svc)
+	s.enrichSyncInfo(&svc, bcInfo)
 	writeJSON(w, http.StatusOK, svc)
 }
 
-func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
+func (s *Server) enrichSyncInfo(svc *model.ServiceInstance, bcInfo *bitcoin.BlockchainInfo) {
 	if svc.State != model.StateRunning {
 		return
 	}
 	switch svc.Template.ID {
 	case "bitcoind":
-		s.enrichBitcoindSync(svc)
+		s.enrichBitcoindSync(svc, bcInfo)
 	case "electrs":
-		s.enrichElectrsSync(svc)
+		s.enrichElectrsSync(svc, bcInfo)
 	case "mempool":
-		s.enrichMempoolSync(svc)
+		s.enrichMempoolSync(svc, bcInfo)
 	default:
 		// Catalog chain nodes (e.g. DigiByte, BCHN) read from the sync cache
 		// the alerts engine refreshes on its tick. The live probe — a docker
@@ -152,12 +152,8 @@ func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
 	}
 }
 
-func (s *Server) enrichBitcoindSync(svc *model.ServiceInstance) {
-	if s.btcRPC == nil {
-		return
-	}
-	info, err := s.btcRPC.GetBlockchainInfo()
-	if err != nil {
+func (s *Server) enrichBitcoindSync(svc *model.ServiceInstance, info *bitcoin.BlockchainInfo) {
+	if info == nil {
 		return
 	}
 	// Bitcoin Core reports verificationprogress < 0.9999 during IBD
@@ -172,7 +168,10 @@ func (s *Server) enrichBitcoindSync(svc *model.ServiceInstance) {
 	}
 }
 
-func (s *Server) enrichElectrsSync(svc *model.ServiceInstance) {
+func (s *Server) enrichElectrsSync(svc *model.ServiceInstance, bcInfo *bitcoin.BlockchainInfo) {
+	if bcInfo == nil || bcInfo.Blocks == 0 {
+		return
+	}
 	// Fetch electrs index height from Prometheus metrics
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://truffels-electrs:4224/")
@@ -186,15 +185,6 @@ func (s *Server) enrichElectrsSync(svc *model.ServiceInstance) {
 	}
 	indexHeight := parsePrometheusGauge(string(body), `electrs_index_height{type="tip"}`)
 	if indexHeight == 0 {
-		return
-	}
-
-	// Get bitcoind height for comparison
-	if s.btcRPC == nil {
-		return
-	}
-	bcInfo, err := s.btcRPC.GetBlockchainInfo()
-	if err != nil || bcInfo.Blocks == 0 {
 		return
 	}
 
@@ -212,7 +202,10 @@ func (s *Server) enrichElectrsSync(svc *model.ServiceInstance) {
 	}
 }
 
-func (s *Server) enrichMempoolSync(svc *model.ServiceInstance) {
+func (s *Server) enrichMempoolSync(svc *model.ServiceInstance, bcInfo *bitcoin.BlockchainInfo) {
+	if bcInfo == nil || bcInfo.Blocks == 0 {
+		return
+	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(mempoolBaseURL + "/api/v1/blocks/tip/height")
 	if err != nil {
@@ -225,14 +218,6 @@ func (s *Server) enrichMempoolSync(svc *model.ServiceInstance) {
 	}
 	mempoolHeight, err := strconv.Atoi(strings.TrimSpace(string(body)))
 	if err != nil || mempoolHeight == 0 {
-		return
-	}
-
-	if s.btcRPC == nil {
-		return
-	}
-	bcInfo, err := s.btcRPC.GetBlockchainInfo()
-	if err != nil || bcInfo.Blocks == 0 {
 		return
 	}
 
