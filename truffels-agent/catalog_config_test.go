@@ -133,3 +133,50 @@ func TestRenderCkstatsEnvs(t *testing.T) {
 		t.Error("ckstats-db-dgb without creds should error")
 	}
 }
+
+func TestRenderConfigBchn(t *testing.T) {
+	files, err := RenderConfig("bchn", map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("RenderConfig: %v", err)
+	}
+	conf, ok := files["bch.conf"]
+	if !ok {
+		t.Fatal("bch.conf is missing")
+	}
+	s := string(conf)
+	for _, want := range []string{"server=1", "disablewallet=1", "prune=5000", "listen=0", "dbcache=512", "zmqpubhashblock="} {
+		if !strings.Contains(s, want) {
+			t.Errorf("bch.conf missing %q:\n%s", want, s)
+		}
+	}
+	// BCHN is not Bitcoin Core: rpcwhitelist does not exist there and sends the
+	// node into a restart loop. It must never appear.
+	if strings.Contains(s, "rpcwhitelist") {
+		t.Error("rpcwhitelist must never be set — it does not exist in BCHN")
+	}
+	// Without stack creds there is no RPC password line.
+	if strings.Contains(s, "rpcpassword=") {
+		t.Error("bch.conf must not contain rpcpassword when rendered without creds")
+	}
+	// Guard against ever committing a payout address into the node config.
+	if strings.Contains(s, "bitcoincash:") || strings.Contains(s, "addr") {
+		t.Errorf("bch.conf must not contain an address:\n%s", s)
+	}
+}
+
+func TestRenderConfigBchnStacked(t *testing.T) {
+	creds := &stackCreds{User: "truffels", Pass: "deadbeefcafe"}
+	files, err := RenderConfig("bchn", map[string]any{}, creds)
+	if err != nil {
+		t.Fatalf("RenderConfig: %v", err)
+	}
+	s := string(files["bch.conf"])
+	for _, want := range []string{
+		"rpcuser=truffels", "rpcpassword=deadbeefcafe",
+		"rpcbind=0.0.0.0", "rpcallowip=172.16.0.0/12", "rpcport=8332",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stacked bch.conf missing %q:\n%s", want, s)
+		}
+	}
+}
