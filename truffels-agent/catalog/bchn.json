@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "bchn",
+  "display_name": "Bitcoin Cash Node",
+  "description": "Bitcoin Cash Node (BCHN), pruned. Runs with listen=0 and no wallet; feeds a solo Stratum pool over the stack network.",
+  "role": "chain-node",
+  "implementation": "bitcoin-cash-node",
+  "chain": "bch",
+  "stack": "bch",
+  "build": {
+    "dockerfile": "dockerfiles/bchn/Dockerfile",
+    "version": "29.1.0",
+    "sha256": "15c5c0400c828d6690970200ad59c18207313c7047b29d571f7e9870d06300ea"
+  },
+  "containers": [
+    {
+      "name": "node",
+      "memory_limit_mb": 4096,
+      "user": "1000:1000",
+      "entrypoint": [
+        "bitcoind",
+        "-conf=/bch.conf",
+        "-datadir=/data",
+        "-printtoconsole"
+      ],
+      "ports": [],
+      "volumes": [
+        {
+          "kind": "data",
+          "mount": "/data"
+        },
+        {
+          "kind": "config",
+          "file": "bch.conf",
+          "mount": "/bch.conf",
+          "ro": true
+        }
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "bitcoin-cli",
+          "-conf=/bch.conf",
+          "-datadir=/data",
+          "-getinfo"
+        ],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 3,
+        "start_period": "60s"
+      }
+    }
+  ],
+  "chain_info": {
+    "p2p_port": 8333,
+    "rpc_port": 8332,
+    "rpc_style": "bitcoin-core",
+    "sync_probe": [
+      "bitcoin-cli",
+      "-conf=/bch.conf",
+      "-datadir=/data",
+      "getblockchaininfo"
+    ]
+  },
+  "resources": {
+    "min_disk_gb": 18,
+    "memory_floor_mb": 2048
+  }
+}

@@ -326,3 +326,17 @@ func TestEnsureStackSecretIsStable(t *testing.T) {
 		t.Error("invalid stack name was accepted")
 	}
 }
+
+func TestBchnHasSyncProbe(t *testing.T) {
+	cat, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	e := cat["bchn"]
+	if e.ChainInfo == nil || len(e.ChainInfo.SyncProbe) == 0 {
+		t.Fatal("bchn has no chain_info.sync_probe")
+	}
+	if e.ChainInfo.SyncProbe[len(e.ChainInfo.SyncProbe)-1] != "getblockchaininfo" {
+		t.Errorf("sync probe should end in getblockchaininfo, got %v", e.ChainInfo.SyncProbe)
+	}
+}

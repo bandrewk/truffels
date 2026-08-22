@@ -20,6 +20,8 @@ func RenderConfig(id string, params map[string]any, creds *stackCreds) (map[stri
 	switch id {
 	case "digibyted":
 		return renderDigibyteConf(creds)
+	case "bchn":
+		return renderBchnConf(creds)
 	case "ckpool-dgb":
 		return renderCkpoolDGBConf(params, creds)
 	case "ckstats-db-dgb":
@@ -159,6 +161,57 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	}
 
 	return map[string][]byte{"digibyte.conf": []byte(b.String())}, nil
+}
+
+// renderBchnConf renders the Bitcoin Cash Node config. BCHN is Bitcoin-Core
+// lineage but NOT Bitcoin Core — only options confirmed present in `bitcoind
+// -help` for this build are used here (no rpcwhitelist etc.). The node is
+// pruned, wallet-less, and does not accept inbound P2P (listen=0): a pruned
+// solo-mining node needs neither inbound peers nor a wallet, since the reward
+// is written straight into the coinbase by the pool.
+func renderBchnConf(creds *stackCreds) (map[string][]byte, error) {
+	var b strings.Builder
+	b.WriteString("# Project Truffels — Bitcoin Cash Node\n")
+	b.WriteString("# Generated from the catalog. Do not edit by hand.\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Chain ---\n")
+	b.WriteString("server=1\n")
+	b.WriteString("disablewallet=1\n")
+	// Pruned to ~5 GB of block files. BCH is a Bitcoin-height chain (~860k
+	// blocks), so the in-memory block index stays small; pruning keeps the
+	// disk footprint low without a large RAM cost.
+	b.WriteString("prune=5000\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Network ---\n")
+	// No inbound P2P: a pruned node serves no historical blocks to peers, so
+	// listening only costs bandwidth. Outbound connections still drive the sync.
+	b.WriteString("listen=0\n")
+	b.WriteString("maxconnections=25\n")
+	b.WriteString("maxuploadtarget=5000\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Performance ---\n")
+	b.WriteString("dbcache=512\n")
+	b.WriteString("\n")
+	b.WriteString("# --- ZMQ ---\n")
+	// ZMQ over polling so the pool sees block changes immediately and never
+	// mines shares on a stale template.
+	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
+
+	// When part of a stack, expose RPC so the pool can reach the node with the
+	// shared credential over the stack network. rpcallowip uses the broad
+	// private ranges; actual reachability stays scoped to that network.
+	if creds != nil {
+		b.WriteString("\n")
+		b.WriteString("# --- RPC ---\n")
+		b.WriteString("rpcuser=" + creds.User + "\n")
+		b.WriteString("rpcpassword=" + creds.Pass + "\n")
+		b.WriteString("rpcbind=0.0.0.0\n")
+		b.WriteString("rpcallowip=172.16.0.0/12\n")
+		b.WriteString("rpcallowip=10.0.0.0/8\n")
+		b.WriteString("rpcport=8332\n")
+	}
+
+	return map[string][]byte{"bch.conf": []byte(b.String())}, nil
 }
 
 // safeConfigKey validates that a config file name is a safe bare filename:
