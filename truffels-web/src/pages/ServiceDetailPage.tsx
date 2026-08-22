@@ -162,7 +162,7 @@ export default function ServiceDetailPage() {
             disabled={actionLoading}
             className="px-3 py-1.5 rounded text-sm font-medium text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors disabled:opacity-50"
           >
-            Deinstallieren
+            Uninstall
           </button>
         )}
         {actionMsg && <span className="text-sm text-gray-400 ml-2">{actionMsg}</span>}
@@ -170,15 +170,15 @@ export default function ServiceDetailPage() {
 
       <ConfirmDialog
         open={uninstallOpen}
-        title="Dienst deinstallieren"
+        title="Uninstall service"
         onCancel={() => !uninstallLoading && setUninstallOpen(false)}
         onConfirm={doUninstall}
-        confirmLabel={uninstallLoading ? 'Deinstalliere...' : 'Deinstallieren'}
+        confirmLabel={uninstallLoading ? 'Uninstalling…' : 'Uninstall'}
         confirmDisabled={uninstallLoading || (purgeData && confirmId !== id)}
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-300">
-            Soll der Dienst <strong>{svc.template.display_name}</strong> wirklich deinstalliert werden?
+            Really uninstall <strong>{svc.template.display_name}</strong>?
           </p>
           <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
             <input
@@ -187,13 +187,13 @@ export default function ServiceDetailPage() {
               onChange={(e) => setPurgeData(e.target.checked)}
               className="w-4 h-4 rounded border-gray-600 bg-surface text-accent focus:ring-accent/50"
             />
-            Daten löschen (purge_data)
+            Delete data (purge_data)
           </label>
           
           {purgeData && (
             <div className="flex flex-col gap-1 mt-2">
               <label className="text-xs text-gray-400">
-                Bitte tippen Sie die ID <span className="font-mono text-gray-200">{id}</span> ein, um das Löschen zu bestätigen:
+                Type the ID <span className="font-mono text-gray-200">{id}</span> to confirm deletion:
               </label>
               <input
                 type="text"
