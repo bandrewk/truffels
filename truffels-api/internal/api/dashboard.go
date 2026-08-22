@@ -6,7 +6,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
 
@@ -39,10 +38,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Host metrics
 	host := s.collector.Collect()
 
-	// Service states
+	// Service states — one batched inspect across all services, not one per.
+	tmpls := s.registry.All()
+	byName := inspectAllContainers(tmpls)
 	var services []dashboardService
-	for _, tmpl := range s.registry.All() {
-		containers := docker.InspectContainers(tmpl.ContainerNames)
+	for _, tmpl := range tmpls {
+		containers := containersFor(tmpl, byName)
 		state := deriveState(containers)
 		services = append(services, dashboardService{
 			ID:          tmpl.ID,

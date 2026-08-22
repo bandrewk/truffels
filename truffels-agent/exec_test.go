@@ -31,21 +31,33 @@ func dockerMissing() bool {
 	return err != nil
 }
 
-// --- inspectContainer ---
+// --- handleInspect ---
 
-func TestInspectContainer_ReportsNotFoundWhenTheCommandFails(t *testing.T) {
-	cs := inspectContainer("truffels-bitcoind")
+func TestHandleInspect_ReportsNotFoundWhenTheCommandFails(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/inspect",
+		strings.NewReader(`{"containers":["truffels-bitcoind"]}`))
+	w := httptest.NewRecorder()
+	handleInspect(w, req)
 
-	if cs.Name != "truffels-bitcoind" {
-		t.Errorf("name = %q, want the requested container", cs.Name)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if cs.Status == "" {
-		t.Error("status must never be empty — every return path sets it")
+	var states []containerState
+	if err := json.Unmarshal(w.Body.Bytes(), &states); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
+	if len(states) != 1 || states[0].Name != "truffels-bitcoind" {
+		t.Fatalf("states = %+v, want one entry for the requested container", states)
+	}
+	if states[0].Status == "" {
+		t.Error("status must never be empty — every path sets it")
+	}
+	// With no docker present the batched inspect returns nothing, and the
+	// handler must map the absent container to not_found (never crash or omit).
 	if dockerMissing() {
-		if cs.Status != "not_found" || cs.Health != "unknown" {
+		if states[0].Status != "not_found" || states[0].Health != "unknown" {
 			t.Errorf("docker unavailable: got status=%q health=%q, want not_found/unknown",
-				cs.Status, cs.Health)
+				states[0].Status, states[0].Health)
 		}
 	}
 }

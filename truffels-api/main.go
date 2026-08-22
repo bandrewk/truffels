@@ -21,6 +21,7 @@ import (
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
+	"truffels-api/internal/syncstatus"
 	"truffels-api/internal/updates"
 )
 
@@ -70,6 +71,10 @@ func main() {
 	// the alert evaluator doesn't fire spurious warnings against services
 	// that are still being reconciled. See v0.3.1-dev.14 startup-ordering fix.
 	alertEngine := alerts.NewEngine(st, registry, collector, compose)
+	// The engine refreshes chain-sync progress into this cache on its tick;
+	// the Services handler reads it instead of probing nodes live.
+	syncCache := syncstatus.NewCache()
+	alertEngine.SetSyncCache(catalogClient, syncCache)
 	defer alertEngine.Stop()
 
 	// Update engine
@@ -131,7 +136,7 @@ func main() {
 	btcRPC := initBitcoinRPC(cfg.SecretsRoot)
 
 	// HTTP server
-	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine, catalogClient, version)
+	srv := api.NewServer(registry, st, compose, collector, authenticator, btcRPC, updateEngine, catalogClient, syncCache, version)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Router(),

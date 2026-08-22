@@ -28,11 +28,12 @@ func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request) {
 
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 
-	// Container states from all services
+	// Container states from all services — one batched inspect, not one per.
+	tmpls := s.registry.All()
+	byName := inspectAllContainers(tmpls)
 	var containers []model.MonitoringContainer
-	for _, tmpl := range s.registry.All() {
-		states := docker.InspectContainers(tmpl.ContainerNames)
-		for _, cs := range states {
+	for _, tmpl := range tmpls {
+		for _, cs := range containersFor(tmpl, byName) {
 			containers = append(containers, model.MonitoringContainer{
 				Name:         cs.Name,
 				ServiceID:    tmpl.ID,

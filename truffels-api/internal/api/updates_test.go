@@ -29,7 +29,7 @@ func newTestServerWithEngine(t *testing.T) (*Server, *store.Store, *updates.Engi
 	a := auth.New(st)
 	eng := updates.NewEngine(st, reg, nil)
 
-	srv := NewServer(reg, st, nil, nil, a, nil, eng, nil, "test")
+	srv := NewServer(reg, st, nil, nil, a, nil, eng, nil, nil, "test")
 	return srv, st, eng
 }
 
