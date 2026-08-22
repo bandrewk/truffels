@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -506,7 +507,7 @@ func TestCheckService_DisabledExited_NoAlert(t *testing.T) {
 	}
 }
 
-func TestCheckService_EnabledExited_Alerts(t *testing.T) {
+func TestCheckService_ExitedContainer_NoAlert(t *testing.T) {
 	setupMockAgent(t, map[string]model.ContainerState{
 		"truffels-electrs": {Name: "truffels-electrs", Status: "exited", Health: ""},
 	})
@@ -518,15 +519,44 @@ func TestCheckService_EnabledExited_Alerts(t *testing.T) {
 	}
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
 
-	// Service is enabled by default
+	// Service is enabled by default. An exited container is operator intent
+	// (a clean stop), not a failing healthcheck — no alert.
+	e.checkService(tmpl, inspectAll(e))
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for enabled service with an exited container, got %d: %v", len(alerts), alerts)
+	}
+}
+
+func TestCheckService_Unhealthy_Alerts(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-electrs": {Name: "truffels-electrs", Status: "running", Health: "unhealthy"},
+	})
+
+	tmpl := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{tmpl})
+
+	// Service is enabled by default. A running container with a failing
+	// healthcheck is the only state that raises service_unhealthy.
 	e.checkService(tmpl, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
 	if len(alerts) != 1 {
-		t.Fatalf("expected 1 alert for enabled+exited service, got %d", len(alerts))
+		t.Fatalf("expected 1 alert for enabled service with an unhealthy container, got %d", len(alerts))
 	}
-	if alerts[0].Severity != model.SeverityWarning {
-		t.Fatalf("expected warning, got %q", alerts[0].Severity)
+	if alerts[0].Type != "service_unhealthy" {
+		t.Fatalf("expected service_unhealthy, got %q", alerts[0].Type)
+	}
+	if alerts[0].Severity != model.SeverityCritical {
+		t.Fatalf("expected critical, got %q", alerts[0].Severity)
+	}
+	if !strings.Contains(alerts[0].Message, "truffels-electrs") {
+		t.Fatalf("expected the alert message to name the unhealthy container, got %q", alerts[0].Message)
 	}
 }
 
@@ -644,6 +674,9 @@ func TestCheckDependencyHealth_DisabledService_NoAlert(t *testing.T) {
 func TestCheckDependencyHealth_EnabledService_Alerts(t *testing.T) {
 	setupMockAgent(t, map[string]model.ContainerState{
 		"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+		// The dependent must be running for the alert to fire — a stopped
+		// electrs can't serve stale data, so its upstream state is noise.
+		"truffels-electrs": {Name: "truffels-electrs", Status: "running", Health: ""},
 	})
 
 	bitcoind := model.ServiceTemplate{
@@ -659,7 +692,7 @@ func TestCheckDependencyHealth_EnabledService_Alerts(t *testing.T) {
 	}
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
 
-	// electrs is enabled by default
+	// electrs is enabled by default and running, with its upstream exited
 	e.checkDependencyHealth(inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
@@ -668,6 +701,34 @@ func TestCheckDependencyHealth_EnabledService_Alerts(t *testing.T) {
 	}
 	if alerts[0].Type != "upstream_unhealthy" {
 		t.Fatalf("expected upstream_unhealthy, got %q", alerts[0].Type)
+	}
+}
+
+func TestCheckDependencyHealth_DependentNotRunning_NoAlert(t *testing.T) {
+	setupMockAgent(t, map[string]model.ContainerState{
+		"truffels-bitcoind": {Name: "truffels-bitcoind", Status: "exited", Health: ""},
+	})
+
+	bitcoind := model.ServiceTemplate{
+		ID:             "bitcoind",
+		DisplayName:    "Bitcoin Core",
+		ContainerNames: []string{"truffels-bitcoind"},
+	}
+	electrs := model.ServiceTemplate{
+		ID:             "electrs",
+		DisplayName:    "electrs",
+		ContainerNames: []string{"truffels-electrs"},
+		Dependencies:   []string{"bitcoind"},
+	}
+	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{bitcoind, electrs})
+
+	// electrs is enabled but has no running container (the mock reports it
+	// as not_found) — upstream_unhealthy must stay suppressed.
+	e.checkDependencyHealth(inspectAll(e))
+
+	alerts, _ := s.GetActiveAlerts()
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts for a dependent with no running container, got %d: %v", len(alerts), alerts)
 	}
 }
 
@@ -759,12 +820,14 @@ func TestCheckService_ReadOnlyExited_SomeDependentsEnabled_Alerts(t *testing.T) 
 	}
 	e, s := newTestEngineWithRegistry(t, []model.ServiceTemplate{ckstatsDB, ckstats})
 
-	// ckstats is enabled by default — DB being exited is a real problem
+	// An exited container no longer alerts (a clean stop is operator intent);
+	// only a running-but-unhealthy container does. So a stopped read-only DB is
+	// silent regardless of whether dependents are enabled.
 	e.checkService(ckstatsDB, inspectAll(e))
 
 	alerts, _ := s.GetActiveAlerts()
-	if len(alerts) != 1 {
-		t.Fatalf("expected 1 alert for read-only service with enabled dependents, got %d", len(alerts))
+	if len(alerts) != 0 {
+		t.Fatalf("expected no alert for an exited read-only service, got %d", len(alerts))
 	}
 }
 

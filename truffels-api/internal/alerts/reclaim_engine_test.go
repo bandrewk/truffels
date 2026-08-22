@@ -268,7 +268,9 @@ func TestTryReclaim_ClearFailsRollsBackUp(t *testing.T) {
 func TestTryReclaim_SkipsWhenServiceStopped(t *testing.T) {
 	e, mock := newReclaimTestEngine(t, 950*1024*1024, "exited", true, true)
 
-	waitReclaim(t, e)
+	// Not running: evalWatchedDirs resolves and skips synchronously before any
+	// reclaim goroutine, so there is nothing to wait on.
+	e.evalWatchedDirs()
 
 	stop, clear, up := mock.counts()
 	if stop != 0 || clear != 0 || up != 0 {
@@ -470,16 +472,27 @@ func TestDirSizeCritical_TailDropsPromiseInsideCooldown(t *testing.T) {
 	}
 }
 
-// TestDirSizeCritical_TailDropsPromiseWhenNotRunning covers the other
-// guardrail the old wording ignored.
-func TestDirSizeCritical_TailDropsPromiseWhenNotRunning(t *testing.T) {
+// TestDirSizeCritical_SkippedWhenServiceNotRunning pins the current guardrail:
+// a not-running service skips dir-size evaluation entirely, so no
+// dir_size_critical alert is raised at all — and any pre-existing one is
+// resolved. (The old behavior evaluated the size and only dropped the
+// "cleared automatically" tail from the message; that scenario is now fully
+// suppressed.)
+func TestDirSizeCritical_SkippedWhenServiceNotRunning(t *testing.T) {
 	e, _ := newReclaimTestEngine(t, 950*1024*1024, "exited", true, true)
 
-	waitReclaim(t, e)
+	// Seed a stale alert from a time when the service was running.
+	e.upsert("dir_size_critical", "mempool", model.SeverityCritical, "stale oversized cache")
 
-	msg := criticalDirSizeMessage(t, e)
-	if strings.Contains(msg, "cleared automatically") {
-		t.Fatalf("alert promises an automatic reclaim while the service is stopped: %s", msg)
+	// The service isn't running, so evalWatchedDirs resolves and skips before
+	// any reclaim — call it directly (no reclaim goroutine to wait on).
+	e.evalWatchedDirs()
+
+	active, _ := e.store.GetActiveAlerts()
+	for _, a := range active {
+		if a.Type == "dir_size_critical" && a.ServiceID == "mempool" {
+			t.Fatalf("expected no dir_size_critical alert while the service is not running, got: %+v", a)
+		}
 	}
 }
 

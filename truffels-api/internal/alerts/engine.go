@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"truffels-api/internal/catalog"
@@ -268,6 +269,9 @@ func (e *Engine) evaluate() {
 		if err := e.store.PruneDirSizeSnapshots(time.Now().Add(-168 * time.Hour)); err != nil {
 			slog.Error("prune dir size snapshots", "err", err)
 		}
+		if err := e.store.PruneResolvedAlerts(time.Now().Add(-30 * 24 * time.Hour)); err != nil {
+			slog.Error("prune resolved alerts", "err", err)
+		}
 	}
 }
 
@@ -282,6 +286,21 @@ type watchedDir struct {
 	// a release. Defaults live in the getSettingInt calls in evalWatchedDirs.
 	warnKey     string
 	criticalKey string
+}
+
+// serviceIsRunning reports whether any of the service's containers is running.
+// Used by evalWatchedDirs to skip dir-size evaluation for stopped services —
+// a stopped service's data dir can't cause a live OOM, so alerting on it is
+// noise. It inspects fresh rather than reusing evaluate()'s batched map
+// because evalWatchedDirs runs at most once per 60s tick and the watched set
+// is tiny (one entry today), so one extra agent call per poll is acceptable.
+func serviceIsRunning(tmpl model.ServiceTemplate) bool {
+	for _, name := range tmpl.ContainerNames {
+		if cs, err := docker.InspectContainer(name); err == nil && cs.Status == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 var watchedDirs = []watchedDir{
@@ -301,6 +320,16 @@ func (e *Engine) evalWatchedDirs() {
 		return
 	}
 	for _, w := range watchedDirs {
+		tmpl, ok := e.registry.Get(w.serviceID)
+		if !ok || !serviceIsRunning(tmpl) {
+			// Stopped service: its data dir can't cause a live OOM. Clear any
+			// stale size alerts and skip the whole evaluation (including
+			// reclaim).
+			e.resolve("dir_size_warning", w.serviceID)
+			e.resolve("dir_size_critical", w.serviceID)
+			continue
+		}
+
 		size, _, err := e.compose.HostDirSize(w.path)
 		if err != nil {
 			slog.Debug("dir-size fetch failed", "path", w.path, "err", err)
@@ -648,27 +677,18 @@ func (e *Engine) checkTemp(tempC float64) {
 }
 
 func (e *Engine) checkService(tmpl model.ServiceTemplate, byName map[string]model.ContainerState) {
-	enabled, _ := e.store.IsServiceEnabled(tmpl.ID)
-	// For read-only services (DBs, proxy), suppress exited alerts if all
-	// dependent services are disabled — the user can't control these directly.
-	if tmpl.ReadOnly && enabled {
-		if deps := e.registry.Dependents(tmpl.ID); len(deps) > 0 {
-			allDisabled := true
-			for _, depID := range deps {
-				depEnabled, _ := e.store.IsServiceEnabled(depID)
-				if depEnabled {
-					allDisabled = false
-					break
-				}
-			}
-			if allDisabled {
-				enabled = false
-			}
-		}
-	}
+	// service_unhealthy now fires only for a running-but-failing healthcheck, so
+	// the enabled/read-only suppression that used to gate the "exited" alert is
+	// gone — a stopped service simply produces no unhealthy containers here.
 	threshold := e.getSettingInt("restart_loop_count", 5)
 	windowMin := e.getSettingInt("restart_loop_window_min", 10)
 	maxRetries := e.getSettingInt("restart_loop_max_retries", 10)
+
+	// Unhealthy check, aggregated across the service's containers: one alert
+	// listing every unhealthy container, resolved once none are. A stopped or
+	// missing container is not alerted here — a clean stop is operator intent
+	// (noise), and crash-loops / OOM-kills have their own alert types.
+	unhealthyNames := []string{}
 
 	for _, name := range tmpl.ContainerNames {
 		cs, ok := byName[name]
@@ -676,20 +696,8 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate, byName map[string]mode
 			continue
 		}
 
-		// Unhealthy check
-		alertType := "service_unhealthy"
 		if cs.Health == "unhealthy" {
-			e.upsert(alertType, tmpl.ID, model.SeverityCritical,
-				"Container %s is unhealthy", name)
-		} else if cs.Status == "exited" || cs.Status == "not_found" {
-			if enabled {
-				e.upsert(alertType, tmpl.ID, model.SeverityWarning,
-					"Container %s is %s", name, cs.Status)
-			} else {
-				e.resolve(alertType, tmpl.ID)
-			}
-		} else {
-			e.resolve(alertType, tmpl.ID)
+			unhealthyNames = append(unhealthyNames, name)
 		}
 
 		// Record container's StartedAt on first observation per engine
@@ -730,6 +738,13 @@ func (e *Engine) checkService(tmpl model.ServiceTemplate, byName map[string]mode
 			}
 		}
 		e.prevStates[name] = cs
+	}
+
+	if len(unhealthyNames) > 0 {
+		e.upsert("service_unhealthy", tmpl.ID, model.SeverityCritical,
+			"Containers %s are unhealthy", strings.Join(unhealthyNames, ", "))
+	} else {
+		e.resolve("service_unhealthy", tmpl.ID)
 	}
 }
 
@@ -847,6 +862,21 @@ func (e *Engine) checkDependencyHealth(byName map[string]model.ContainerState) {
 		}
 		enabled, _ := e.store.IsServiceEnabled(tmpl.ID)
 		if !enabled {
+			e.resolve("upstream_unhealthy", tmpl.ID)
+			continue
+		}
+
+		// A stopped dependent can't serve stale data, so warning about its
+		// upstream is noise — only alert while it actually has a running
+		// container.
+		dependentRunning := false
+		for _, name := range tmpl.ContainerNames {
+			if cs, ok := byName[name]; ok && cs.Status == "running" {
+				dependentRunning = true
+				break
+			}
+		}
+		if !dependentRunning {
 			e.resolve("upstream_unhealthy", tmpl.ID)
 			continue
 		}

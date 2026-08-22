@@ -14,6 +14,12 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   memory_trend: 'Memory Trend',
   disk_trend: 'Disk Trend',
   temp_trend: 'Temperature Trend',
+  dir_size_warning: 'Data Directory Size',
+  dir_size_critical: 'Data Directory Critical',
+  auto_reclaim_interrupted: 'Auto-Reclaim Interrupted',
+  auto_reclaim_failed: 'Auto-Reclaim Failed',
+  update_failed: 'Update Failed',
+  compose_reconcile_failed: 'Compose Reconcile Failed',
 }
 
 export default function AlertsPage() {
