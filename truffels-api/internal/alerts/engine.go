@@ -6,11 +6,13 @@ import (
 	"strconv"
 	"time"
 
+	"truffels-api/internal/catalog"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/model"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
+	"truffels-api/internal/syncstatus"
 )
 
 type Engine struct {
@@ -72,6 +74,19 @@ type Engine struct {
 	// goroutine finishes. Test-only synchronization hook so tests can wait
 	// for the goroutine instead of sleeping; production code never sets it.
 	reclaimDone chan struct{}
+
+	// Sync-status cache: the engine refreshes the chain-node sync progress on
+	// its tick and publishes it here, so the Services handler reads a cached
+	// value instead of running a live probe (a docker exec into an IBD-busy
+	// node) on the request path. Both are nil until SetSyncCache wires them,
+	// which keeps the refresh off in tests that construct a bare engine.
+	catalogClient *catalog.Client
+	syncCache     *syncstatus.Cache
+
+	// syncSlot is a one-token guard: at most one refreshSyncCache runs at a
+	// time and it never blocks evaluate(). A refresh that outlives the 30s
+	// tick simply causes the next tick to skip launching another.
+	syncSlot chan struct{}
 }
 
 func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compose *docker.ComposeClient) *Engine {
@@ -215,6 +230,11 @@ func (e *Engine) evaluate() {
 
 	// Out-of-memory kills (from the agent's Docker event stream)
 	e.checkOOM()
+
+	// Refresh the Services page's cached chain-sync progress off the request
+	// path. Launched on its own goroutine and guarded by syncSlot so a slow
+	// probe never delays the alert checks above or the metric snapshot.
+	e.launchSyncRefresh()
 
 	// ---- Trend alerts: every 10th tick (~5 minutes) ----
 	if e.snapshotTick%10 == 0 {
@@ -734,6 +754,60 @@ func (e *Engine) checkOOM() {
 		} else {
 			e.resolve("oom_killed", tmpl.ID)
 		}
+	}
+}
+
+// SetSyncCache wires the catalog client and sync-status cache the engine
+// publishes chain-node progress into. Call it once after NewEngine, before
+// Start. Without it the engine simply does not refresh the cache (tests that
+// build a bare engine keep the probe off).
+func (e *Engine) SetSyncCache(cc *catalog.Client, cache *syncstatus.Cache) {
+	e.catalogClient = cc
+	e.syncCache = cache
+	e.syncSlot = make(chan struct{}, 1)
+}
+
+// launchSyncRefresh starts a background refresh unless one is already running
+// or the cache is not wired. It never blocks the caller (evaluate()).
+func (e *Engine) launchSyncRefresh() {
+	if e.catalogClient == nil || e.syncCache == nil || e.syncSlot == nil {
+		return
+	}
+	select {
+	case e.syncSlot <- struct{}{}:
+		go func() {
+			defer func() { <-e.syncSlot }()
+			e.refreshSyncCache()
+		}()
+	default:
+		// A previous refresh is still running; skip this tick.
+	}
+}
+
+// refreshSyncCache probes every running catalog chain node's sync progress and
+// publishes it to the cache. A probe error leaves the previous value in place
+// (stale, not wrong) rather than blanking the progress bar while the agent or
+// node is briefly unreachable. Stopped nodes are skipped, so the handler — which
+// only reads the cache for running services — never shows stale progress.
+func (e *Engine) refreshSyncCache() {
+	for _, tmpl := range e.registry.All() {
+		entry, ok := e.catalogClient.Get(tmpl.ID)
+		if !ok || entry.ChainInfo == nil || len(entry.ChainInfo.SyncProbe) == 0 {
+			continue
+		}
+		if len(tmpl.ContainerNames) == 0 {
+			continue
+		}
+		cs, err := docker.InspectContainer(tmpl.ContainerNames[0])
+		if err != nil || cs.Status != "running" {
+			continue
+		}
+		status, err := e.catalogClient.ChainProbe(tmpl.ID)
+		if err != nil {
+			continue // keep last-good value
+		}
+		e.syncCache.Set(tmpl.ID, syncstatus.FromChainStatus(
+			status.Blocks, status.Headers, status.VerificationProgress, status.InitialBlockDownload))
 	}
 }
 

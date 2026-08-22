@@ -15,6 +15,7 @@ import (
 	"truffels-api/internal/metrics"
 	"truffels-api/internal/service"
 	"truffels-api/internal/store"
+	"truffels-api/internal/syncstatus"
 	"truffels-api/internal/updates"
 )
 
@@ -27,10 +28,11 @@ type Server struct {
 	btcRPC        *bitcoin.Client
 	updateEngine  *updates.Engine
 	catalogClient *catalog.Client
+	syncCache     *syncstatus.Cache
 	Version       string
 }
 
-func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine, cat *catalog.Client, version string) *Server {
+func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClient, coll *metrics.Collector, a *auth.Auth, btc *bitcoin.Client, ue *updates.Engine, cat *catalog.Client, sc *syncstatus.Cache, version string) *Server {
 	return &Server{
 		registry:      reg,
 		store:         st,
@@ -40,6 +42,7 @@ func NewServer(reg *service.Registry, st *store.Store, comp *docker.ComposeClien
 		btcRPC:        btc,
 		updateEngine:  ue,
 		catalogClient: cat,
+		syncCache:     sc,
 		Version:       version,
 	}
 }
