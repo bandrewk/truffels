@@ -17,7 +17,10 @@ func (s *Server) handleElectrsStats(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get("http://truffels-electrs:4224/")
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "electrs unreachable: "+err.Error())
+		// A stopped electrs has no container, so Docker's DNS returns
+		// "no such host"; surface that as a plain not-running state instead
+		// of a raw resolver error.
+		writeError(w, http.StatusServiceUnavailable, "electrs is not running")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

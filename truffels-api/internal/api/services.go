@@ -8,49 +8,69 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"truffels-api/internal/bitcoin"
 	"truffels-api/internal/docker"
 	"truffels-api/internal/model"
 )
 
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
-	// Each service's status is an independent set of docker inspects plus RPC/
-	// probe calls. Done sequentially the page grew to ~2s as the catalog stack
-	// added services; fan the per-service work out (bounded) so the wall-clock
-	// is the slowest single service, not their sum. Each goroutine writes its
-	// own slice index, so no shared state is mutated concurrently.
 	tmpls := s.registry.All()
-	services := make([]model.ServiceInstance, len(tmpls))
-	sem := make(chan struct{}, 8)
-	var wg sync.WaitGroup
-	for i, tmpl := range tmpls {
-		wg.Add(1)
-		go func(i int, tmpl model.ServiceTemplate) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			containers := docker.InspectContainers(tmpl.ContainerNames)
-			enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
-			svc := model.ServiceInstance{
-				Template:   tmpl,
-				State:      deriveState(containers),
-				Enabled:    enabled,
-				Containers: containers,
-			}
-			if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
-				svc.State = model.StateDisabled
-			}
-			svc.DependencyIssues = s.checkDependencyIssues(tmpl)
-			s.enrichSyncInfo(&svc)
-			services[i] = svc
-		}(i, tmpl)
+	// Inspect every container across all services in ONE agent call, instead of
+	// one call per service plus one per dependency. Under the UI's 10s polling
+	// the old per-service fan-out fired ~20 concurrent inspects per response;
+	// each forks a docker CLI process on the agent, and the resulting dockerd
+	// contention pushed inspect latency past the client timeout, so every
+	// service read back "unknown". One batched inspect removes that entirely,
+	// and the sync progress now comes from a cache the alerts engine refreshes
+	// (no live chain probe on this path either), so the remaining per-service
+	// work is map lookups plus a SQLite read — fast enough to run inline.
+	var allNames []string
+	for _, tmpl := range tmpls {
+		allNames = append(allNames, tmpl.ContainerNames...)
 	}
-	wg.Wait()
+	byName := make(map[string]model.ContainerState, len(allNames))
+	for _, cs := range docker.InspectContainers(allNames) {
+		byName[cs.Name] = cs
+	}
+
+	// Bitcoin Core blockchain info feeds only the dependency checks; fetch it
+	// once for the whole response rather than once (or twice) per service.
+	var bcInfo *bitcoin.BlockchainInfo
+	if s.btcRPC != nil {
+		if info, err := s.btcRPC.GetBlockchainInfo(); err == nil {
+			bcInfo = info
+		}
+	}
+
+	services := make([]model.ServiceInstance, len(tmpls))
+	for i, tmpl := range tmpls {
+		containers := make([]model.ContainerState, 0, len(tmpl.ContainerNames))
+		for _, name := range tmpl.ContainerNames {
+			if cs, ok := byName[name]; ok {
+				containers = append(containers, cs)
+			} else {
+				containers = append(containers, model.ContainerState{Name: name, Status: "unknown", Health: "unknown"})
+			}
+		}
+		enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
+		svc := model.ServiceInstance{
+			Template:   tmpl,
+			State:      deriveState(containers),
+			Enabled:    enabled,
+			Containers: containers,
+		}
+		if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
+			svc.State = model.StateDisabled
+		}
+		svc.DependencyIssues = s.checkDependencyIssues(tmpl, byName, bcInfo)
+		s.enrichSyncInfo(&svc)
+		services[i] = svc
+	}
 	writeJSON(w, http.StatusOK, services)
 }
 
@@ -62,7 +82,27 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containers := docker.InspectContainers(tmpl.ContainerNames)
+	// One batched inspect for this service's containers plus its dependencies',
+	// so checkDependencyIssues reads a map instead of probing each dependency.
+	var allNames []string
+	allNames = append(allNames, tmpl.ContainerNames...)
+	for _, depID := range tmpl.Dependencies {
+		if dep, ok := s.registry.Get(depID); ok {
+			allNames = append(allNames, dep.ContainerNames...)
+		}
+	}
+	byName := make(map[string]model.ContainerState, len(allNames))
+	for _, cs := range docker.InspectContainers(allNames) {
+		byName[cs.Name] = cs
+	}
+	containers := make([]model.ContainerState, 0, len(tmpl.ContainerNames))
+	for _, name := range tmpl.ContainerNames {
+		if cs, ok := byName[name]; ok {
+			containers = append(containers, cs)
+		} else {
+			containers = append(containers, model.ContainerState{Name: name, Status: "unknown", Health: "unknown"})
+		}
+	}
 	enabled, _ := s.store.IsServiceEnabled(tmpl.ID)
 
 	svc := model.ServiceInstance{
@@ -74,7 +114,13 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	if !enabled && (svc.State == model.StateStopped || svc.State == model.StateUnknown) {
 		svc.State = model.StateDisabled
 	}
-	svc.DependencyIssues = s.checkDependencyIssues(tmpl)
+	var bcInfo *bitcoin.BlockchainInfo
+	if s.btcRPC != nil {
+		if info, err := s.btcRPC.GetBlockchainInfo(); err == nil {
+			bcInfo = info
+		}
+	}
+	svc.DependencyIssues = s.checkDependencyIssues(tmpl, byName, bcInfo)
 	s.enrichSyncInfo(&svc)
 	writeJSON(w, http.StatusOK, svc)
 }
@@ -91,34 +137,13 @@ func (s *Server) enrichSyncInfo(svc *model.ServiceInstance) {
 	case "mempool":
 		s.enrichMempoolSync(svc)
 	default:
-		s.enrichCatalogChainSync(svc)
-	}
-}
-
-// enrichCatalogChainSync fills SyncInfo for a running catalog chain node (e.g.
-// DigiByte Core) by asking the agent to run the entry's sync probe. Only entries
-// that declare a probe in chain_info are queried; anything else is a no-op.
-func (s *Server) enrichCatalogChainSync(svc *model.ServiceInstance) {
-	if s.catalogClient == nil {
-		return
-	}
-	e, ok := s.catalogClient.Get(svc.Template.ID)
-	if !ok || e.ChainInfo == nil || len(e.ChainInfo.SyncProbe) == 0 {
-		return
-	}
-	status, err := s.catalogClient.ChainProbe(svc.Template.ID)
-	if err != nil {
-		return
-	}
-	// Fully synced: bitcoin-core reports verificationprogress ~1 and IBD false.
-	if !status.InitialBlockDownload && status.VerificationProgress >= 0.9999 {
-		return
-	}
-	svc.SyncInfo = &model.SyncInfo{
-		Syncing:  true,
-		Progress: status.VerificationProgress,
-		Detail: fmt.Sprintf("%.2f%% (%s / %s blocks)",
-			status.VerificationProgress*100, formatInt(int(status.Blocks)), formatInt(int(status.Headers))),
+		// Catalog chain nodes (e.g. DigiByte, BCHN) read from the sync cache
+		// the alerts engine refreshes on its tick. The live probe — a docker
+		// exec into an IBD-busy node that can take many seconds — is kept off
+		// this request path so the Services page never blocks on it.
+		if s.syncCache != nil {
+			svc.SyncInfo = s.syncCache.Get(svc.Template.ID)
+		}
 	}
 }
 
@@ -555,18 +580,17 @@ func (s *Server) configRoot() string {
 }
 
 // checkDependencyIssues returns a list of unhealthy upstream dependencies.
-func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate) []string {
+// checkDependencyIssues reports why a service's dependencies would block it.
+// Container states come from the batch inspect the caller already ran (byName)
+// and blockchain info is fetched once per response (bcInfo) — neither issues a
+// per-dependency agent or RPC call.
+func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate, byName map[string]model.ContainerState, bcInfo *bitcoin.BlockchainInfo) []string {
 	var issues []string
-	if tmpl.RequiresUnpruned && s.btcRPC != nil {
-		if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.Pruned {
-			issues = append(issues, "requires unpruned Bitcoin Core")
-		}
+	if tmpl.RequiresUnpruned && bcInfo != nil && bcInfo.Pruned {
+		issues = append(issues, "requires unpruned Bitcoin Core")
 	}
-	if tmpl.RequiresSynced && s.btcRPC != nil {
-		if bcInfo, err := s.btcRPC.GetBlockchainInfo(); err == nil && bcInfo.VerificationProgress < 0.9999 {
-			pct := bcInfo.VerificationProgress * 100
-			issues = append(issues, fmt.Sprintf("requires Bitcoin Core fully synced (%.2f%%)", pct))
-		}
+	if tmpl.RequiresSynced && bcInfo != nil && bcInfo.VerificationProgress < 0.9999 {
+		issues = append(issues, fmt.Sprintf("requires Bitcoin Core fully synced (%.2f%%)", bcInfo.VerificationProgress*100))
 	}
 	for _, depID := range tmpl.Dependencies {
 		depTmpl, ok := s.registry.Get(depID)
@@ -574,8 +598,8 @@ func (s *Server) checkDependencyIssues(tmpl model.ServiceTemplate) []string {
 			continue
 		}
 		for _, name := range depTmpl.ContainerNames {
-			cs, err := docker.InspectContainer(name)
-			if err != nil {
+			cs, ok := byName[name]
+			if !ok {
 				continue
 			}
 			if cs.Health == "unhealthy" || cs.Status == "exited" || cs.Status == "restarting" || cs.Status == "not_found" {

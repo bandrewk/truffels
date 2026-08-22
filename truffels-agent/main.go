@@ -152,6 +152,7 @@ type containerState struct {
 }
 
 type inspectResult struct {
+	Name  string `json:"Name"`
 	State struct {
 		Status    string `json:"Status"`
 		StartedAt string `json:"StartedAt"`
@@ -335,6 +336,19 @@ func handleInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inspect all allowed containers in ONE `docker inspect` call. The handler
+	// used to fork one docker CLI process per container, sequentially; under
+	// the Services page's fan-out that meant dozens of concurrent forks and
+	// dockerd contention that pushed inspect latency past the caller's timeout,
+	// so every service read back as "unknown". One batched call collapses that.
+	allowed := make([]string, 0, len(req.Containers))
+	for _, name := range req.Containers {
+		if isAllowedContainer(name) {
+			allowed = append(allowed, name)
+		}
+	}
+	found := batchInspect(allowed)
+
 	states := make([]containerState, 0, len(req.Containers))
 	for _, name := range req.Containers {
 		if !isAllowedContainer(name) {
@@ -342,38 +356,57 @@ func handleInspect(w http.ResponseWriter, r *http.Request) {
 			states = append(states, containerState{Name: name, Status: "denied", Health: "unknown"})
 			continue
 		}
-		states = append(states, inspectContainer(name))
+		if cs, ok := found[name]; ok {
+			states = append(states, cs)
+		} else {
+			states = append(states, containerState{Name: name, Status: "not_found", Health: "unknown"})
+		}
 	}
 
 	writeJSON(w, 200, states)
 }
 
-func inspectContainer(name string) containerState {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// batchInspect inspects every given container in a single `docker inspect` call
+// and returns the states keyed by container name. Missing containers are simply
+// absent from the map: `docker inspect` still prints the containers it found to
+// stdout when some names don't exist (it just exits non-zero), so the partial
+// output is honored and the error is ignored.
+func batchInspect(names []string) map[string]containerState {
+	result := make(map[string]containerState, len(names))
+	if len(names) == 0 {
+		return result
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	out, err := runStdout(ctx, "docker", "inspect", "--format", "{{json .}}", name)
-	if err != nil {
-		return containerState{Name: name, Status: "not_found", Health: "unknown"}
-	}
+	args := append([]string{"inspect", "--format", "{{json .}}"}, names...)
+	out, _ := runStdout(ctx, "docker", args...)
 
-	var ir inspectResult
-	if err := json.Unmarshal([]byte(out), &ir); err != nil {
-		slog.Error("parse inspect", "container", name, "err", err)
-		return containerState{Name: name, Status: "unknown", Health: "unknown"}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var ir inspectResult
+		if err := json.Unmarshal([]byte(line), &ir); err != nil {
+			continue
+		}
+		name := strings.TrimPrefix(ir.Name, "/")
+		if name == "" {
+			continue
+		}
+		cs := containerState{
+			Name:         name,
+			Status:       ir.State.Status,
+			RestartCount: ir.RestartCount,
+			StartedAt:    ir.State.StartedAt,
+			Image:        ir.Config.Image,
+		}
+		if ir.State.Health != nil && ir.State.Status == "running" {
+			cs.Health = ir.State.Health.Status
+		}
+		result[name] = cs
 	}
-
-	cs := containerState{
-		Name:         name,
-		Status:       ir.State.Status,
-		RestartCount: ir.RestartCount,
-		StartedAt:    ir.State.StartedAt,
-		Image:        ir.Config.Image,
-	}
-	if ir.State.Health != nil && ir.State.Status == "running" {
-		cs.Health = ir.State.Health.Status
-	}
-	return cs
+	return result
 }
 
 // --- Image/Build Handlers ---
