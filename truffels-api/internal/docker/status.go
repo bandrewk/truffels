@@ -94,6 +94,23 @@ func Stats() ([]ContainerResourceStats, error) {
 	return agentClient.stats()
 }
 
+// AgentReachable reports whether the agent answers its health endpoint. The
+// alert engine uses it to detect an agent that has died — otherwise InspectContainers
+// returns "unknown" rows and every service_unhealthy silently resolves, leaving
+// the control plane blind with no alert. Returns true when no agent is configured
+// (tests / no-agent deployments) so the absence of an agent never false-alarms.
+func AgentReachable() bool {
+	if agentClient == nil {
+		return true
+	}
+	resp, err := agentClient.httpClient.Get(agentClient.agentURL + "/v1/health")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode == 200
+}
+
 // OOMEvent is one container OOM-kill the agent observed on the Docker event
 // stream. Time is unix seconds.
 type OOMEvent struct {

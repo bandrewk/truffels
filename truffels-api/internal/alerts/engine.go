@@ -41,6 +41,21 @@ type Engine struct {
 	// Monitoring: previous container stats for delta computation
 	prevContainerStats map[string]docker.ContainerResourceStats
 
+	// agentFailStreak counts consecutive ticks the agent has been unreachable.
+	// A single tick's failure is treated as transient (a slow healthcheck, a
+	// brief restart); only a sustained streak (~2 min at 30s ticks) raises the
+	// agent_unreachable alert. Reset to 0 on any reachable tick.
+	agentFailStreak int
+
+	// lastAdvance records, per running chain node, the last block height the
+	// sync probe reported and when it was observed. Used by refreshSyncCache to
+	// detect a node whose IBD is stuck (height not advancing) so we can alert on
+	// a stalled sync instead of waiting for the operator to notice.
+	lastAdvance map[string]struct {
+		height int64
+		at     time.Time
+	}
+
 	// containerStartedAt records the first StartedAt the engine observes per
 	// container after its own boot. Used by the trend gate to detect
 	// containers that restarted around the same time as the engine itself
@@ -104,6 +119,10 @@ func NewEngine(s *store.Store, r *service.Registry, c *metrics.Collector, compos
 		prevContainerStats: make(map[string]docker.ContainerResourceStats),
 		containerStartedAt: make(map[string]time.Time),
 		reclaimSlot:        newReclaimSlot(),
+		lastAdvance: make(map[string]struct {
+			height int64
+			at     time.Time
+		}),
 		// Initialize snapshotTick to 9 so the first ++ on first evaluate
 		// makes it 10 — triggering both the metric-snapshot (%2==0) AND
 		// the trend check (%10==0) immediately. Otherwise stale memory_trend
@@ -167,6 +186,12 @@ func (e *Engine) evaluate() {
 	}
 	host := e.collector.Collect()
 
+	// Agent reachability first: if the mediator is down, every container state
+	// this tick reads back as "unknown" and the service checks below would
+	// resolve their alerts. Flag the condition before that happens so the control
+	// plane's blindness is itself alerted on.
+	e.checkAgent()
+
 	// Disk usage alerts
 	for _, disk := range host.Disks {
 		e.checkDisk(disk)
@@ -174,6 +199,9 @@ func (e *Engine) evaluate() {
 
 	// Temperature alerts (configurable thresholds)
 	e.checkTemp(host.Temperature)
+
+	// Swap pressure alerts (host-level, like disk/temp)
+	e.checkSwap(host)
 
 	// ---- Monitoring: record metric snapshot every other tick (60s) ----
 	e.snapshotTick++
@@ -676,6 +704,50 @@ func (e *Engine) checkTemp(tempC float64) {
 	}
 }
 
+// checkSwap raises a host-level alert when swap is under sustained pressure. A
+// box that is swapping hard is about to start OOM-killing services, so this is
+// the early warning for that. Host-level: serviceID "" like disk_full/high_temp.
+func (e *Engine) checkSwap(host model.HostMetrics) {
+	alertType := "swap_exhaustion"
+	serviceID := ""
+
+	if host.SwapTotalMB > 0 && host.SwapUsedPercent >= 90 {
+		e.upsert(alertType, serviceID, model.SeverityCritical,
+			"Swap %.0f%% used — the box is thrashing; a service will be OOM-killed soon", host.SwapUsedPercent)
+	} else if host.SwapTotalMB > 0 && host.SwapUsedPercent >= 75 {
+		e.upsert(alertType, serviceID, model.SeverityWarning,
+			"Swap %.0f%% used — memory pressure is high", host.SwapUsedPercent)
+	} else {
+		e.resolve(alertType, serviceID)
+	}
+}
+
+// checkAgent probes the agent's health endpoint and tracks a failure streak so a
+// single transient miss doesn't alarm. The alert fires once the agent has been
+// unreachable for ~2 minutes (4 consecutive 30s ticks).
+func (e *Engine) checkAgent() {
+	e.evalAgentReachable(docker.AgentReachable())
+}
+
+// evalAgentReachable holds the streak logic separate from the network probe so it
+// can be driven directly from tests (the real probe needs a live agent).
+func (e *Engine) evalAgentReachable(reachable bool) {
+	if reachable {
+		e.agentFailStreak = 0
+	} else {
+		e.agentFailStreak++
+	}
+
+	const failThreshold = 4 // ~2 min at 30s ticks
+	if e.agentFailStreak >= failThreshold {
+		mins := e.agentFailStreak * 30 / 60
+		e.upsert("agent_unreachable", "", model.SeverityCritical,
+			"The truffels agent has been unreachable for ~%dm — container management is offline", mins)
+	} else {
+		e.resolve("agent_unreachable", "")
+	}
+}
+
 func (e *Engine) checkService(tmpl model.ServiceTemplate, byName map[string]model.ContainerState) {
 	// service_unhealthy now fires only for a running-but-failing healthcheck, so
 	// the enabled/read-only suppression that used to gate the "exited" alert is
@@ -850,6 +922,55 @@ func (e *Engine) refreshSyncCache() {
 		}
 		e.syncCache.Set(tmpl.ID, syncstatus.FromChainStatus(
 			status.Blocks, status.Headers, status.VerificationProgress, status.InitialBlockDownload))
+
+		// Stalled-sync detection rides on the same probe: a node still in IBD
+		// whose block height isn't advancing for a while is stuck and won't get
+		// there on its own.
+		e.evalNodeStuck(tmpl.ID, status.Blocks, status.InitialBlockDownload)
+	}
+}
+
+// evalNodeStuck detects a chain node that is still in initial-block-download but
+// whose block height has stopped advancing. A probe error simply leaves the last
+// recorded advance in place (a slow tick isn't a stall), so only a sustained
+// no-advance across ticks crosses the threshold. Resolves as soon as the node
+// finishes IBD or its height advances again.
+func (e *Engine) evalNodeStuck(id string, blocks int64, ibd bool) {
+	if !ibd {
+		e.resolve("node_stuck", id)
+		delete(e.lastAdvance, id)
+		return
+	}
+
+	prev, hasPrev := e.lastAdvance[id]
+	now := time.Now()
+	if !hasPrev || blocks > prev.height {
+		// Advancing (or first observation): record the new baseline and clear any
+		// alert. We don't update `at` on a mere advance — the stall window is
+		// measured from the last observed advance, which resets whenever progress
+		// resumes.
+		e.lastAdvance[id] = struct {
+			height int64
+			at     time.Time
+		}{height: blocks, at: now}
+		e.resolve("node_stuck", id)
+		return
+	}
+
+	// Height stalled. How long since the last advance?
+	stall := now.Sub(prev.at)
+	minStall := time.Duration(e.getSettingInt("node_stuck_min", 30)) * time.Minute
+	if stall < minStall {
+		return // not stalled long enough yet — keep the existing alert state
+	}
+
+	stallMin := int(stall.Minutes())
+	if stall >= 2*time.Hour {
+		e.upsert("node_stuck", id, model.SeverityCritical,
+			"%s has not advanced past block %d for %dm while still syncing", id, prev.height, stallMin)
+	} else {
+		e.upsert("node_stuck", id, model.SeverityWarning,
+			"%s has not advanced past block %d for %dm while still syncing", id, prev.height, stallMin)
 	}
 }
 
