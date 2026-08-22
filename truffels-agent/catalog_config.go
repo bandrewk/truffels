@@ -126,10 +126,13 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	// send an Algo argument. The failure would be silent — the RPC response
 	// is valid, just worthless for a SHA256d pool. See Spec 2.4.
 	b.WriteString("algo=sha256d\n")
-	// A larger UTXO cache keeps initial block download from thrashing the disk;
-	// the entry runs with a 4 GB memory limit, which leaves room for a 1 GB
-	// cache on top of the node's baseline.
-	b.WriteString("dbcache=1024\n")
+	// A larger UTXO cache speeds initial block download, but on this 8 GB box
+	// digibyted shares RAM with bitcoind's own node. At dbcache=1024 the peak
+	// RSS during IBD crossed the 4 GB memory limit and the kernel OOM-killed
+	// the process (each kill costs a ~2 h block reload on restart). 512 keeps
+	// the in-memory UTXO set near ~440 MiB, holding the peak safely under the
+	// limit at a modest cost in flush frequency.
+	b.WriteString("dbcache=512\n")
 	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
 
 	// When part of a stack, expose RPC so the pool can reach the node with the
