@@ -15,7 +15,7 @@
   "containers": [
     {
       "name": "node",
-      "memory_limit_mb": 6144,
+      "memory_limit_mb": 7168,
       "user": "1000:1000",
       "entrypoint": [
         "digibyted",
@@ -70,6 +70,6 @@
   },
   "resources": {
     "min_disk_gb": 12,
-    "memory_floor_mb": 4096
+    "memory_floor_mb": 5120
   }
 }
