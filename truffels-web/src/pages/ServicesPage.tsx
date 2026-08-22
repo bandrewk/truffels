@@ -60,7 +60,7 @@ export default function ServicesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Services</h1>
         <Link to="/services/add" className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent rounded text-sm font-medium transition-colors">
-          Dienst hinzufügen
+          Add Service
         </Link>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
