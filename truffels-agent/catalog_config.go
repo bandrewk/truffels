@@ -114,8 +114,9 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	var b strings.Builder
 	b.WriteString("# Project Truffels — DigiByte Core\n")
 	b.WriteString("# Generated from the catalog. Do not edit by hand.\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Chain ---\n")
 	b.WriteString("server=1\n")
-	b.WriteString("printtoconsole=1\n")
 	b.WriteString("disablewallet=1\n")
 	// This build ships DigiDollar compiled in, which refuses to start unless
 	// txindex=1. That also rules out pruning (prune and txindex are mutually
@@ -126,6 +127,8 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	// send an Algo argument. The failure would be silent — the RPC response
 	// is valid, just worthless for a SHA256d pool. See Spec 2.4.
 	b.WriteString("algo=sha256d\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Performance ---\n")
 	// A larger UTXO cache speeds initial block download, but on this 8 GB box
 	// digibyted shares RAM with bitcoind's own node. At dbcache=1024 the peak
 	// RSS during IBD crossed the 4 GB memory limit and the kernel OOM-killed
@@ -133,6 +136,11 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	// the in-memory UTXO set near ~440 MiB, holding the peak safely under the
 	// limit at a modest cost in flush frequency.
 	b.WriteString("dbcache=512\n")
+	b.WriteString("\n")
+	b.WriteString("# --- Logging ---\n")
+	b.WriteString("printtoconsole=1\n")
+	b.WriteString("\n")
+	b.WriteString("# --- ZMQ ---\n")
 	b.WriteString("zmqpubhashblock=tcp://0.0.0.0:28332\n")
 
 	// When part of a stack, expose RPC so the pool can reach the node with the
@@ -140,6 +148,8 @@ func renderDigibyteConf(creds *stackCreds) (map[string][]byte, error) {
 	// node uses; actual reachability stays scoped to the shared stack network.
 	// The password is hex from crypto/rand — no config-escaping concern.
 	if creds != nil {
+		b.WriteString("\n")
+		b.WriteString("# --- RPC ---\n")
 		b.WriteString("rpcuser=" + creds.User + "\n")
 		b.WriteString("rpcpassword=" + creds.Pass + "\n")
 		b.WriteString("rpcbind=0.0.0.0\n")
