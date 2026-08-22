@@ -42,8 +42,18 @@ func NewClient(agentURL string) *Client {
 	// No client-wide timeout: each call sets its own via a request context, so a
 	// slow teardown is not capped by the same deadline as a quick catalog read.
 	return &Client{
-		agentURL:      agentURL,
-		http:          &http.Client{},
+		agentURL: agentURL,
+		http: &http.Client{
+			// The default transport keeps only 2 idle connections per host, so
+			// bursts of agent calls churn TCP connections. This client talks to
+			// exactly one host (the agent); give it a pool that matches the
+			// fan-out instead of reopening sockets under load.
+			Transport: &http.Transport{
+				MaxIdleConns:        32,
+				MaxIdleConnsPerHost: 16,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 		readTimeout:   defaultReadTimeout,
 		applyTimeout:  defaultApplyTimeout,
 		removeTimeout: defaultRemoveTimeout,

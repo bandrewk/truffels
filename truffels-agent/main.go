@@ -605,47 +605,56 @@ func handleImageInspect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Get image name from container
-	imageOut, err := runStdout(ctx, "docker", "inspect", "--format",
-		"{{.Config.Image}}", req.Container)
+	containerOut, err := runStdout(ctx, "docker", "inspect", "--format",
+		"{{json .}}", req.Container)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "cannot inspect container: " + err.Error()})
 		return
 	}
-	imageName := strings.TrimSpace(imageOut)
+	var container struct {
+		Config struct {
+			Image string `json:"Image"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal([]byte(containerOut), &container); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "cannot inspect container: " + err.Error()})
+		return
+	}
 
-	writeJSON(w, 200, inspectImageByName(ctx, imageName))
+	writeJSON(w, 200, inspectImageByName(ctx, container.Config.Image))
 }
 
-// inspectImageByName reads digest, tags and labels straight off an image. Every
-// docker call here is best-effort: a missing field is reported as empty rather
-// than as a failure, which is what the digest/tag lookups have always done.
-func inspectImageByName(ctx context.Context, imageName string) imageInspectResponse {
-	// Get image digest
-	digestOut, err := runCapture(ctx, "docker", "inspect", "--format",
-		"{{index .RepoDigests 0}}", imageName)
+// dockerObject is the subset of a `docker inspect --format {{json .}}` result
+// both inspect handlers need. RepoDigests[0] is empty when the image has no
+// registry pull recorded — the same case that used to yield an empty digest.
+type dockerObject struct {
+	RepoDigests []string `json:"RepoDigests"`
+	RepoTags    []string `json:"RepoTags"`
+	Config      struct {
+		Image  string            `json:"Image"`
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
+}
+
+// inspectObject reads digest, tags and labels from a single parsed docker
+// inspect result. imageName is the reference the caller looked up — reported as
+// the Image field, since an image's own .Config.Image is the build parent, not
+// its name. Every field is best-effort: a missing one is reported as empty
+// rather than as a failure, which is what the digest/tag lookups have always done.
+func inspectObject(imageName string, obj *dockerObject) imageInspectResponse {
 	digest := ""
-	if err == nil {
-		digest = strings.TrimSpace(digestOut)
+	if len(obj.RepoDigests) > 0 {
+		digest = obj.RepoDigests[0]
 		// Extract just the digest part after @
 		if idx := strings.Index(digest, "@"); idx >= 0 {
 			digest = digest[idx+1:]
 		}
 	}
 
-	// Get tags
-	tagsOut, err := runStdout(ctx, "docker", "inspect", "--format",
-		"{{json .RepoTags}}", imageName)
-	var tags []string
-	if err == nil {
-		_ = json.Unmarshal([]byte(strings.TrimSpace(tagsOut)), &tags)
-	}
-
-	// Get labels — carries org.truffels.source-ref, the ref the image was built from.
-	labelsOut, err := runStdout(ctx, "docker", "inspect", "--format",
-		"{{json .Config.Labels}}", imageName)
-	labels := map[string]string{}
-	if err == nil {
-		_ = json.Unmarshal([]byte(strings.TrimSpace(labelsOut)), &labels)
+	tags := obj.RepoTags
+	labels := obj.Config.Labels
+	if labels == nil {
+		labels = map[string]string{}
 	}
 
 	return imageInspectResponse{
@@ -654,6 +663,22 @@ func inspectImageByName(ctx context.Context, imageName string) imageInspectRespo
 		Tags:   tags,
 		Labels: labels,
 	}
+}
+
+// inspectImageByName reads digest, tags and labels straight off an image with a
+// single docker inspect. A missing or unparseable image is reported as empty
+// fields rather than as a failure, matching the old per-field lookups.
+func inspectImageByName(ctx context.Context, imageName string) imageInspectResponse {
+	out, err := runStdout(ctx, "docker", "inspect", "--format",
+		"{{json .}}", imageName)
+	if err != nil {
+		return imageInspectResponse{Image: imageName}
+	}
+	var obj dockerObject
+	if err := json.Unmarshal([]byte(out), &obj); err != nil {
+		return imageInspectResponse{Image: imageName}
+	}
+	return inspectObject(imageName, &obj)
 }
 
 type imageByNameRequest struct {
